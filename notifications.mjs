@@ -7,6 +7,33 @@ const escape = value => String(value ?? '').replace(/[&<>"']/g, character => ({ 
 const daysSince = (previous, today) => previous ? Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${previous}T00:00:00Z`)) / 86_400_000) : Infinity;
 const entryKey = (workspaceId, app) => JSON.stringify([workspaceId, app.id, app.version]);
 
+async function smtpAuthentication(settings, env, secretLoader) {
+  if (settings.unauthenticated) return undefined;
+  const username = settings.usernameEnv ? env[settings.usernameEnv] : '';
+  const secretFile = String(env.SMTP_PASSWORD_FILE || '').trim();
+  if (!username) throw new Error('The configured SMTP username environment variable is not present');
+  if (!secretFile) throw new Error('SMTP_PASSWORD_FILE is required for authenticated SMTP');
+  let password;
+  try { password = String(await secretLoader(secretFile, 'utf8')).trim(); }
+  catch (error) { throw new Error(`Could not read SMTP_PASSWORD_FILE: ${error.code || error.message}`); }
+  if (!password) throw new Error('SMTP_PASSWORD_FILE is empty');
+  return { user: username, pass: password };
+}
+
+export async function sendTestEmail(settings, recipient, { env = process.env, transportFactory = createTransport, secretLoader = readFile } = {}) {
+  const to = String(recipient || '').trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) throw new Error('Enter a valid test recipient email address');
+  const auth = await smtpAuthentication(settings, env, secretLoader);
+  const mailer = transportFactory({ host: settings.host, port: settings.port, secure: settings.secure, requireTLS: settings.requireTls, auth, connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 30_000 });
+  const response = await mailer.sendMail({
+    from: settings.from, to, subject: '[WatchTower] Test email',
+    text: 'WatchTower successfully connected to your SMTP server and sent this test message. These settings have not been saved.',
+    html: '<main style="font-family:Arial,sans-serif;max-width:620px;margin:auto;color:#203646"><h1>WatchTower test email</h1><p>WatchTower successfully connected to your SMTP server and sent this test message.</p><p><strong>These settings have not been saved.</strong></p></main>',
+  });
+  if (response?.rejected?.length) throw new Error(`Recipient rejected: ${response.rejected.join(', ')}`);
+  return { accepted: response?.accepted?.map(String) || [to], messageId: String(response?.messageId || '') };
+}
+
 function localTime(date, timeZone) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }).formatToParts(date).map(part => [part.type, part.value]));
   return { day: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour) };
@@ -41,7 +68,7 @@ function messageFor(group, alerts, baseUrl) {
   return { subject, text: lines.join('\n'), html: `<main style="font-family:Arial,sans-serif;max-width:680px;margin:auto;color:#203646"><h1>WatchTower · ${escape(group.name)}</h1><p>${alerts.length} application${alerts.length === 1 ? '' : 's'} need your attention.</p>${cards}<p style="font-size:12px;color:#647987">The acknowledgment link opens a confirmation page. Confirming stops reminders for that application in this workspace until the alert clears or its version changes.</p></main>` };
 }
 
-export function createNotifier({ dataDirectory, settingsLoader, env = process.env, clock = () => new Date(), transport = null, transportFactory = createTransport }) {
+export function createNotifier({ dataDirectory, settingsLoader, env = process.env, clock = () => new Date(), transport = null, transportFactory = createTransport, secretLoader = readFile }) {
   const file = path.join(dataDirectory, 'notifications.json');
   let state = null;
   let pending = Promise.resolve();
@@ -76,10 +103,10 @@ export function createNotifier({ dataDirectory, settingsLoader, env = process.en
     const { day, hour: currentHour } = localTime(clock(), settings.timeZone);
     let baseUrl = null;
     try { if (settings.baseUrl) baseUrl = new URL(settings.baseUrl); } catch {}
-    const username = settings.usernameEnv ? env[settings.usernameEnv] : '';
-    const password = settings.passwordEnv ? env[settings.passwordEnv] : '';
-    const credentialsReady = settings.unauthenticated || ((!settings.usernameEnv || Boolean(username)) && (!settings.passwordEnv || Boolean(password)));
-    const mailer = transport || (settings.host && settings.from && credentialsReady ? transportFactory({ host: settings.host, port: settings.port, secure: settings.secure, requireTLS: settings.requireTls, auth: settings.unauthenticated ? undefined : username ? { user: username, pass: password || '' } : undefined, connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 30_000 }) : null);
+    let auth;
+    try { auth = await smtpAuthentication(settings, env, secretLoader); }
+    catch (error) { console.error(`SMTP credentials unavailable: ${error.message}`); return; }
+    const mailer = transport || (settings.host && settings.from ? transportFactory({ host: settings.host, port: settings.port, secure: settings.secure, requireTLS: settings.requireTls, auth, connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 30_000 }) : null);
     const active = new Set();
     const groups = snapshot.workspaces || [];
     const apps = snapshot.results || [];

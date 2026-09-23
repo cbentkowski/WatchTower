@@ -1,12 +1,28 @@
 # Changelog
 
-## [0.4.0] - Planned
+## [0.4.0] - Unreleased
 
-### Planned
+### Added
 
-- Add NVD CPE search and selection to the application editor so users can find an application and populate its CPE vendor, product, and related identity fields without locating them manually.
+- Add NVD CPE search and selection to the application editor.
+- Add reusable RSS, Atom, JSON, HTML, and GitHub advisory feeds with application associations, cached collection state, test previews, and normalized security, release, and lifecycle evidence.
+- Add a dedicated Feeds interface with immutable feed IDs, audit logging, error visibility, and application associations.
+- Add Feed Viewer, Feed Editor, and Feed Manager RBAC roles with a new feed grant scope.
+- Add an SMTP test button that sends with the currently entered settings without saving them.
+- Load authenticated SMTP passwords from the mounted secret file named by `SMTP_PASSWORD_FILE`, verify it before enabling delivery, and reread it for tests and scheduled messages so rotations do not require a rebuild.
 
-## [0.3.5] - Unreleased
+### Security
+
+- Treat every fetched feed as untrusted data, remove scripts, styles, tags, control characters, and event-handler markup before storage or display, and never execute or import feed content.
+- Restrict feeds to public HTTPS destinations on the standard port, reject credentials and private, loopback, link-local, internal, and metadata-service addresses, revalidate redirects and DNS results, and enforce time, redirect, entry, and ten-megabyte response limits.
+- Add a restrictive Content Security Policy and move theme initialization into a same-origin script so inline feed content cannot become executable browser code.
+
+### Fixed
+
+- Query NVD with a product-level wildcard CPE and evaluate each returned CVE's affected version ranges locally, so versions covered by ranges are assessed even when NVD has no exact-version CPE entry.
+- Refresh only the edited application's associated feeds and assessment after an application save instead of rerunning every application check.
+
+## [0.3.5] - 2026-09-22
 
 ### Added
 

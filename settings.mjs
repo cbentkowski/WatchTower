@@ -1,6 +1,6 @@
 import { readFile, writeFile, rename } from 'node:fs/promises';
 
-const defaults = { enabled: false, host: '', port: '', secure: false, requireTls: false, unauthenticated: false, from: '', timeZone: 'UTC', sendHour: 8, usernameEnv: '', passwordEnv: '' };
+const defaults = { enabled: false, host: '', port: '', secure: false, requireTls: false, unauthenticated: false, from: '', timeZone: 'UTC', sendHour: 8, usernameEnv: '' };
 const keys = new Set(Object.keys(defaults));
 const scalar = value => {
   const trimmed = value.trim();
@@ -11,11 +11,18 @@ const scalar = value => {
   return trimmed;
 };
 
+export async function smtpPasswordState(env = process.env, loader = readFile) {
+  const file = String(env.SMTP_PASSWORD_FILE || '').trim();
+  if (!file) return { configured: false, present: false };
+  try { return { configured: true, present: Boolean(String(await loader(file, 'utf8')).trim()) }; }
+  catch { return { configured: true, present: false }; }
+}
+
 export function validateSmtpSettings(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('SMTP settings are required');
   const settings = { ...defaults };
   for (const key of keys) if (input[key] != null) settings[key] = input[key];
-  for (const key of ['host', 'from', 'timeZone', 'usernameEnv', 'passwordEnv']) settings[key] = String(settings[key]).trim();
+  for (const key of ['host', 'from', 'timeZone', 'usernameEnv']) settings[key] = String(settings[key]).trim();
   settings.port = settings.port === '' ? '' : Number(settings.port);
   settings.sendHour = settings.sendHour === '' ? '' : Number(settings.sendHour);
   if (settings.port !== '' && (!Number.isInteger(settings.port) || settings.port < 1 || settings.port > 65535)) throw new Error('SMTP port must be between 1 and 65535');
@@ -27,9 +34,9 @@ export function validateSmtpSettings(input) {
     if (settings.sendHour === '') settings.sendHour = 8;
     if (!settings.host || !settings.port || !settings.from) throw new Error('SMTP host, port, and From address are required when email is enabled');
     if (!settings.secure && !settings.requireTls) throw new Error('Choose SSL/TLS or STARTTLS when email is enabled');
-    if (!settings.unauthenticated && (!settings.usernameEnv || !settings.passwordEnv)) throw new Error('Username and password environment variable names are required when authentication is enabled');
+    if (!settings.unauthenticated && !settings.usernameEnv) throw new Error('A username environment variable name is required when authentication is enabled');
   }
-  for (const key of ['usernameEnv', 'passwordEnv']) if (settings[key] && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(settings[key])) throw new Error(`${key} must be an environment variable name`);
+  if (settings.usernameEnv && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(settings.usernameEnv)) throw new Error('usernameEnv must be an environment variable name');
   if (settings.from && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(settings.from)) throw new Error('Sender must be an email address');
   if (settings.timeZone) try { new Intl.DateTimeFormat('en-US', { timeZone: settings.timeZone }); } catch { throw new Error('Invalid time zone'); }
   if (/\s|[\/\\]/.test(settings.host)) throw new Error('SMTP host must be a hostname or IP address');
@@ -43,7 +50,7 @@ export async function readSmtpSettings(file) {
   for (const line of source.split(/\r?\n/)) {
     if (!line.trim() || line.trimStart().startsWith('#') || line.trim() === 'smtp:') continue;
     const match = line.match(/^  ([A-Za-z][A-Za-z0-9]*):\s*(.*)$/);
-    if (match?.[1] === 'baseUrl') continue; // Accept older files until Settings rewrites them.
+    if (['baseUrl', 'passwordEnv'].includes(match?.[1])) continue; // Accept older files until Settings rewrites them.
     if (!match || !keys.has(match[1])) throw new Error(`Unsupported smtp.yaml line: ${line}`);
     parsed[match[1]] = scalar(match[2]);
   }
@@ -52,7 +59,7 @@ export async function readSmtpSettings(file) {
 
 export async function writeSmtpSettings(file, input) {
   const settings = validateSmtpSettings(input);
-  const contents = `# Credentials are read from environment variables named below; never place their values here.\nsmtp:\n${Object.entries(settings).map(([key, value]) => `  ${key}: ${typeof value === 'string' ? JSON.stringify(value) : value}\n`).join('')}`;
+  const contents = `# The username is read from the named environment variable. The password is read from SMTP_PASSWORD_FILE.\nsmtp:\n${Object.entries(settings).map(([key, value]) => `  ${key}: ${typeof value === 'string' ? JSON.stringify(value) : value}\n`).join('')}`;
   const temporary = `${file}.tmp`;
   await writeFile(temporary, contents, 'utf8');
   await rename(temporary, file);

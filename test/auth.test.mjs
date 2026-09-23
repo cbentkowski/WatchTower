@@ -132,7 +132,7 @@ test('login binds the callback to a browser flow and creates a protected session
 });
 
 test('administrator authorization covers every privileged API', () => {
-  for (const route of ['/api/settings', '/api/logs', '/api/config', '/api/applications', '/api/applications/test', '/api/workspaces', '/api/status?refresh=1']) {
+  for (const route of ['/api/settings', '/api/settings/test-email', '/api/logs', '/api/config', '/api/applications', '/api/applications/test', '/api/workspaces', '/api/status?refresh=1']) {
     assert.equal(requiresAdministrator(new URL(route, 'https://home.example.com')), true, route);
   }
   for (const route of ['/api/session', '/api/status', '/', '/app.js']) {

@@ -5,7 +5,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -d /home/container -s /bin/sh container
 
-COPY --chown=container:container package.json package-lock.json server.mjs auth.mjs rbac.mjs yaml-monitor.mjs notifications.mjs settings.mjs general.mjs logger.mjs /opt/watchtower/
+COPY --chown=container:container package.json package-lock.json server.mjs auth.mjs rbac.mjs feeds.mjs nvd.mjs yaml-monitor.mjs notifications.mjs settings.mjs general.mjs logger.mjs /opt/watchtower/
 RUN cd /opt/watchtower \
     && npm ci --omit=dev \
     && npm cache clean --force \
