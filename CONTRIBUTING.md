@@ -20,3 +20,5 @@ Before opening a pull request:
 4. Confirm that credentials, secret files, scan state, logs, and local dependency caches are not committed.
 
 Pull requests should explain what changed, why it changed, how it was tested, and any remaining operational or security considerations.
+
+GitHub Actions runs the Node.js test suite and builds the Docker image for every pull request into `main`. After a pull request is merged, the `main` workflow publishes the version from `package.json` and the `latest` tag to Docker Hub. Repository administrators must configure the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` Actions secrets before the first merge.
