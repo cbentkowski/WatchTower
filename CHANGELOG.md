@@ -16,6 +16,11 @@
 - Restrict feeds to public HTTPS destinations on the standard port, reject credentials and private, loopback, link-local, internal, and metadata-service addresses, revalidate redirects and DNS results, and enforce time, redirect, entry, and ten-megabyte response limits.
 - Add a restrictive Content Security Policy and move theme initialization into a same-origin script so inline feed content cannot become executable browser code.
 
+### Fixed
+
+- Query NVD with a product-level wildcard CPE and evaluate each returned CVE's affected version ranges locally, so versions covered by ranges are assessed even when NVD has no exact-version CPE entry.
+- Refresh only the edited application's associated feeds and assessment after an application save instead of rerunning every application check.
+
 ## [0.3.5] - 2026-09-22
 
 ### Added

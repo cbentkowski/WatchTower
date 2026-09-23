@@ -12,6 +12,7 @@ import { createAuth } from './auth.mjs';
 import { createYamlMonitor } from './yaml-monitor.mjs';
 import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, standardRoles } from './rbac.mjs';
 import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, readFeeds, secureFetchText, validateFeedInput, writeFeeds } from './feeds.mjs';
+import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const configDirectory = process.env.CONFIG_DIR || path.join(root, 'config');
@@ -395,27 +396,16 @@ async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
   } catch (error) { logger.log('warn', 'Vendor assessment unavailable', `${app.name}: ${error.message}; using NVD fallback`); result.reasons.push(`Vendor check unavailable: ${error.message}; using NVD fallback`); }
   if (!sourceOk) try {
     const api = new URL('https://services.nvd.nist.gov/rest/json/cves/2.0');
-    api.searchParams.set('cpeName', cpe);
-    api.searchParams.set('isVulnerable', '');
+    api.searchParams.set('virtualMatchString', wildcardApplicationCpe(app));
     api.searchParams.set('resultsPerPage', '2000');
     const data = await fetchNvdJson(api);
-    result.vulnerabilities = (data.vulnerabilities || []).map(({ cve }) => {
+    result.vulnerabilities = (data.vulnerabilities || []).filter(({ cve }) => cveAffectsApplication(cve, app)).map(({ cve }) => {
       const level = severity(cve);
       return { id: cve.id, ...level, published: cve.published, description: cve.descriptions?.find(d => d.lang === 'en')?.value || '', knownExploited: kev.has(cve.id), url: `https://nvd.nist.gov/vuln/detail/${cve.id}`, advisories: (cve.references || []).filter(r => /vendor advisory|patch/i.test((r.tags || []).join(' '))).slice(0, 3).map(r => r.url) };
     }).filter(v => v.score >= 7 || v.knownExploited).sort((a,b) => Number(b.knownExploited) - Number(a.knownExploited) || b.score - a.score);
     sourceOk = data.totalResults <= 2000;
     if (!sourceOk) result.reasons.push('NVD result limit reached; review required');
     result.sources.push({ name: 'NVD', url: api.toString() });
-    if (data.totalResults === 0) {
-      const catalog = new URL('https://services.nvd.nist.gov/rest/json/cpes/2.0');
-      catalog.searchParams.set('cpeMatchString', cpe);
-      catalog.searchParams.set('resultsPerPage', '1');
-      const cpeData = await fetchNvdJson(catalog);
-      if (!cpeData.totalResults) {
-        sourceOk = false;
-        result.reasons.push('Exact version is not indexed in the NVD CPE catalog; CVE coverage is incomplete');
-      }
-    }
   } catch (error) { logger.log('error', 'NVD assessment unavailable', `${app.name}: ${error.message}`); result.reasons.push(`NVD check unavailable: ${error.message}`); }
   let life = { state: 'unknown', note: 'Lifecycle source not configured' };
   result.upgrades = { latest: app.latestVersion || null, currentLine: app.latestBranchVersion || null, latestLts: app.latestLtsVersion || null, sourceUrl: app.releaseUrl || app.lifecycleUrl || null };
@@ -505,6 +495,41 @@ async function refresh() {
     logger.log('info', 'Scan completed', `${results.length} applications; ${results.filter(app => app.status === 'unknown').length} unknown`);
     return saved;
   })().catch(error => { logger.log('error', 'Scan failed', error.message); throw error; }).finally(() => { refreshPromise = null; });
+  return refreshPromise;
+}
+
+async function refreshApplication(appId) {
+  if (refreshPromise) await refreshPromise;
+  if (!snapshot) return refresh();
+  refreshPromise = (async () => {
+    const apps = parseInventory(await readFile(path.join(configDirectory, 'applications.yaml'), 'utf8'));
+    const workspaces = parseWorkspaces(await readFile(path.join(configDirectory, 'workspaces.yaml'), 'utf8'), apps);
+    const app = apps.find(item => item.id === appId);
+    if (!app) {
+      const saved = await storeSnapshot({ ...snapshot, checkedAt: new Date().toISOString(), results: (snapshot.results || []).filter(item => item.id !== appId), workspaces, inventoryCount: apps.length });
+      return saved;
+    }
+    logger.log('info', 'Application scan started', app.name);
+    const feeds = await readFeeds(feedFile);
+    const associatedFeeds = feeds.filter(feed => feed.enabled && feed.applicationIds.includes(app.id));
+    const feedCache = associatedFeeds.length ? await collectFeeds(associatedFeeds, feedCacheFile, { preserveUnlisted: true }) : await readFeedCache();
+    const associated = associatedFeeds.flatMap(feed => feedCache.feeds?.[feed.id]?.entries || []);
+    const feedErrors = associatedFeeds.filter(feed => feedCache.feeds?.[feed.id]?.status === 'error').map(feed => `${feed.name}: ${feedCache.feeds[feed.id].error}`);
+    let kev = new Set();
+    let kevError = null;
+    try {
+      const data = await fetchJson('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json');
+      kev = new Set(data.vulnerabilities.map(item => item.cveID));
+    } catch (error) { kevError = `CISA KEV unavailable: ${error.message}`; }
+    const result = await scanApp(app, kev, associated, feedErrors);
+    if (kevError) { result.reasons.push(kevError); if (result.status !== 'red') result.status = 'unknown'; }
+    else result.sources.push({ name: 'CISA Known Exploited Vulnerabilities', url: 'https://www.cisa.gov/known-exploited-vulnerabilities-catalog' });
+    const previousResults = snapshot.results || [];
+    const results = previousResults.some(item => item.id === app.id) ? previousResults.map(item => item.id === app.id ? result : item) : [...previousResults, result];
+    const saved = await storeSnapshot({ ...snapshot, checkedAt: new Date().toISOString(), results, workspaces, inventoryCount: apps.length, feedSummary: { total: feeds.length, errors: Object.values(feedCache.feeds || {}).filter(item => item.status === 'error').length } });
+    logger.log('info', 'Application scan completed', app.name);
+    return saved;
+  })().catch(error => { logger.log('error', 'Application scan failed', `${appId}: ${error.message}`); throw error; }).finally(() => { refreshPromise = null; });
   return refreshPromise;
 }
 
@@ -600,7 +625,7 @@ createServer(async (req, res) => {
       const results = (data.products || []).map(product => {
         const name = product.cpe?.cpeName || '';
         const parts = name.split(':');
-        return { cpeName: name, part: parts[2], vendor: parts[3] || '', product: parts[4] || '', version: parts[5] || '', edition: parts[8] === '*' ? '' : parts[8] || '', title: product.cpe?.titles?.find(item => item.lang === 'en')?.title || name };
+        return { cpeName: name, part: parts[2], vendor: parts[3] || '', product: parts[4] || '', version: parts[5] || '', edition: parts[9] === '*' ? '' : parts[9] || '', title: product.cpe?.titles?.find(item => item.lang === 'en')?.title || name };
       }).filter(item => item.part === 'a');
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ results })); return;
     }
@@ -689,7 +714,6 @@ createServer(async (req, res) => {
       }
       if (changed.length) {
         await yamlMonitor.webWrite(feedFile, () => writeFeeds(feedFile, feeds));
-        await invalidateSnapshot();
         await logger.audit('Application feed associations updated', auditActor(req), { type: 'application', id: appFeeds[1] }, { feedIds: selected }, `${changed.length} feed associations changed`);
       }
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ feedIds: selected })); return;
@@ -726,10 +750,16 @@ createServer(async (req, res) => {
       const updated = { ...existing, ...app, legacyId: existing.legacyId || app.legacyId };
       lines.splice(start, end - start, ...serializeApp(updated).trimEnd().split('\n'));
       await yamlMonitor.webWrite(file, () => saveAtomic(file, `${lines.join('\n').trimEnd()}\n`));
-      await invalidateSnapshot();
       const changes = changedFields(existing, updated, appFields);
       if (Object.keys(changes).length) await logger.audit('Application updated', auditActor(req), { type: 'application', id: app.id, name: updated.name }, changes, `${updated.name} (${app.id}); ${describeFields(changes)}`);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ id: app.id, previousId })); return;
+    }
+    const appRefresh = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/refresh$/i);
+    if (appRefresh && req.method === 'POST') {
+      const { access } = await authorization(req);
+      if (!access.appEdit.has(appRefresh[1])) { forbidden(res, 'Application Editor role required'); return; }
+      const data = await refreshApplication(appRefresh[1]);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); return;
     }
     const workspaceEdit = url.pathname.match(/^\/api\/workspaces\/([A-Za-z0-9._-]+)$/);
     if ((url.pathname === '/api/workspaces' && req.method === 'POST') || (workspaceEdit && req.method === 'PUT')) {
@@ -762,7 +792,10 @@ createServer(async (req, res) => {
       const group = { id, legacyId: previous?.legacyId || '', name, notificationEmails: recipients.join(', '), applications: membership };
       if (index < 0) groups.push(group); else groups[index] = group;
       await yamlMonitor.webWrite(file, () => saveAtomic(file, serializeWorkspaces(groups)));
-      await invalidateSnapshot();
+      if (snapshot) {
+        snapshot = { ...snapshot, workspaces: groups };
+        await saveAtomic(snapshotFile, `${JSON.stringify(snapshot)}\n`);
+      }
       if (previous) {
         const addedApplications = membership.filter(appId => !previous.applications.includes(appId));
         const removedApplications = previous.applications.filter(appId => !membership.includes(appId));

@@ -533,10 +533,16 @@ async function saveEditor(event) {
         if (!update.ok) throw new Error((await update.json()).error || `Could not add application to ${group.name}`);
       }
     }
+    if (editorMode === 'app') {
+      const refresh = await fetch(`/api/applications/${encodeURIComponent(saved.id)}/refresh`, { method: 'POST' });
+      const data = await refresh.json();
+      if (!refresh.ok) throw new Error(data.error || 'Application saved, but its source check failed');
+      render(data);
+    }
     $('editor').close();
     applySavedEditorState(saved, payload, fields);
     if (editorMode === 'workspace') selectWorkspace(saved.id);
-    void load(false, true);
+    if (editorMode !== 'app') void load(false, true);
   } catch (error) { $('editor-error').textContent = error.message; $('editor-error').hidden = false; }
   finally { $('editor-save').disabled = false; $('editor-save').textContent = 'Save'; }
 }
