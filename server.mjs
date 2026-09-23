@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
 import { createNotifier, sendTestEmail } from './notifications.mjs';
-import { readSmtpSettings, writeSmtpSettings, validateSmtpSettings } from './settings.mjs';
+import { readSmtpSettings, smtpPasswordState, writeSmtpSettings, validateSmtpSettings } from './settings.mjs';
 import { readGeneralSettings, writeGeneralSettings, validateGeneralSettings, generalUrl } from './general.mjs';
 import { createLogger } from './logger.mjs';
 import { createAuth } from './auth.mjs';
@@ -560,7 +560,8 @@ createServer(async (req, res) => {
       const smtp = await readSmtpSettings(smtpFile);
       const configuredGeneral = await readGeneralSettings(generalFile);
       const general = configuredGeneral.host ? configuredGeneral : detectedGeneral(req);
-      const envStatus = { usernamePresent: Boolean(smtp.usernameEnv && process.env[smtp.usernameEnv]), passwordPresent: Boolean(smtp.passwordEnv && process.env[smtp.passwordEnv]) };
+      const password = await smtpPasswordState(process.env);
+      const envStatus = { usernamePresent: Boolean(smtp.usernameEnv && process.env[smtp.usernameEnv]), passwordFileConfigured: password.configured, passwordPresent: password.present };
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ smtp, general, generalConfigured: Boolean(configuredGeneral.host), envStatus })); return;
     }
     if (url.pathname === '/api/logs' && req.method === 'GET') {
@@ -570,6 +571,7 @@ createServer(async (req, res) => {
     if (url.pathname === '/api/settings' && req.method === 'POST') {
       const body = await readBody(req);
       const smtpInput = validateSmtpSettings(body.smtp);
+      if (smtpInput.enabled && !smtpInput.unauthenticated && !(await smtpPasswordState(process.env)).present) throw new Error('Authenticated email requires SMTP_PASSWORD_FILE to reference a readable, nonempty secret file');
       const generalInput = validateGeneralSettings(body.general);
       if (!generalInput.host) throw new Error('General hostname and web port are required');
       const previousSmtp = await readSmtpSettings(smtpFile);

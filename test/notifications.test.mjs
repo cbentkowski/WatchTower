@@ -4,9 +4,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createNotifier, sendTestEmail } from '../notifications.mjs';
-import { validateSmtpSettings } from '../settings.mjs';
+import { smtpPasswordState, validateSmtpSettings } from '../settings.mjs';
 
-const settings = { enabled: true, host: 'smtp.example.com', port: 587, secure: false, requireTls: true, from: 'alerts@example.com', baseUrl: 'https://watchtower.example.com', timeZone: 'UTC', sendHour: 8, usernameEnv: '', passwordEnv: '' };
+const settings = { enabled: true, host: 'smtp.example.com', port: 587, secure: false, requireTls: true, unauthenticated: true, from: 'alerts@example.com', baseUrl: 'https://watchtower.example.com', timeZone: 'UTC', sendHour: 8, usernameEnv: '' };
 const app = (version = '1.0') => ({ id: 'app', name: 'Test App', version, status: 'red', vulnerabilities: [{ id: 'CVE-2026-1234', score: 9 }], lifecycle: { state: 'supported' }, reasons: ['High risk finding'] });
 const snapshot = current => ({ workspaces: [{ id: 'team', name: 'Team', notificationEmails: 'team@example.com', applications: ['app'] }], results: [current] });
 
@@ -79,7 +79,7 @@ test('identifier renames preserve notification tokens and acknowledgements', asy
 test('unauthenticated relay sends without credential variables', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-relay-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const relaySettings = validateSmtpSettings({ ...settings, unauthenticated: true, usernameEnv: 'MISSING_SMTP_USER', passwordEnv: 'MISSING_SMTP_PASSWORD' });
+  const relaySettings = validateSmtpSettings({ ...settings, unauthenticated: true, usernameEnv: 'MISSING_SMTP_USER' });
   let transportOptions;
   const sent = [];
   const notifier = createNotifier({ dataDirectory: directory, settingsLoader: async () => ({ ...relaySettings, baseUrl: settings.baseUrl }), env: {}, clock: () => new Date('2026-09-20T09:00:00Z'), transportFactory: options => { transportOptions = options; return { sendMail: async message => { sent.push(message); return { accepted: ['team@example.com'], rejected: [] }; } }; } });
@@ -89,25 +89,38 @@ test('unauthenticated relay sends without credential variables', async t => {
 });
 
 test('disabled email permits blank delivery settings; enabling checks required fields', () => {
-  const blank = validateSmtpSettings({ enabled: false, host: '', port: '', from: '', timeZone: '', sendHour: '', usernameEnv: '', passwordEnv: '', secure: false, requireTls: false });
+  const blank = validateSmtpSettings({ enabled: false, host: '', port: '', from: '', timeZone: '', sendHour: '', usernameEnv: '', secure: false, requireTls: false, unauthenticated: false });
   assert.equal(blank.port, '');
   assert.throws(() => validateSmtpSettings({ ...blank, enabled: true }), /SMTP host, port, and From address/);
-  assert.throws(() => validateSmtpSettings({ ...settings, enabled: true, secure: false, requireTls: false, usernameEnv: 'USER', passwordEnv: 'PASS' }), /SSL\/TLS or STARTTLS/);
-  assert.throws(() => validateSmtpSettings({ ...settings, enabled: true, usernameEnv: '', passwordEnv: '' }), /Username and password/);
+  assert.throws(() => validateSmtpSettings({ ...settings, enabled: true, secure: false, requireTls: false, unauthenticated: false, usernameEnv: 'USER' }), /SSL\/TLS or STARTTLS/);
+  assert.throws(() => validateSmtpSettings({ ...settings, enabled: true, unauthenticated: false, usernameEnv: '' }), /username environment variable/);
 });
 
-test('test email uses unsaved validated settings and environment credentials', async () => {
+test('SMTP password secret state requires a readable nonempty mounted file', async () => {
+  assert.deepEqual(await smtpPasswordState({}), { configured: false, present: false });
+  assert.deepEqual(await smtpPasswordState({ SMTP_PASSWORD_FILE: '/run/watchtower-secrets/smtp-password' }, async () => 'secret\n'), { configured: true, present: true });
+  assert.deepEqual(await smtpPasswordState({ SMTP_PASSWORD_FILE: '/run/watchtower-secrets/smtp-password' }, async () => '  '), { configured: true, present: false });
+  assert.deepEqual(await smtpPasswordState({ SMTP_PASSWORD_FILE: '/missing' }, async () => { throw new Error('missing'); }), { configured: true, present: false });
+});
+
+test('test email uses an environment username and rereads the mounted password secret', async () => {
   let options;
   let message;
-  const smtp = validateSmtpSettings({ ...settings, usernameEnv: 'SMTP_USER', passwordEnv: 'SMTP_PASSWORD' });
+  let password = 'first-secret';
+  const smtp = validateSmtpSettings({ ...settings, unauthenticated: false, usernameEnv: 'SMTP_USER' });
   const result = await sendTestEmail(smtp, 'operator@example.com', {
-    env: { SMTP_USER: 'service-account', SMTP_PASSWORD: 'secret' },
+    env: { SMTP_USER: 'service-account', SMTP_PASSWORD_FILE: '/run/watchtower-secrets/smtp-password' },
+    secretLoader: async file => { assert.equal(file, '/run/watchtower-secrets/smtp-password'); return password; },
     transportFactory: input => { options = input; return { sendMail: async value => { message = value; return { accepted: ['operator@example.com'], rejected: [], messageId: 'test-id' }; } }; },
   });
-  assert.deepEqual(options.auth, { user: 'service-account', pass: 'secret' });
+  assert.deepEqual(options.auth, { user: 'service-account', pass: 'first-secret' });
   assert.equal(message.to, 'operator@example.com');
   assert.match(message.subject, /Test email/);
   assert.deepEqual(result.accepted, ['operator@example.com']);
-  await assert.rejects(() => sendTestEmail(smtp, 'invalid', { env: { SMTP_USER: 'x', SMTP_PASSWORD: 'y' } }), /valid test recipient/);
-  await assert.rejects(() => sendTestEmail(smtp, 'operator@example.com', { env: {} }), /not both present/);
+  password = 'rotated-secret';
+  await sendTestEmail(smtp, 'operator@example.com', { env: { SMTP_USER: 'service-account', SMTP_PASSWORD_FILE: '/run/watchtower-secrets/smtp-password' }, secretLoader: async () => password, transportFactory: input => { options = input; return { sendMail: async () => ({ accepted: ['operator@example.com'], rejected: [] }) }; } });
+  assert.equal(options.auth.pass, 'rotated-secret');
+  await assert.rejects(() => sendTestEmail(smtp, 'invalid', { env: {} }), /valid test recipient/);
+  await assert.rejects(() => sendTestEmail(smtp, 'operator@example.com', { env: { SMTP_USER: 'service-account' } }), /SMTP_PASSWORD_FILE is required/);
+  await assert.rejects(() => sendTestEmail(smtp, 'operator@example.com', { env: { SMTP_USER: 'service-account', SMTP_PASSWORD_FILE: '/missing' }, secretLoader: async () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; } }), /Could not read SMTP_PASSWORD_FILE: ENOENT/);
 });

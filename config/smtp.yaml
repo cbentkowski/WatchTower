@@ -1,4 +1,4 @@
-# Credentials are read from environment variables named below; never place their values here.
+# The username is read from the named environment variable. The password is read from SMTP_PASSWORD_FILE.
 smtp:
   enabled: false
   host: ""
@@ -10,4 +10,3 @@ smtp:
   timeZone: "America/Chicago"
   sendHour: 8
   usernameEnv: "WATCHTOWER_SMTP_USER"
-  passwordEnv: "WATCHTOWER_SMTP_PASSWORD"
