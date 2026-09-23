@@ -50,7 +50,12 @@ test('unauthenticated requests cannot read APIs or the dashboard', async () => {
   const page = response();
   assert.equal(await auth.handle({ method: 'GET', headers: {} }, page, new URL('https://home.example.com/')), true);
   assert.equal(page.status, 303);
-  assert.equal(page.headers.Location, '/auth/login');
+  assert.equal(page.headers.Location, '/login');
+  const loginPage = response();
+  await auth.handle({ method: 'GET', headers: {} }, loginPage, new URL('https://home.example.com/login'));
+  assert.equal(loginPage.status, 200);
+  assert.match(loginPage.body, /WatchTower/);
+  assert.match(loginPage.body, /href="\/auth\/login"/);
 });
 
 test('login binds the callback to a browser flow and creates a protected session', async () => {
@@ -111,11 +116,18 @@ test('login binds the callback to a browser flow and creates a protected session
   const logout = response();
   await auth.handle({ method: 'POST', headers: { cookie: sessionCookie, referer: 'https://home.example.com/settings' } }, logout, new URL('https://home.example.com/auth/logout'));
   assert.equal(logout.status, 303);
-  assert.equal(logout.headers.Location, '/auth/login');
+  assert.equal(logout.headers.Location, '/signed-out');
+  assert.equal(logout.headers['Set-Cookie'].length, 2);
+  assert.match(logout.headers['Set-Cookie'][0], /watchtower=.*Max-Age=0/);
+  assert.match(logout.headers['Set-Cookie'][1], /watchtower_flow=.*Max-Age=0/);
+  const signedOut = response();
+  await auth.handle({ method: 'GET', headers: {} }, signedOut, new URL('https://home.example.com/signed-out'));
+  assert.equal(signedOut.status, 200);
+  assert.match(signedOut.body, /successfully signed out/);
   const proxiedLogout = response();
   await auth.handle({ method: 'POST', headers: { cookie: sessionCookie, origin: 'http://watchtower:4173', 'sec-fetch-site': 'same-origin' } }, proxiedLogout, new URL('https://home.example.com/auth/logout'));
   assert.equal(proxiedLogout.status, 303);
-  assert.equal(proxiedLogout.headers.Location, '/auth/login');
+  assert.equal(proxiedLogout.headers.Location, '/signed-out');
   rmSync(directory, { recursive: true, force: true });
 });
 
