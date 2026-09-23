@@ -46,7 +46,7 @@ test('configured OIDC protects real HTTP routes before the API handler', async (
     assert.equal(api.headers.get('cache-control'), 'no-store');
     const page = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' });
     assert.equal(page.status, 303);
-    assert.equal(page.headers.get('location'), '/auth/login');
+    assert.equal(page.headers.get('location'), '/login');
   } finally {
     child.kill();
     await rm(data, { recursive: true, force: true });

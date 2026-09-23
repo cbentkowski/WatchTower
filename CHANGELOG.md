@@ -6,6 +6,16 @@
 
 - Add NVD CPE search and selection to the application editor so users can find an application and populate its CPE vendor, product, and related identity fields without locating them manually.
 
+## [0.3.4] - Unreleased
+
+### Added
+
+- Add branded WatchTower login and successful sign-out pages with explicit identity provider sign-in actions.
+
+### Changed
+
+- Clear both the WatchTower session and pending OIDC flow cookies during logout and stop automatically restarting OIDC authentication.
+
 ## [0.3.3] - Unreleased
 
 ### Fixed
