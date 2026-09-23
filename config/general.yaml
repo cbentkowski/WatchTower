@@ -1,0 +1,5 @@
+# Public address used in email links. Leave blank until saved in Settings.
+general:
+  protocol: ""
+  host: ""
+  port: ""

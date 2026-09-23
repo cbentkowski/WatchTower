@@ -1,0 +1,11 @@
+services:
+  watchtower:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "4173:4173"
+    volumes:
+      - watchtower-data:/home/container
+
+volumes:
+  watchtower-data:
