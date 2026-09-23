@@ -6,7 +6,17 @@
 
 - Add NVD CPE search and selection to the application editor so users can find an application and populate its CPE vendor, product, and related identity fields without locating them manually.
 
-## [0.3.4] - Unreleased
+## [0.3.5] - Unreleased
+
+### Added
+
+- Publish internal pull request builds to Docker Hub with a stable `pr-<number>` preview tag for deployment testing before merge.
+
+### Changed
+
+- Keep forked pull requests build-only so Docker Hub credentials are never exposed to untrusted contributions.
+
+## [0.3.4] - 2026-09-22
 
 ### Added
 
@@ -16,7 +26,7 @@
 
 - Clear both the WatchTower session and pending OIDC flow cookies during logout and stop automatically restarting OIDC authentication.
 
-## [0.3.3] - Unreleased
+## [0.3.3] - 2026-09-22
 
 ### Fixed
 
