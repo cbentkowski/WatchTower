@@ -46,15 +46,23 @@ test('application, workspace, and settings edits appear in audit logs', async ()
     const workspaceId = (await workspaceResponse.json()).id;
     assert.equal((await post(`/api/workspaces/${workspaceId}`, { id: 'ignored', name: 'Operations', applications: [], notificationEmails: '' }, 'PUT')).status, 200);
     assert.equal((await post('/api/settings', { smtp: { enabled: false }, general: { protocol: 'https', host: 'home.example.com', port: 443 } })).status, 200);
+    const feedResponse = await post('/api/feeds', { name: 'Vendor advisories', url: 'https://example.com/security.xml', format: 'rss', enabled: true, categories: ['security'], productAliases: ['Test App'], applicationIds: [appId] });
+    assert.equal(feedResponse.status, 201);
+    const feed = await feedResponse.json();
+    assert.equal((await post(`/api/feeds/${feed.id}`, { ...feed, name: 'Vendor security advisories', enabled: false }, 'PUT')).status, 200);
+    assert.equal((await post(`/api/applications/${appId}/feeds`, { feedIds: [feed.id] }, 'PUT')).status, 200);
 
     const { entries } = await (await fetch(`${origin}/api/logs`)).json();
     const audits = entries.filter(entry => entry.level === 'audit');
-    assert.deepEqual(audits.map(entry => entry.message).sort(), ['Application added', 'Application updated', 'Settings updated', 'Workspace added', 'Workspace updated'].sort());
+    assert.deepEqual(audits.map(entry => entry.message).sort(), ['Application added', 'Application updated', 'Feed added', 'Feed updated', 'Settings updated', 'Workspace added', 'Workspace updated'].sort());
     assert.ok(audits.every(entry => entry.actor.username === 'local'));
     assert.deepEqual(audits.find(entry => entry.message === 'Application updated').changes.version, { from: '1.0', to: '1.1' });
     assert.deepEqual(audits.find(entry => entry.message === 'Workspace updated').changes.removedApplications, [appId]);
     assert.equal(audits.find(entry => entry.message === 'Workspace updated').changes.notificationRecipientsChanged, true);
     assert.ok(!JSON.stringify(audits).includes('team@example.com'));
+    const feedList = await (await fetch(`${origin}/api/feeds`)).json();
+    assert.equal(feedList.feeds[0].name, 'Vendor security advisories');
+    assert.equal(feedList.feeds[0].state.status, 'not-checked');
 
     assert.equal((await post(`/api/workspaces/${workspaceId}`, { id: 'renamed-workspace', name: 'Operations', applications: [appId], notificationEmails: '' }, 'PUT')).status, 200);
     assert.equal((await post(`/api/applications/${appId}`, { ...app, id: 'renamed-app', name: 'Renamed App', version: '1.1' }, 'PUT')).status, 200);

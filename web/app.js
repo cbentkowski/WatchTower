@@ -10,11 +10,14 @@ let editorConfig = { applications: [], workspaces: [] };
 let settingsLoaded = false;
 let logsLoaded = false;
 let accessLoaded = false;
+let feedsLoaded = false;
+let feedData = { feeds: [], applications: [], canManage: false };
+let currentFeedId = null;
 let accessData = null;
 let isAdmin = false;
-let permissions = { scan: false, applications: { view: [], edit: [] }, workspaces: { view: [], edit: [], membership: [], notifications: [] } };
+let permissions = { scan: false, feeds: { manage: false, view: [], edit: [] }, applications: { view: [], edit: [] }, workspaces: { view: [], edit: [], membership: [], notifications: [] } };
 const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const safeUrl = (url) => { try { const u = new URL(url); return ['https:', 'http:'].includes(u.protocol) ? u.href : '#'; } catch { return '#'; } };
+const safeUrl = (url) => { try { const u = new URL(url); return u.protocol === 'https:' ? u.href : '#'; } catch { return '#'; } };
 const labels = { red: 'Needs action', yellow: 'Approaching EOL', green: 'Clear', unknown: 'Unknown' };
 function setTheme(theme) {
   document.documentElement.dataset.theme = theme;
@@ -56,23 +59,28 @@ function renderView() {
   const settingsPage = location.hash === '#settings';
   const logsPage = location.hash === '#logs';
   const accessPage = location.hash === '#access';
-  $('dashboard-content').hidden = settingsPage || logsPage || accessPage;
+  const feedsPage = location.hash === '#feeds';
+  $('dashboard-content').hidden = settingsPage || logsPage || accessPage || feedsPage;
   $('settings-content').hidden = !settingsPage;
   $('logs-content').hidden = !logsPage;
   $('access-content').hidden = !accessPage;
+  $('feeds-content').hidden = !feedsPage;
   $('settings-nav').classList.toggle('active', settingsPage);
   $('settings-nav').setAttribute('aria-current', settingsPage ? 'page' : 'false');
   $('logs-nav').classList.toggle('active', logsPage);
   $('logs-nav').setAttribute('aria-current', logsPage ? 'page' : 'false');
   $('access-nav').classList.toggle('active', accessPage);
   $('access-nav').setAttribute('aria-current', accessPage ? 'page' : 'false');
-  if (settingsPage || logsPage || accessPage) {
+  $('feeds-nav').classList.toggle('active', feedsPage);
+  $('feeds-nav').setAttribute('aria-current', feedsPage ? 'page' : 'false');
+  if (settingsPage || logsPage || accessPage || feedsPage) {
     $('overview-nav').classList.remove('active');
     for (const button of $('workspace-list').querySelectorAll('.workspace-link')) button.classList.remove('active');
-    $('crumb-current').textContent = settingsPage ? 'Settings' : logsPage ? 'Logs' : 'Access Control';
+    $('crumb-current').textContent = settingsPage ? 'Settings' : logsPage ? 'Logs' : accessPage ? 'Access Control' : 'Feeds';
     if (settingsPage && !settingsLoaded) loadSettings();
     if (logsPage && !logsLoaded) loadLogs();
     if (accessPage && !accessLoaded) loadAccess();
+    if (feedsPage && !feedsLoaded) loadFeeds();
     return;
   }
   const group = activeWorkspace();
@@ -132,6 +140,103 @@ async function loadLogs() {
   } catch (error) { logsLoaded = false; list.innerHTML = `<p class="form-error">${escape(error.message)}</p>`; }
 }
 
+function renderFeeds() {
+  $('add-feed').hidden = !feedData.canManage;
+  const list = $('feeds-list');
+  list.innerHTML = feedData.feeds.length ? feedData.feeds.map(feed => {
+    const state = feed.state || {};
+    return `<article class="feed-row"><div><h3>${escape(feed.name)}</h3><p>${escape(feed.url)}</p></div><div class="feed-meta">${feed.categories.map(value => `<span class="feed-chip">${escape(value)}</span>`).join('')}</div><div><span class="feed-state ${escape(state.status || '')}">${escape(state.status || 'not checked')}</span><p>${state.checkedAt ? escape(new Date(state.checkedAt).toLocaleString()) : 'Waiting for first collection'} · ${(state.entries || []).length} entries${state.error ? `<br>${escape(state.error)}` : ''}</p></div><button type="button" data-feed="${escape(feed.id)}">${feed.canEdit ? 'Edit' : 'View'}</button></article>`;
+  }).join('') : '<div class="empty"><strong>No feeds configured</strong><p>Add a vendor RSS, Atom, JSON, HTML, or GitHub advisory source.</p></div>';
+}
+
+async function loadFeeds() {
+  feedsLoaded = true;
+  try {
+    const response = await fetch('/api/feeds', { cache: 'no-store' });
+    feedData = await response.json();
+    if (!response.ok) throw new Error(feedData.error || 'Could not load feeds');
+    renderFeeds();
+  } catch (error) { feedsLoaded = false; $('feeds-list').innerHTML = `<p class="form-error">${escape(error.message)}</p>`; }
+}
+
+function openFeedEditor(id = null) {
+  currentFeedId = id;
+  const feed = feedData.feeds.find(item => item.id === id);
+  const editable = !feed || feed.canEdit;
+  const form = $('feed-form');
+  form.reset();
+  $('feed-editor-title').textContent = feed ? editable ? 'Edit feed' : 'View feed' : 'Add feed';
+  $('feed-editor-id').innerHTML = feed ? `Feed ID: <code>${escape(feed.id)}</code> (immutable)` : 'A permanent feed ID will be generated when saved.';
+  form.elements.name.value = feed?.name || '';
+  form.elements.url.value = feed?.url || '';
+  form.elements.format.value = feed?.format || 'auto';
+  form.elements.productAliases.value = (feed?.productAliases || []).join(', ');
+  form.elements.enabled.checked = feed?.enabled !== false;
+  for (const input of form.querySelectorAll('[name="category"]')) input.checked = (feed?.categories || ['security', 'release', 'lifecycle']).includes(input.value);
+  $('feed-applications').querySelector('.check-grid').innerHTML = feedData.applications.map(app => `<label><input type="checkbox" name="feedApplication" value="${escape(app.id)}" ${(feed?.applicationIds || []).includes(app.id) ? 'checked' : ''} ${feedData.canManage ? '' : 'disabled'}> ${escape(app.name)}</label>`).join('') || '<p class="muted">No visible applications.</p>';
+  for (const input of form.querySelectorAll('input,select')) if (input.name !== 'feedApplication') input.disabled = !editable;
+  $('feed-save').hidden = !editable;
+  $('feed-test').hidden = !feed || !editable;
+  $('feed-refresh').hidden = !feed || !editable;
+  $('feed-delete').hidden = !feed || !feedData.canManage;
+  $('feed-preview').hidden = true;
+  $('feed-preview').innerHTML = '';
+  $('feed-error').hidden = true;
+  $('feed-editor').showModal();
+}
+
+async function saveFeed(event) {
+  event.preventDefault();
+  const form = $('feed-form');
+  const payload = {
+    name: form.elements.name.value, url: form.elements.url.value, format: form.elements.format.value,
+    enabled: form.elements.enabled.checked,
+    categories: [...form.querySelectorAll('[name="category"]:checked')].map(input => input.value),
+    productAliases: form.elements.productAliases.value.split(',').map(value => value.trim()).filter(Boolean),
+    applicationIds: [...form.querySelectorAll('[name="feedApplication"]:checked')].map(input => input.value),
+  };
+  $('feed-save').disabled = true; $('feed-error').hidden = true;
+  try {
+    const response = await fetch(currentFeedId ? `/api/feeds/${encodeURIComponent(currentFeedId)}` : '/api/feeds', { method: currentFeedId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not save feed');
+    $('feed-editor').close(); feedsLoaded = false; await loadFeeds(); void load(false, true);
+  } catch (error) { $('feed-error').textContent = error.message; $('feed-error').hidden = false; }
+  finally { $('feed-save').disabled = false; }
+}
+
+async function testFeed() {
+  $('feed-test').disabled = true; $('feed-error').hidden = true;
+  try {
+    const response = await fetch(`/api/feeds/${encodeURIComponent(currentFeedId)}/test`, { method: 'POST' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Feed test failed');
+    $('feed-preview').innerHTML = data.entries.length ? data.entries.map(entry => `<article><strong>${escape(entry.title)}</strong><small>${escape(entry.type)} · ${escape(entry.confidence)} confidence · ${escape(entry.severity)}</small><p>${escape(entry.summary)}</p></article>`).join('') : '<p class="muted">The source was fetched safely, but no configured event types were recognized.</p>';
+    $('feed-preview').hidden = false;
+  } catch (error) { $('feed-error').textContent = error.message; $('feed-error').hidden = false; }
+  finally { $('feed-test').disabled = false; }
+}
+
+async function refreshFeed() {
+  $('feed-refresh').disabled = true; $('feed-error').hidden = true;
+  try {
+    const response = await fetch(`/api/feeds/${encodeURIComponent(currentFeedId)}/refresh`, { method: 'POST' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Feed collection failed');
+    $('feed-preview').innerHTML = `<p><strong>Collection complete.</strong> ${escape(data.state.entries?.length || 0)} entries cached.</p>`;
+    $('feed-preview').hidden = false;
+    feedsLoaded = false; await loadFeeds();
+  } catch (error) { $('feed-error').textContent = error.message; $('feed-error').hidden = false; }
+  finally { $('feed-refresh').disabled = false; }
+}
+
+async function deleteFeed() {
+  if (!confirm('Remove this feed and its application associations?')) return;
+  const response = await fetch(`/api/feeds/${encodeURIComponent(currentFeedId)}`, { method: 'DELETE' });
+  if (!response.ok) { const data = await response.json(); $('feed-error').textContent = data.error || 'Could not remove feed'; $('feed-error').hidden = false; return; }
+  $('feed-editor').close(); feedsLoaded = false; await loadFeeds(); void load(false, true);
+}
+
 function updateCredentialFields() {
   const form = $('settings-form');
   const relay = form.querySelector('[name="unauthenticated"]').checked;
@@ -169,6 +274,7 @@ async function saveSettings(event) {
   const form = $('settings-form');
   const fields = new FormData(form);
   const payload = Object.fromEntries(fields);
+  delete payload.testRecipient;
   const general = { protocol: payload.protocol, host: payload.publicHost, port: Number(payload.publicPort) };
   delete payload.protocol;
   delete payload.publicHost;
@@ -200,6 +306,36 @@ async function saveSettings(event) {
   finally { $('settings-save').disabled = false; }
 }
 
+async function testEmailSettings() {
+  const form = $('settings-form');
+  const fields = new FormData(form);
+  const payload = Object.fromEntries(fields);
+  const recipient = String(payload.testRecipient || '').trim();
+  delete payload.testRecipient;
+  delete payload.protocol; delete payload.publicHost; delete payload.publicPort; delete payload.transportSecurity;
+  const security = form.querySelector('[name="transportSecurity"]:checked')?.value;
+  payload.secure = security === 'tls';
+  payload.requireTls = security === 'starttls';
+  payload.unauthenticated = form.querySelector('[name="unauthenticated"]').checked;
+  payload.enabled = true;
+  payload.port = payload.port === '' ? '' : Number(payload.port);
+  payload.sendHour = payload.sendHour === '' ? '' : Number(payload.sendHour);
+  if (payload.unauthenticated) {
+    payload.usernameEnv = form.querySelector('[name="usernameEnv"]').value;
+    payload.passwordEnv = form.querySelector('[name="passwordEnv"]').value;
+  }
+  $('settings-test-email').disabled = true;
+  $('settings-message').hidden = true;
+  try {
+    const response = await fetch('/api/settings/test-email', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ smtp: payload, recipient }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not send test email');
+    $('settings-message').textContent = `Test email sent to ${recipient}. Settings were not saved.`;
+    $('settings-message').classList.add('success'); $('settings-message').hidden = false;
+  } catch (error) { $('settings-message').textContent = error.message; $('settings-message').classList.remove('success'); $('settings-message').hidden = false; }
+  finally { $('settings-test-email').disabled = false; }
+}
+
 function identityRow(group = {}) {
   return `<article class="access-row identity-row" data-id="${escape(group.id || '')}"><div class="form-grid"><label>Display name <input data-field="name" required value="${escape(group.name || '')}" placeholder="Infrastructure Admins"></label><label>Claim source <select data-field="claimSource"><option value="groups">groups</option><option value="roles">roles</option><option value="realm_access.roles">realm_access.roles</option><option value="resource_access.roles">resource_access.roles</option></select></label><label class="form-full">Exact claim value <input data-field="claimValue" required value="${escape(group.claimValue || '')}" placeholder="Group UUID or role name"></label></div><label><input data-field="enabled" type="checkbox" ${group.enabled === false ? '' : 'checked'}> Enabled</label><button class="remove-access" type="button">Remove</button>${group.id ? `<small>ID: <code>${escape(group.id)}</code></small>` : ''}</article>`;
 }
@@ -208,8 +344,9 @@ function grantRow(grant = {}) {
   const groups = accessData?.groups || [];
   const scope = grant.scopeType || 'workspace';
   const roleOptions = Object.entries(accessData?.roles || {}).filter(([, value]) => value.scopes.includes(scope));
-  const resources = scope === 'workspace' ? accessData?.workspaces || [] : scope === 'application' ? accessData?.applications || [] : [];
-  return `<article class="access-row grant-row" data-id="${escape(grant.id || '')}"><div class="form-grid"><label>Identity mapping <select data-field="groupId" required>${groups.map(group => `<option value="${escape(group.id)}" ${group.id === grant.groupId ? 'selected' : ''}>${escape(group.name)}</option>`).join('')}</select></label><label>Scope <select data-field="scopeType"><option value="workspace" ${scope === 'workspace' ? 'selected' : ''}>Workspace</option><option value="application" ${scope === 'application' ? 'selected' : ''}>Application</option><option value="global" ${scope === 'global' ? 'selected' : ''}>Global</option></select></label></div><fieldset><legend>Roles</legend><div class="check-grid">${roleOptions.map(([id, role]) => `<label><input data-role="${escape(id)}" type="checkbox" ${grant.roles?.includes(id) ? 'checked' : ''}> ${escape(role.name)}</label>`).join('')}</div></fieldset>${scope === 'global' ? '' : `<fieldset><legend>${scope === 'workspace' ? 'Workspaces' : 'Applications'}</legend><select data-field="resourceIds" multiple size="5">${resources.map(item => `<option value="${escape(item.id)}" ${grant.resourceIds?.includes(item.id) ? 'selected' : ''}>${escape(resourceLabel(item, resources))}</option>`).join('')}</select></fieldset>`}<button class="remove-access" type="button">Remove</button>${grant.id ? `<small>ID: <code>${escape(grant.id)}</code></small>` : ''}</article>`;
+  const resources = scope === 'workspace' ? accessData?.workspaces || [] : scope === 'application' ? accessData?.applications || [] : scope === 'feed' ? accessData?.feeds || [] : [];
+  const resourceTitle = scope === 'workspace' ? 'Workspaces' : scope === 'application' ? 'Applications' : 'Feeds';
+  return `<article class="access-row grant-row" data-id="${escape(grant.id || '')}"><div class="form-grid"><label>Identity mapping <select data-field="groupId" required>${groups.map(group => `<option value="${escape(group.id)}" ${group.id === grant.groupId ? 'selected' : ''}>${escape(group.name)}</option>`).join('')}</select></label><label>Scope <select data-field="scopeType"><option value="workspace" ${scope === 'workspace' ? 'selected' : ''}>Workspace</option><option value="application" ${scope === 'application' ? 'selected' : ''}>Application</option><option value="feed" ${scope === 'feed' ? 'selected' : ''}>Feed</option><option value="global" ${scope === 'global' ? 'selected' : ''}>Global</option></select></label></div><fieldset><legend>Roles</legend><div class="check-grid">${roleOptions.map(([id, role]) => `<label><input data-role="${escape(id)}" type="checkbox" ${grant.roles?.includes(id) ? 'checked' : ''}> ${escape(role.name)}</label>`).join('')}</div></fieldset>${scope === 'global' ? '' : `<fieldset><legend>${resourceTitle}</legend><select data-field="resourceIds" multiple size="5">${resources.map(item => `<option value="${escape(item.id)}" ${grant.resourceIds?.includes(item.id) ? 'selected' : ''}>${escape(resourceLabel(item, resources))}</option>`).join('')}</select></fieldset>`}<button class="remove-access" type="button">Remove</button>${grant.id ? `<small>ID: <code>${escape(grant.id)}</code></small>` : ''}</article>`;
 }
 
 function resourceLabel(item, list) { return list.filter(other => other.name === item.name).length > 1 ? `${item.name} (${item.id})` : item.name; }
@@ -242,6 +379,7 @@ function render(data) {
   permissions = data.access || permissions;
   isAdmin = Boolean(permissions.isAdmin || isAdmin);
   $('refresh').hidden = !(isAdmin || permissions.scan);
+  $('feeds-nav').hidden = !(isAdmin || permissions.feeds?.view?.length || permissions.feeds?.manage);
   $('updated').textContent = `Checked ${new Date(data.checkedAt).toLocaleString()}`;
   renderSidebar();
   renderView();
@@ -257,7 +395,8 @@ function showDetails(a) {
   const releaseLink = upgrade.sourceUrl ? `<a href="${safeUrl(upgrade.sourceUrl)}" target="_blank" rel="noopener noreferrer">Release source ↗</a>` : '';
   const containing = workspaces.filter(group => group.applications.includes(a.id));
   const sharedWarning = containing.length > 1 && (isAdmin || permissions.applications.edit.includes(a.id)) ? `<p class="form-error">This application is shared by ${containing.length} workspaces. Editing it changes the application everywhere it appears.</p>` : '';
-  $('detail-body').innerHTML = `${sharedWarning}<div class="detail-grid"><div><span>INSTALLED VERSION</span><strong>${escape(a.version)}</strong></div><div><span>LATEST AVAILABLE</span><strong>${escape(upgrade.latest || 'Unavailable')}</strong>${releaseLink}</div><div><span>LATEST ON INSTALLED LINE</span><strong>${escape(upgrade.currentLine || 'Unavailable')}</strong></div><div><span>LATEST LTS VERSION</span><strong>${escape(upgrade.latestLts || 'No designated LTS')}</strong></div><div><span>SUPPORT</span><strong>${escape(a.lifecycle?.note || 'Unknown')}</strong></div></div><h3>Assessment</h3><ul class="reasons">${a.reasons.map(r => `<li>${escape(r)}</li>`).join('')}</ul><h3>Vulnerability findings</h3>${findings}<h3>Sources</h3><div class="sources">${a.sources.map(s => `<a href="${safeUrl(s.url)}" target="_blank" rel="noopener noreferrer">${escape(s.name)} ↗</a>`).join('') || '<span class="muted">No source links available</span>'}</div><p class="detail-note">CPE: <code>${escape(a.cpe)}</code>. Confirm product identity and affected version ranges in the linked advisories before remediation decisions.</p>`;
+  const feedEvidence = (a.feedEvents || []).length ? `<h3>Feed evidence</h3>${a.feedEvents.map(event => `<div class="feed-evidence"><a href="${safeUrl(event.url)}" target="_blank" rel="noopener noreferrer">${escape(event.title)} ↗</a><span class="vendor">${escape(event.type)} · ${escape(event.confidence)} confidence${event.severity && event.severity !== 'UNKNOWN' ? ` · ${escape(event.severity)}` : ''}</span></div>`).join('')}` : '';
+  $('detail-body').innerHTML = `${sharedWarning}<div class="detail-grid"><div><span>INSTALLED VERSION</span><strong>${escape(a.version)}</strong></div><div><span>LATEST AVAILABLE</span><strong>${escape(upgrade.latest || 'Unavailable')}</strong>${releaseLink}</div><div><span>LATEST ON INSTALLED LINE</span><strong>${escape(upgrade.currentLine || 'Unavailable')}</strong></div><div><span>LATEST LTS VERSION</span><strong>${escape(upgrade.latestLts || 'No designated LTS')}</strong></div><div><span>SUPPORT</span><strong>${escape(a.lifecycle?.note || 'Unknown')}</strong></div></div><h3>Assessment</h3><ul class="reasons">${a.reasons.map(r => `<li>${escape(r)}</li>`).join('')}</ul><h3>Vulnerability findings</h3>${findings}${feedEvidence}<h3>Sources</h3><div class="sources">${a.sources.map(s => `<a href="${safeUrl(s.url)}" target="_blank" rel="noopener noreferrer">${escape(s.name)} ↗</a>`).join('') || '<span class="muted">No source links available</span>'}</div><p class="detail-note">CPE: <code>${escape(a.cpe)}</code>. Confirm product identity and affected version ranges in the linked advisories before remediation decisions.</p>`;
   $('details').showModal();
 }
 
@@ -280,6 +419,7 @@ async function openEditor(mode, targetId = null) {
         <label>CPE vendor <input name="cpeVendor" required pattern="[A-Za-z0-9._-]+" placeholder="vendor"></label>
         <label>CPE product <input name="cpeProduct" required pattern="[A-Za-z0-9._-]+" placeholder="product"></label>
         <label>CPE edition <input name="cpeEdition" pattern="[A-Za-z0-9._-]+" placeholder="Optional"></label>
+        <div class="form-full cpe-search"><label>NVD CPE search</label><div class="cpe-search-row"><input id="cpe-query" type="search" placeholder="Search product or vendor"><button id="cpe-search-button" type="button">Search NVD</button></div><div id="cpe-results" class="cpe-results"></div></div>
         <label>Lifecycle product <input name="lifecycleProduct" pattern="[A-Za-z0-9._-]+" placeholder="endoflife.date product ID"></label>
         <label>Manual end-of-life date <input name="eolDate" type="date"></label>
         <label>Lifecycle source URL <input name="lifecycleUrl" type="url" placeholder="https://…"></label>
@@ -288,7 +428,8 @@ async function openEditor(mode, targetId = null) {
         <label>Latest version override <input name="latestVersion" placeholder="Optional"></label>
         <label>Latest installed-line override <input name="latestBranchVersion" placeholder="Optional"></label>
         <label>Latest LTS override <input name="latestLtsVersion" placeholder="Optional"></label>
-      </div>${targetId ? `<p class="form-hint">Application ID: <code>${escape(targetId)}</code> (immutable)</p>` : ''}<p class="form-hint">Provide a lifecycle product or a manual end-of-life date. Verify CPE vendor and product at <a href="https://nvd.nist.gov/products/cpe/search" target="_blank" rel="noopener noreferrer">NVD CPE Search ↗</a>.</p>${editorConfig.workspaces.length ? `<fieldset><legend>Add to workspaces</legend><div class="check-grid">${editorConfig.workspaces.map(group => `<label><input type="checkbox" name="workspace" value="${escape(group.id)}"> ${escape(group.name)}</label>`).join('')}</div></fieldset>` : ''}`;
+      </div>${targetId ? `<p class="form-hint">Application ID: <code>${escape(targetId)}</code> (immutable)</p>` : ''}<p class="form-hint">Provide a lifecycle product or a manual end-of-life date. CPE search results come directly from NVD.</p>${editorConfig.workspaces.length ? `<fieldset><legend>Add to workspaces</legend><div class="check-grid">${editorConfig.workspaces.map(group => `<label><input type="checkbox" name="workspace" value="${escape(group.id)}"> ${escape(group.name)}</label>`).join('')}</div></fieldset>` : ''}${editorConfig.feeds?.length ? `<fieldset><legend>Associated feeds</legend><div class="check-grid">${editorConfig.feeds.map(feed => `<label><input type="checkbox" name="feed" value="${escape(feed.id)}"> ${escape(feed.name)}</label>`).join('')}</div></fieldset>` : ''}`;
+      $('cpe-search-button').addEventListener('click', searchCpes);
       if (targetId) {
         const app = editorConfig.applications.find(item => item.id === targetId);
         if (!app) throw new Error('Application not found');
@@ -297,6 +438,7 @@ async function openEditor(mode, targetId = null) {
           if (input && input.type !== 'checkbox') input.value = value ?? '';
         }
         for (const input of $('editor-form').querySelectorAll('[name="workspace"]')) input.checked = Boolean(editorConfig.workspaces.find(group => group.id === input.value)?.applications.includes(targetId));
+        for (const input of $('editor-form').querySelectorAll('[name="feed"]')) input.checked = Boolean(editorConfig.feeds.find(feed => feed.id === input.value)?.applicationIds.includes(targetId));
       }
     } else {
       $('editor-fields').innerHTML = `<label class="form-full">Workspace to edit <select id="workspace-choice"><option value="">New workspace</option>${editorConfig.workspaces.map(group => `<option value="${escape(group.id)}">${escape(group.name)}</option>`).join('')}</select></label><div class="form-grid"><label>Workspace name <input name="name" required placeholder="Customer, system, or group name"></label></div><p id="workspace-id-label" class="form-hint"></p><label class="form-full notification-emails">Notification emails <input name="notificationEmails" type="text" placeholder="alex@example.com, team@example.com"></label><p class="form-hint">Separate recipients with commas. Leave blank to turn off email for this workspace.</p><fieldset><legend>Applications in this workspace</legend><div class="check-grid">${editorConfig.applications.filter(app => app.enabled !== false).map(app => `<label><input type="checkbox" name="application" value="${escape(app.id)}"> ${escape(app.name)}</label>`).join('') || '<p class="muted">Add an application first.</p>'}</div></fieldset>`;
@@ -304,6 +446,28 @@ async function openEditor(mode, targetId = null) {
       if (targetId) { $('workspace-choice').value = targetId; populateWorkspaceEditor(); $('workspace-choice').hidden = true; $('workspace-choice').closest('label').hidden = true; }
     }
   } catch (error) { $('editor-fields').innerHTML = ''; $('editor-error').textContent = error.message; $('editor-error').hidden = false; }
+}
+
+async function searchCpes() {
+  const query = $('cpe-query').value.trim();
+  const results = $('cpe-results');
+  if (query.length < 2) { results.innerHTML = '<p class="form-error">Enter at least two characters.</p>'; return; }
+  results.innerHTML = '<p class="muted">Searching NVD…</p>';
+  try {
+    const response = await fetch(`/api/cpes?q=${encodeURIComponent(query)}`, { cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'CPE search failed');
+    results.innerHTML = data.results.length ? data.results.map((item, index) => `<button class="cpe-result" type="button" data-cpe-index="${index}">${escape(item.title)}<small>${escape(item.cpeName)}</small></button>`).join('') : '<p class="muted">No application CPEs found.</p>';
+    for (const button of results.querySelectorAll('[data-cpe-index]')) button.addEventListener('click', () => {
+      const item = data.results[Number(button.dataset.cpeIndex)];
+      const form = $('editor-form');
+      form.elements.cpeVendor.value = item.vendor;
+      form.elements.cpeProduct.value = item.product;
+      form.elements.cpeEdition.value = item.edition;
+      if (!form.elements.version.value && item.version && item.version !== '*') form.elements.version.value = item.version;
+      results.innerHTML = `<p class="success">Selected ${escape(item.cpeName)}</p>`;
+    });
+  } catch (error) { results.innerHTML = `<p class="form-error">${escape(error.message)}</p>`; }
 }
 
 function populateWorkspaceEditor() {
@@ -346,7 +510,7 @@ async function saveEditor(event) {
   const form = $('editor-form');
   const fields = new FormData(form);
   const currentWorkspace = editorMode === 'workspace' && editorTargetId ? editorConfig.workspaces.find(group => group.id === editorTargetId) : null;
-  const payload = editorMode === 'app' ? Object.fromEntries([...fields].filter(([key]) => key !== 'workspace')) : { name: fields.get('name'), notificationEmails: fields.get('notificationEmails'), applications: currentWorkspace && !isAdmin && !permissions.workspaces.membership.includes(currentWorkspace.id) ? currentWorkspace.applications : fields.getAll('application') };
+  const payload = editorMode === 'app' ? Object.fromEntries([...fields].filter(([key]) => !['workspace', 'feed'].includes(key))) : { name: fields.get('name'), notificationEmails: fields.get('notificationEmails'), applications: currentWorkspace && !isAdmin && !permissions.workspaces.membership.includes(currentWorkspace.id) ? currentWorkspace.applications : fields.getAll('application') };
   if (editorMode === 'app' && !payload.lifecycleProduct && !payload.eolDate) { $('editor-error').textContent = 'Enter a lifecycle product or manual end-of-life date.'; $('editor-error').hidden = false; return; }
   $('editor-save').disabled = true;
   $('editor-save').textContent = 'Saving…';
@@ -357,6 +521,8 @@ async function saveEditor(event) {
     const saved = await response.json();
     if (!response.ok) throw new Error(saved.error || 'Could not save');
     if (editorMode === 'app') {
+      const feedUpdate = await fetch(`/api/applications/${encodeURIComponent(saved.id)}/feeds`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ feedIds: fields.getAll('feed') }) });
+      if (!feedUpdate.ok) throw new Error((await feedUpdate.json()).error || 'Could not update feed associations');
       for (const group of editorConfig.workspaces) {
         const selected = fields.getAll('workspace').includes(group.id);
         const applicationsAfterRename = group.applications.map(id => id === saved.previousId ? saved.id : id);
@@ -414,8 +580,19 @@ $('overview-nav').addEventListener('click', () => selectWorkspace(null));
 $('settings-nav').addEventListener('click', () => { location.hash = 'settings'; renderView(); });
 $('logs-nav').addEventListener('click', () => { location.hash = 'logs'; renderView(); });
 $('access-nav').addEventListener('click', () => { location.hash = 'access'; renderView(); });
+$('feeds-nav').addEventListener('click', () => { location.hash = 'feeds'; renderView(); });
+$('feeds-refresh').addEventListener('click', () => { feedsLoaded = false; loadFeeds(); });
+$('add-feed').addEventListener('click', () => openFeedEditor());
+$('feeds-list').addEventListener('click', event => { const button = event.target.closest('[data-feed]'); if (button) openFeedEditor(button.dataset.feed); });
+$('feed-form').addEventListener('submit', saveFeed);
+$('feed-test').addEventListener('click', testFeed);
+$('feed-refresh').addEventListener('click', refreshFeed);
+$('feed-delete').addEventListener('click', deleteFeed);
+$('feed-editor-close').addEventListener('click', () => $('feed-editor').close());
+$('feed-cancel').addEventListener('click', () => $('feed-editor').close());
 $('logs-refresh').addEventListener('click', loadLogs);
 $('settings-form').addEventListener('submit', saveSettings);
+$('settings-test-email').addEventListener('click', testEmailSettings);
 $('access-form').addEventListener('submit', saveAccess);
 $('add-identity').addEventListener('click', () => { accessData.groups = [...collectAccess().groups, { id: crypto.randomUUID(), name: '', claimSource: 'groups', claimValue: '', enabled: true }]; accessData.grants = collectAccess().grants; renderAccess(); });
 $('add-grant').addEventListener('click', () => { const current = collectAccess(); accessData.groups = current.groups; accessData.grants = [...current.grants, { id: crypto.randomUUID(), groupId: current.groups[0]?.id || '', scopeType: 'workspace', roles: [], resourceIds: [] }]; renderAccess(); });

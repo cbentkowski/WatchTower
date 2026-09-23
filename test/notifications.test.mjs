@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createNotifier } from '../notifications.mjs';
+import { createNotifier, sendTestEmail } from '../notifications.mjs';
 import { validateSmtpSettings } from '../settings.mjs';
 
 const settings = { enabled: true, host: 'smtp.example.com', port: 587, secure: false, requireTls: true, from: 'alerts@example.com', baseUrl: 'https://watchtower.example.com', timeZone: 'UTC', sendHour: 8, usernameEnv: '', passwordEnv: '' };
@@ -94,4 +94,20 @@ test('disabled email permits blank delivery settings; enabling checks required f
   assert.throws(() => validateSmtpSettings({ ...blank, enabled: true }), /SMTP host, port, and From address/);
   assert.throws(() => validateSmtpSettings({ ...settings, enabled: true, secure: false, requireTls: false, usernameEnv: 'USER', passwordEnv: 'PASS' }), /SSL\/TLS or STARTTLS/);
   assert.throws(() => validateSmtpSettings({ ...settings, enabled: true, usernameEnv: '', passwordEnv: '' }), /Username and password/);
+});
+
+test('test email uses unsaved validated settings and environment credentials', async () => {
+  let options;
+  let message;
+  const smtp = validateSmtpSettings({ ...settings, usernameEnv: 'SMTP_USER', passwordEnv: 'SMTP_PASSWORD' });
+  const result = await sendTestEmail(smtp, 'operator@example.com', {
+    env: { SMTP_USER: 'service-account', SMTP_PASSWORD: 'secret' },
+    transportFactory: input => { options = input; return { sendMail: async value => { message = value; return { accepted: ['operator@example.com'], rejected: [], messageId: 'test-id' }; } }; },
+  });
+  assert.deepEqual(options.auth, { user: 'service-account', pass: 'secret' });
+  assert.equal(message.to, 'operator@example.com');
+  assert.match(message.subject, /Test email/);
+  assert.deepEqual(result.accepted, ['operator@example.com']);
+  await assert.rejects(() => sendTestEmail(smtp, 'invalid', { env: { SMTP_USER: 'x', SMTP_PASSWORD: 'y' } }), /valid test recipient/);
+  await assert.rejects(() => sendTestEmail(smtp, 'operator@example.com', { env: {} }), /not both present/);
 });
