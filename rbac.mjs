@@ -9,6 +9,9 @@ export const standardRoles = Object.freeze({
   'notification-manager': { name: 'Notification Manager', scopes: ['workspace'] },
   'application-viewer': { name: 'Application Viewer', scopes: ['application'] },
   'application-editor': { name: 'Application Editor', scopes: ['application'] },
+  'feed-viewer': { name: 'Feed Viewer', scopes: ['feed'] },
+  'feed-editor': { name: 'Feed Editor', scopes: ['feed'] },
+  'feed-manager': { name: 'Feed Manager', scopes: ['global'] },
   'scan-operator': { name: 'Scan Operator', scopes: ['global'] },
 });
 
@@ -42,7 +45,7 @@ export function parseRbac(source) {
   }
   for (const grant of result.grants) {
     if (!uuid.test(grant.id || '') || !result.groups.some(group => group.id === grant.groupId)) throw new Error('Every grant requires a UUID and valid identity mapping');
-    if (!['global', 'workspace', 'application'].includes(grant.scopeType)) throw new Error('Grant has an invalid scope type');
+    if (!['global', 'workspace', 'application', 'feed'].includes(grant.scopeType)) throw new Error('Grant has an invalid scope type');
     grant.roles ||= [];
     grant.resourceIds ||= [];
     if (!grant.roles.length || grant.roles.some(role => !standardRoles[role] || !standardRoles[role].scopes.includes(grant.scopeType))) throw new Error('Grant contains an invalid role for its scope');
@@ -61,16 +64,16 @@ export function serializeRbac(config) {
 export async function readRbac(file) { try { return parseRbac(await readFile(file, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return { groups: [], grants: [] }; throw error; } }
 export async function writeRbac(file, config) { const temp = `${file}.tmp`; await writeFile(temp, serializeRbac(config)); await rename(temp, file); return config; }
 
-export function validateRbacInput(input, apps, workspaces) {
+export function validateRbacInput(input, apps, workspaces, feeds = []) {
   if (!input || !Array.isArray(input.groups) || !Array.isArray(input.grants)) throw new Error('Groups and grants are required');
   const groups = input.groups.map(group => ({ id: uuid.test(group.id || '') ? group.id : randomUUID(), name: String(group.name || '').trim(), claimSource: String(group.claimSource || '').trim(), claimValue: String(group.claimValue || '').trim(), enabled: group.enabled !== false }));
   const groupIds = new Set(groups.map(group => group.id));
   if (groups.some(group => !group.name || !['groups', 'roles', 'realm_access.roles', 'resource_access.roles'].includes(group.claimSource) || !group.claimValue)) throw new Error('Each identity mapping needs a name, supported claim source, and claim value');
-  const known = { workspace: new Set(workspaces.map(item => item.id)), application: new Set(apps.map(item => item.id)) };
+  const known = { workspace: new Set(workspaces.map(item => item.id)), application: new Set(apps.map(item => item.id)), feed: new Set(feeds.map(item => item.id)) };
   const grants = input.grants.map(grant => ({ id: uuid.test(grant.id || '') ? grant.id : randomUUID(), groupId: String(grant.groupId || ''), scopeType: String(grant.scopeType || ''), roles: [...new Set((grant.roles || []).map(String))], resourceIds: [...new Set((grant.resourceIds || []).map(String))] }));
   for (const grant of grants) {
     if (!groupIds.has(grant.groupId)) throw new Error('Grant references an unknown identity mapping');
-    if (!['global', 'workspace', 'application'].includes(grant.scopeType) || !grant.roles.length) throw new Error('Grant requires a valid scope and at least one role');
+    if (!['global', 'workspace', 'application', 'feed'].includes(grant.scopeType) || !grant.roles.length) throw new Error('Grant requires a valid scope and at least one role');
     if (grant.roles.some(role => !standardRoles[role]?.scopes.includes(grant.scopeType))) throw new Error('Grant contains a role that is invalid for its scope');
     if (grant.scopeType !== 'global' && (!grant.resourceIds.length || grant.resourceIds.some(id => !known[grant.scopeType].has(id)))) throw new Error('Grant references an unknown resource');
     if (grant.scopeType === 'global') grant.resourceIds = [];
@@ -78,13 +81,18 @@ export function validateRbacInput(input, apps, workspaces) {
   return { groups, grants };
 }
 
-export function calculateAccess(user, config, apps, workspaces) {
-  if (user?.isAdmin || user?.issuer === 'local') return { isAdmin: true, scan: true, appView: new Set(apps.map(a => a.id)), appEdit: new Set(apps.map(a => a.id)), workspaceView: new Set(workspaces.map(w => w.id)), workspaceEdit: new Set(workspaces.map(w => w.id)), workspaceMembership: new Set(workspaces.map(w => w.id)), workspaceNotifications: new Set(workspaces.map(w => w.id)) };
+export function calculateAccess(user, config, apps, workspaces, feeds = []) {
+  if (user?.isAdmin || user?.issuer === 'local') return { isAdmin: true, scan: true, feedManage: true, feedView: new Set(feeds.map(f => f.id)), feedEdit: new Set(feeds.map(f => f.id)), appView: new Set(apps.map(a => a.id)), appEdit: new Set(apps.map(a => a.id)), workspaceView: new Set(workspaces.map(w => w.id)), workspaceEdit: new Set(workspaces.map(w => w.id)), workspaceMembership: new Set(workspaces.map(w => w.id)), workspaceNotifications: new Set(workspaces.map(w => w.id)) };
   const claims = user?.claims || {};
   const matched = new Set(config.groups.filter(group => group.enabled && (claims[group.claimSource] || []).includes(group.claimValue)).map(group => group.id));
-  const access = { isAdmin: false, scan: false, appView: new Set(), appEdit: new Set(), workspaceView: new Set(), workspaceEdit: new Set(), workspaceMembership: new Set(), workspaceNotifications: new Set() };
+  const access = { isAdmin: false, scan: false, feedManage: false, feedView: new Set(), feedEdit: new Set(), appView: new Set(), appEdit: new Set(), workspaceView: new Set(), workspaceEdit: new Set(), workspaceMembership: new Set(), workspaceNotifications: new Set() };
   for (const grant of config.grants.filter(item => matched.has(item.groupId))) {
     if (grant.scopeType === 'global' && grant.roles.includes('scan-operator')) access.scan = true;
+    if (grant.scopeType === 'global' && grant.roles.includes('feed-manager')) { access.feedManage = true; for (const feed of feeds) { access.feedView.add(feed.id); access.feedEdit.add(feed.id); } }
+    if (grant.scopeType === 'feed') for (const id of grant.resourceIds) {
+      if (grant.roles.some(role => ['feed-viewer', 'feed-editor'].includes(role))) access.feedView.add(id);
+      if (grant.roles.includes('feed-editor')) access.feedEdit.add(id);
+    }
     if (grant.scopeType === 'application') for (const id of grant.resourceIds) {
       if (grant.roles.some(role => ['application-viewer', 'application-editor'].includes(role))) access.appView.add(id);
       if (grant.roles.includes('application-editor')) access.appEdit.add(id);
@@ -101,7 +109,8 @@ export function calculateAccess(user, config, apps, workspaces) {
     }
   }
   for (const id of access.appEdit) access.appView.add(id);
+  for (const id of access.feedEdit) access.feedView.add(id);
   return access;
 }
 
-export function accessJson(access) { return { isAdmin: access.isAdmin, scan: access.scan, applications: { view: [...access.appView], edit: [...access.appEdit] }, workspaces: { view: [...access.workspaceView], edit: [...access.workspaceEdit], membership: [...access.workspaceMembership], notifications: [...access.workspaceNotifications] } }; }
+export function accessJson(access) { return { isAdmin: access.isAdmin, scan: access.scan, feeds: { manage: access.feedManage, view: [...access.feedView], edit: [...access.feedEdit] }, applications: { view: [...access.appView], edit: [...access.appEdit] }, workspaces: { view: [...access.workspaceView], edit: [...access.workspaceEdit], membership: [...access.workspaceMembership], notifications: [...access.workspaceNotifications] } }; }

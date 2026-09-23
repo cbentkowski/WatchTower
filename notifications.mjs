@@ -7,6 +7,22 @@ const escape = value => String(value ?? '').replace(/[&<>"']/g, character => ({ 
 const daysSince = (previous, today) => previous ? Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${previous}T00:00:00Z`)) / 86_400_000) : Infinity;
 const entryKey = (workspaceId, app) => JSON.stringify([workspaceId, app.id, app.version]);
 
+export async function sendTestEmail(settings, recipient, { env = process.env, transportFactory = createTransport } = {}) {
+  const to = String(recipient || '').trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) throw new Error('Enter a valid test recipient email address');
+  const username = settings.usernameEnv ? env[settings.usernameEnv] : '';
+  const password = settings.passwordEnv ? env[settings.passwordEnv] : '';
+  if (!settings.unauthenticated && (!username || !password)) throw new Error('The configured SMTP credential environment variables are not both present');
+  const mailer = transportFactory({ host: settings.host, port: settings.port, secure: settings.secure, requireTLS: settings.requireTls, auth: settings.unauthenticated ? undefined : { user: username, pass: password }, connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 30_000 });
+  const response = await mailer.sendMail({
+    from: settings.from, to, subject: '[WatchTower] Test email',
+    text: 'WatchTower successfully connected to your SMTP server and sent this test message. These settings have not been saved.',
+    html: '<main style="font-family:Arial,sans-serif;max-width:620px;margin:auto;color:#203646"><h1>WatchTower test email</h1><p>WatchTower successfully connected to your SMTP server and sent this test message.</p><p><strong>These settings have not been saved.</strong></p></main>',
+  });
+  if (response?.rejected?.length) throw new Error(`Recipient rejected: ${response.rejected.join(', ')}`);
+  return { accepted: response?.accepted?.map(String) || [to], messageId: String(response?.messageId || '') };
+}
+
 function localTime(date, timeZone) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }).formatToParts(date).map(part => [part.type, part.value]));
   return { day: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour) };

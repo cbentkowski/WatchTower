@@ -1,0 +1,3 @@
+# Feed content is always treated as untrusted data. Feed IDs are immutable UUIDs.
+version: 1
+feeds:

@@ -4,13 +4,14 @@ import { readFile, writeFile, rename, mkdir, rm, access, copyFile } from 'node:f
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
-import { createNotifier } from './notifications.mjs';
+import { createNotifier, sendTestEmail } from './notifications.mjs';
 import { readSmtpSettings, writeSmtpSettings, validateSmtpSettings } from './settings.mjs';
 import { readGeneralSettings, writeGeneralSettings, validateGeneralSettings, generalUrl } from './general.mjs';
 import { createLogger } from './logger.mjs';
 import { createAuth } from './auth.mjs';
 import { createYamlMonitor } from './yaml-monitor.mjs';
 import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, standardRoles } from './rbac.mjs';
+import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, readFeeds, secureFetchText, validateFeedInput, writeFeeds } from './feeds.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const configDirectory = process.env.CONFIG_DIR || path.join(root, 'config');
@@ -18,7 +19,7 @@ const defaultConfigDirectory = process.env.DEFAULT_CONFIG_DIR || path.join(root,
 const PORT = Number(process.env.SERVER_PORT || process.env.PORT || 4173);
 const HOST = process.env.HOST || '127.0.0.1';
 const dataDirectory = process.env.DATA_DIR || path.join(root, 'data');
-const configFiles = ['applications.yaml', 'workspaces.yaml', 'smtp.yaml', 'general.yaml'];
+const configFiles = ['applications.yaml', 'workspaces.yaml', 'feeds.yaml', 'smtp.yaml', 'general.yaml'];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const exists = file => access(file).then(() => true, () => false);
 async function ensureConfiguration() {
@@ -36,12 +37,14 @@ async function ensureConfiguration() {
 }
 await ensureConfiguration();
 const rbacFile = path.join(configDirectory, 'rbac.yaml');
+const feedFile = path.join(configDirectory, 'feeds.yaml');
 if (!await exists(rbacFile)) await writeRbac(rbacFile, { groups: [], grants: [] });
 const resourceMigration = await migrateResourceIds();
 const logger = createLogger(dataDirectory);
 const auth = createAuth();
 if (!auth && process.env.AUTH_DISABLED !== 'true') throw new Error('OIDC is required. Configure OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_BASE_URL, and either OIDC_CLIENT_SECRET or OIDC_CLIENT_SECRET_FILE, or set AUTH_DISABLED=true for a private development instance.');
 const snapshotFile = path.join(dataDirectory, 'status.json');
+const feedCacheFile = path.join(dataDirectory, 'feeds.json');
 const smtpFile = path.join(configDirectory, 'smtp.yaml');
 const generalFile = path.join(configDirectory, 'general.yaml');
 const notifier = createNotifier({ dataDirectory, settingsLoader: async () => ({ ...await readSmtpSettings(smtpFile), baseUrl: generalUrl(await readGeneralSettings(generalFile)) }) });
@@ -71,6 +74,7 @@ const yamlMonitor = createYamlMonitor({
   files: {
     'applications.yaml': path.join(configDirectory, 'applications.yaml'),
     'workspaces.yaml': path.join(configDirectory, 'workspaces.yaml'),
+    'feeds.yaml': feedFile,
     'smtp.yaml': smtpFile,
     'general.yaml': generalFile,
     'rbac.yaml': rbacFile,
@@ -79,7 +83,7 @@ const yamlMonitor = createYamlMonitor({
   onChange: async changes => {
     const actor = { issuer: 'filesystem', subject: 'unknown', name: 'Filesystem change (unattributed)' };
     for (const change of changes) await logger.audit('YAML file changed outside web interface', actor, { type: 'yaml', id: change.name }, { kind: change.kind }, `${change.name} ${change.kind}`);
-    if (changes.some(change => ['applications.yaml', 'workspaces.yaml'].includes(change.name))) {
+    if (changes.some(change => ['applications.yaml', 'workspaces.yaml', 'feeds.yaml'].includes(change.name))) {
       await invalidateSnapshot();
       if (process.env.AUTO_SCAN !== 'false') {
         if (refreshPromise) await refreshPromise.catch(() => {});
@@ -190,6 +194,11 @@ async function readBody(req) {
   try { return JSON.parse(body); } catch { throw new Error('Invalid JSON'); }
 }
 
+async function readFeedCache() {
+  try { return JSON.parse(await readFile(feedCacheFile, 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return { checkedAt: null, feeds: {} }; throw error; }
+}
+
 function parseWorkspaces(source, apps, allowLegacyIds = false) {
   const groups = [];
   let current = null;
@@ -223,8 +232,9 @@ function parseWorkspaces(source, apps, allowLegacyIds = false) {
 async function authorization(req, includeDisabled = true) {
   const apps = parseInventory(await readFile(path.join(configDirectory, 'applications.yaml'), 'utf8'), includeDisabled);
   const workspaces = parseWorkspaces(await readFile(path.join(configDirectory, 'workspaces.yaml'), 'utf8'), apps.filter(app => app.enabled !== false));
-  const access = calculateAccess(req.authUser || { issuer: 'local', isAdmin: true }, await readRbac(rbacFile), apps, workspaces);
-  return { apps, workspaces, access };
+  const feeds = await readFeeds(feedFile);
+  const access = calculateAccess(req.authUser || { issuer: 'local', isAdmin: true }, await readRbac(rbacFile), apps, workspaces, feeds);
+  return { apps, workspaces, feeds, access };
 }
 
 function forbidden(res, message = 'You do not have permission to perform this action') {
@@ -368,7 +378,7 @@ async function checkGitlab(app, kev) {
   return { vulnerabilities: [...new Map(vulnerabilities.map(v => [v.id, v])).values()].sort((a,b) => b.score-a.score), source: { name: 'GitLab patch releases', url: feedUrl } };
 }
 
-async function scanApp(app, kev) {
+async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
   const cpe = `cpe:2.3:a:${app.cpeVendor}:${app.cpeProduct}:${app.version}:*:*:*:${app.cpeEdition || '*'}:*:*:*`;
   const result = { ...app, cpe, status: 'unknown', reasons: [], vulnerabilities: [], sources: [], checkedAt: new Date().toISOString() };
   let sourceOk = false;
@@ -428,6 +438,35 @@ async function scanApp(app, kev) {
   result.lifecycle = life;
   result.assessmentSource = sourceLabel;
   if (app.vendorBulletinUrl) result.sources.push({ name: 'Vendor security bulletins', url: app.vendorBulletinUrl });
+  const feedSecurity = feedRecords.filter(event => event.type === 'security');
+  if (feedSecurity.some(event => event.confidence === 'high')) { sourceOk = true; sourceLabel = 'Vendor feeds'; result.vendorConfirmed = true; }
+  const versionLine = app.version.split('.').slice(0, 2).join('.');
+  const reviewAdvisories = [];
+  for (const event of feedSecurity) {
+    if (event.confidence === 'high' && eventAffectsVersion(event, app.version)) {
+      result.vulnerabilities.push({ id: event.cves[0] || event.title, score: event.score || (event.severity === 'CRITICAL' ? 9 : event.severity === 'HIGH' ? 7 : 0), label: event.severity, severity: event.severity, published: event.published, description: event.summary, knownExploited: event.cves.some(cve => kev.has(cve)), url: event.url, advisories: [event.url], vendorFeed: true });
+      result.vendorConfirmed = true;
+    } else if (event.confidence === 'medium' && ((event.versions || []).some(version => version === versionLine || version.startsWith(`${versionLine}.`)) || /\ball (?:supported )?versions\b/i.test(`${event.title} ${event.summary}`))) {
+      reviewAdvisories.push(event);
+      sourceOk = false;
+    }
+  }
+  if (reviewAdvisories.length) result.reasons.push(`${reviewAdvisories.length} vendor feed advisor${reviewAdvisories.length === 1 ? 'y requires' : 'ies require'} manual applicability review`);
+  const feedVersions = feedRecords.filter(event => event.type === 'release').flatMap(event => event.versions || []).filter(version => /^\d+\.\d+/.test(version));
+  if (feedVersions.length) {
+    result.upgrades.latest = feedVersions.sort((a, b) => compareVersions(b, a))[0];
+    result.upgrades.currentLine = feedVersions.filter(version => version === versionLine || version.startsWith(`${versionLine}.`)).sort((a, b) => compareVersions(b, a))[0] || result.upgrades.currentLine;
+  }
+  const lifecycleEvent = feedRecords.filter(event => event.type === 'lifecycle' && event.endDate && (event.versions || []).some(version => app.version === version || app.version.startsWith(`${version}.`) || version.startsWith(`${app.version.split('.').slice(0, 2).join('.')}.`))).sort((a, b) => b.endDate.localeCompare(a.endDate))[0];
+  if (lifecycleEvent) { life = lifecycleStatus({ eol: lifecycleEvent.endDate }, app.version); result.lifecycle = life; sourceLabel = 'Vendor feeds'; sourceOk = true; }
+  const affectingSecurity = feedSecurity.filter(event => event.confidence === 'high' && eventAffectsVersion(event, app.version));
+  const releaseEvidence = feedRecords.filter(event => event.type === 'release' && (event.versions || []).includes(result.upgrades.latest)).slice(0, 3);
+  const evidence = [...new Map([...affectingSecurity, ...reviewAdvisories, ...releaseEvidence, ...(lifecycleEvent ? [lifecycleEvent] : [])].map(event => [event.id, event])).values()].slice(0, 25);
+  result.feedEvents = evidence.map(event => ({ type: event.type, title: event.title, published: event.published, url: event.url, confidence: event.confidence, severity: event.severity, cves: event.cves }));
+  for (const record of evidence) if (record.url && !result.sources.some(source => source.url === record.url)) result.sources.push({ name: `${record.feedName} · ${record.type}`, url: record.url });
+  for (const error of feedErrors) result.reasons.push(`Vendor feed unavailable: ${error}`);
+  if (feedErrors.length) sourceOk = false;
+  result.vulnerabilities = [...new Map(result.vulnerabilities.map(item => [`${item.id}:${item.url}`, item])).values()].sort((a, b) => (b.score || 0) - (a.score || 0));
   const urgent = result.vulnerabilities.some(v => v.score >= 7 || v.knownExploited);
   result.status = urgent || life.state === 'expired' ? 'red' : !sourceOk || life.state === 'unknown' ? 'unknown' : life.state === 'approaching' ? 'yellow' : 'green';
   if (urgent) result.reasons.push(`${result.vulnerabilities.length} ${result.vendorConfirmed ? 'vendor-confirmed' : 'possible'} high/critical or known exploited CVE${result.vulnerabilities.length === 1 ? '' : 's'}${result.vendorConfirmed ? '' : '; confirm vendor applicability'}`);
@@ -442,6 +481,8 @@ async function refresh() {
     logger.log('info', 'Scan started');
     const apps = parseInventory(await readFile(path.join(configDirectory, 'applications.yaml'), 'utf8'));
     const workspaces = parseWorkspaces(await readFile(path.join(configDirectory, 'workspaces.yaml'), 'utf8'), apps);
+    const feeds = await readFeeds(feedFile);
+    const feedCache = await collectFeeds(feeds, feedCacheFile);
     let kev = new Set();
     let kevError = null;
     try {
@@ -450,12 +491,17 @@ async function refresh() {
       kev = new Set(data.vulnerabilities.map(v => v.cveID));
     } catch (error) { logger.log('error', 'CISA KEV unavailable', error.message); kevError = `CISA KEV unavailable: ${error.message}`; }
     const results = [];
-    for (const app of apps) results.push(await scanApp(app, kev));
+    for (const app of apps) {
+      const associatedFeeds = feeds.filter(feed => feed.enabled && feed.applicationIds.includes(app.id));
+      const associated = associatedFeeds.flatMap(feed => feedCache.feeds[feed.id]?.entries || []);
+      const feedErrors = associatedFeeds.filter(feed => feedCache.feeds[feed.id]?.status === 'error').map(feed => `${feed.name}: ${feedCache.feeds[feed.id].error}`);
+      results.push(await scanApp(app, kev, associated, feedErrors));
+    }
     for (const app of results) {
       if (kevError) { app.reasons.push(kevError); if (app.status !== 'red') app.status = 'unknown'; }
       else app.sources.push({ name: 'CISA Known Exploited Vulnerabilities', url: 'https://www.cisa.gov/known-exploited-vulnerabilities-catalog' });
     }
-    const saved = await storeSnapshot({ checkedAt: new Date().toISOString(), results, workspaces, warning: kevError, inventoryCount: apps.length });
+    const saved = await storeSnapshot({ checkedAt: new Date().toISOString(), results, workspaces, feedSummary: { total: feeds.length, errors: Object.values(feedCache.feeds).filter(item => item.status === 'error').length }, warning: kevError, inventoryCount: apps.length });
     logger.log('info', 'Scan completed', `${results.length} applications; ${results.filter(app => app.status === 'unknown').length} unknown`);
     return saved;
   })().catch(error => { logger.log('error', 'Scan failed', error.message); throw error; }).finally(() => { refreshPromise = null; });
@@ -469,6 +515,7 @@ createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
     const url = new URL(req.url, `http://${req.headers.host}`);
     const acknowledgement = url.pathname.match(/^\/ack\/([A-Za-z0-9_-]{43})$/);
     if (acknowledgement && ['GET', 'POST'].includes(req.method)) {
@@ -483,7 +530,7 @@ createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify({ enabled: false, user: 'Local development session', isAdmin: true })); return;
     }
-    if (['/api/settings', '/api/logs', '/api/rbac'].includes(url.pathname) && auth && !req.authUser?.isAdmin) { forbidden(res, 'Administrator role required'); return; }
+    if ((url.pathname.startsWith('/api/settings') || ['/api/logs', '/api/rbac'].includes(url.pathname)) && auth && !req.authUser?.isAdmin) { forbidden(res, 'Administrator role required'); return; }
     if (url.pathname === '/api/settings' && req.method === 'GET') {
       const smtp = await readSmtpSettings(smtpFile);
       const configuredGeneral = await readGeneralSettings(generalFile);
@@ -514,24 +561,138 @@ createServer(async (req, res) => {
       if (snapshot) notifier.onScan(snapshot).catch(error => console.error(`Notification check failed: ${error.message}`));
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ smtp, general })); return;
     }
+    if (url.pathname === '/api/settings/test-email' && req.method === 'POST') {
+      const body = await readBody(req);
+      const smtp = validateSmtpSettings({ ...(body.smtp || {}), enabled: true });
+      const result = await sendTestEmail(smtp, body.recipient);
+      await logger.audit('Test email sent', auditActor(req), { type: 'settings', id: 'email-delivery' }, { transportSecurity: smtp.secure ? 'tls' : smtp.requireTls ? 'starttls' : 'none', unauthenticated: smtp.unauthenticated }, 'SMTP test completed successfully; settings were not saved');
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ sent: true, accepted: result.accepted })); return;
+    }
     if (url.pathname === '/api/config' && req.method === 'GET') {
-      const { apps, workspaces, access } = await authorization(req);
+      const { apps, workspaces, feeds, access } = await authorization(req);
       const visibleApps = apps.filter(app => access.appView.has(app.id) || access.appEdit.has(app.id));
       const visibleWorkspaces = workspaces.filter(group => access.workspaceView.has(group.id) || access.workspaceEdit.has(group.id) || access.workspaceMembership.has(group.id) || access.workspaceNotifications.has(group.id));
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ applications: visibleApps, workspaces: visibleWorkspaces, access: accessJson(access) })); return;
+      const visibleFeeds = feeds.filter(feed => access.feedView.has(feed.id));
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ applications: visibleApps, workspaces: visibleWorkspaces, feeds: visibleFeeds, access: accessJson(access) })); return;
     }
     if (url.pathname === '/api/rbac' && req.method === 'GET') {
-      const { apps, workspaces } = await authorization(req);
+      const { apps, workspaces, feeds } = await authorization(req);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({ ...await readRbac(rbacFile), roles: standardRoles, applications: apps, workspaces, session: { name: req.authUser?.name || 'Local development session', claims: req.authUser?.claims || {}, groupOverage: Boolean(req.authUser?.groupOverage) } })); return;
+      res.end(JSON.stringify({ ...await readRbac(rbacFile), roles: standardRoles, applications: apps, workspaces, feeds, session: { name: req.authUser?.name || 'Local development session', claims: req.authUser?.claims || {}, groupOverage: Boolean(req.authUser?.groupOverage) } })); return;
     }
     if (url.pathname === '/api/rbac' && req.method === 'POST') {
-      const { apps, workspaces } = await authorization(req);
+      const { apps, workspaces, feeds } = await authorization(req);
       const previous = await readRbac(rbacFile);
-      const config = validateRbacInput(await readBody(req), apps, workspaces);
+      const config = validateRbacInput(await readBody(req), apps, workspaces, feeds);
       await yamlMonitor.webWrite(rbacFile, () => writeRbac(rbacFile, config));
       await logger.audit('Access control updated', auditActor(req), { type: 'rbac', id: 'access-control' }, { groups: { from: previous.groups.length, to: config.groups.length }, grants: { from: previous.grants.length, to: config.grants.length } }, `${config.groups.length} identity mappings; ${config.grants.length} grants`);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(config)); return;
+    }
+    if (url.pathname === '/api/cpes' && req.method === 'GET') {
+      const { access } = await authorization(req);
+      if (!access.isAdmin && !access.appEdit.size) { forbidden(res, 'Application Editor role required'); return; }
+      const query = String(url.searchParams.get('q') || '').trim();
+      if (query.length < 2 || query.length > 100 || /[\u0000-\u001f]/.test(query)) throw new Error('CPE search requires 2 to 100 printable characters');
+      const api = new URL('https://services.nvd.nist.gov/rest/json/cpes/2.0');
+      api.searchParams.set('keywordSearch', query);
+      api.searchParams.set('resultsPerPage', '50');
+      const data = await fetchNvdJson(api);
+      const results = (data.products || []).map(product => {
+        const name = product.cpe?.cpeName || '';
+        const parts = name.split(':');
+        return { cpeName: name, part: parts[2], vendor: parts[3] || '', product: parts[4] || '', version: parts[5] || '', edition: parts[8] === '*' ? '' : parts[8] || '', title: product.cpe?.titles?.find(item => item.lang === 'en')?.title || name };
+      }).filter(item => item.part === 'a');
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ results })); return;
+    }
+    if (url.pathname === '/api/feeds' && req.method === 'GET') {
+      const { apps, feeds, access } = await authorization(req);
+      const cache = await readFeedCache();
+      const visible = feeds.filter(feed => access.feedView.has(feed.id)).map(feed => ({ ...feed, state: cache.feeds?.[feed.id] || { status: 'not-checked', entries: [] }, canEdit: access.feedEdit.has(feed.id) }));
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ feeds: visible, applications: apps.filter(app => access.appView.has(app.id) || access.appEdit.has(app.id)), canManage: access.feedManage })); return;
+    }
+    if (url.pathname === '/api/feeds' && req.method === 'POST') {
+      const { apps, feeds, access } = await authorization(req);
+      if (!access.feedManage) { forbidden(res, 'Feed Manager role required to add feeds'); return; }
+      const feed = validateFeedInput(await readBody(req), apps);
+      const updated = [...feeds, feed];
+      await yamlMonitor.webWrite(feedFile, () => writeFeeds(feedFile, updated));
+      await invalidateSnapshot();
+      await logger.audit('Feed added', auditActor(req), { type: 'feed', id: feed.id, name: feed.name }, { categories: feed.categories, applicationIds: feed.applicationIds }, `${feed.name} (${feed.id})`);
+      res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(feed)); return;
+    }
+    const feedRoute = url.pathname.match(/^\/api\/feeds\/([0-9a-f-]+)(?:\/(test|refresh))?$/i);
+    if (feedRoute && req.method === 'POST' && feedRoute[2] === 'test') {
+      const { feeds, access } = await authorization(req);
+      const feed = feeds.find(item => item.id === feedRoute[1]);
+      if (!feed) throw new Error('Feed not found');
+      if (!access.feedEdit.has(feed.id)) { forbidden(res, 'Feed Editor role required'); return; }
+      const response = await secureFetchText(feedRequestUrl(feed), { headers: feed.format === 'github' ? { Accept: 'application/vnd.github+json' } : {} });
+      const entries = normalizeEntries(feed, response);
+      await logger.audit('Feed tested', auditActor(req), { type: 'feed', id: feed.id, name: feed.name }, { entries: entries.length }, `${feed.name}; ${entries.length} normalized entries`);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ sourceUrl: response.url, entries: entries.slice(0, 25) })); return;
+    }
+    if (feedRoute && req.method === 'POST' && feedRoute[2] === 'refresh') {
+      const { feeds, access } = await authorization(req);
+      const feed = feeds.find(item => item.id === feedRoute[1]);
+      if (!feed) throw new Error('Feed not found');
+      if (!access.feedEdit.has(feed.id)) { forbidden(res, 'Feed Editor role required'); return; }
+      if (refreshPromise) await refreshPromise;
+      const cache = await collectFeeds([feed], feedCacheFile, { preserveUnlisted: true });
+      const state = cache.feeds[feed.id];
+      await invalidateSnapshot();
+      await logger.audit('Feed collected', auditActor(req), { type: 'feed', id: feed.id, name: feed.name }, { status: state.status, entries: state.entries?.length || 0 }, `${feed.name}; ${state.status}; ${state.entries?.length || 0} cached entries`);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ state })); return;
+    }
+    if (feedRoute && !feedRoute[2] && req.method === 'PUT') {
+      const { apps, feeds, access } = await authorization(req);
+      const index = feeds.findIndex(item => item.id === feedRoute[1]);
+      if (index < 0) throw new Error('Feed not found');
+      if (!access.feedEdit.has(feedRoute[1])) { forbidden(res, 'Feed Editor role required'); return; }
+      const previous = feeds[index];
+      const feed = validateFeedInput(await readBody(req), apps, previous.id);
+      if (!access.feedManage && JSON.stringify(feed.applicationIds) !== JSON.stringify(previous.applicationIds)) { forbidden(res, 'Feed Manager role required to change associations from the feed editor'); return; }
+      feeds[index] = feed;
+      await yamlMonitor.webWrite(feedFile, () => writeFeeds(feedFile, feeds));
+      await invalidateSnapshot();
+      const changes = changedFields(previous, feed, ['name', 'url', 'format', 'enabled', 'categories', 'productAliases', 'applicationIds']);
+      await logger.audit('Feed updated', auditActor(req), { type: 'feed', id: feed.id, name: feed.name }, changes, `${feed.name} (${feed.id}); ${Object.keys(changes).join(', ') || 'no fields changed'}`);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(feed)); return;
+    }
+    if (feedRoute && !feedRoute[2] && req.method === 'DELETE') {
+      const { feeds, access } = await authorization(req);
+      if (!access.feedManage) { forbidden(res, 'Feed Manager role required to remove feeds'); return; }
+      const feed = feeds.find(item => item.id === feedRoute[1]);
+      if (!feed) throw new Error('Feed not found');
+      const rbac = await readRbac(rbacFile);
+      if (rbac.grants.some(grant => grant.scopeType === 'feed' && grant.resourceIds.includes(feed.id))) throw new Error('Remove feed grants before deleting this feed');
+      await yamlMonitor.webWrite(feedFile, () => writeFeeds(feedFile, feeds.filter(item => item.id !== feed.id)));
+      await invalidateSnapshot();
+      await logger.audit('Feed removed', auditActor(req), { type: 'feed', id: feed.id, name: feed.name }, { applicationIds: feed.applicationIds }, `${feed.name} (${feed.id})`);
+      res.writeHead(204); res.end(); return;
+    }
+    const appFeeds = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/feeds$/i);
+    if (appFeeds && req.method === 'PUT') {
+      const { feeds, access } = await authorization(req);
+      if (!access.appEdit.has(appFeeds[1])) { forbidden(res, 'Application Editor role required'); return; }
+      const body = await readBody(req);
+      if (!Array.isArray(body.feedIds)) throw new Error('feedIds must be an array');
+      const selected = [...new Set(body.feedIds.map(String))];
+      if (selected.some(id => !access.feedView.has(id))) { forbidden(res, 'Feed Viewer role required for every selected feed'); return; }
+      const changed = [];
+      for (const feed of feeds) {
+        if (!access.feedView.has(feed.id)) continue;
+        const had = feed.applicationIds.includes(appFeeds[1]);
+        const has = selected.includes(feed.id);
+        if (had === has) continue;
+        feed.applicationIds = has ? [...feed.applicationIds, appFeeds[1]] : feed.applicationIds.filter(id => id !== appFeeds[1]);
+        changed.push(feed.id);
+      }
+      if (changed.length) {
+        await yamlMonitor.webWrite(feedFile, () => writeFeeds(feedFile, feeds));
+        await invalidateSnapshot();
+        await logger.audit('Application feed associations updated', auditActor(req), { type: 'application', id: appFeeds[1] }, { feedIds: selected }, `${changed.length} feed associations changed`);
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ feedIds: selected })); return;
     }
     if (url.pathname === '/api/applications' && req.method === 'POST') {
       if (auth && !req.authUser?.isAdmin) { forbidden(res, 'Administrator role required to add applications'); return; }
@@ -624,11 +785,11 @@ createServer(async (req, res) => {
       const workspaces = (data.workspaces || []).filter(group => access.workspaceView.has(group.id)).map(group => ({ ...group, applications: group.applications.filter(id => access.appView.has(id)) }));
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ ...data, results, workspaces, access: accessJson(access), groupOverage: Boolean(req.authUser?.groupOverage) })); return;
     }
-    const files = { '/': 'index.html', '/styles.css': 'styles.css', '/app.js': 'app.js', '/favicon.svg': 'favicon.svg' };
+    const files = { '/': 'index.html', '/styles.css': 'styles.css', '/theme-init.js': 'theme-init.js', '/app.js': 'app.js', '/favicon.svg': 'favicon.svg' };
     const file = files[url.pathname];
     if (!file) { res.writeHead(404); res.end('Not found'); return; }
     res.writeHead(200, { 'Content-Type': mime[path.extname(file)] }); res.end(await readFile(path.join(root, 'web', file)));
-  } catch (error) { res.writeHead(['POST', 'PUT'].includes(req.method) ? 400 : 500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: error.message })); }
+  } catch (error) { res.writeHead(['POST', 'PUT', 'DELETE'].includes(req.method) ? 400 : 500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: error.message })); }
 }).listen(PORT, HOST, () => { console.log(`Vulnerability dashboard: http://${HOST}:${PORT}`); logger.log('info', 'Server started', `Listening on ${HOST}:${PORT}`); });
 
 createInterface({ input: process.stdin }).on('line', line => {
