@@ -48,6 +48,14 @@ function send(res, status, body, headers = {}) {
   res.end(body);
 }
 
+function hasValidRequestOrigin(req, expectedOrigin) {
+  const origin = req.headers.origin;
+  if (origin) return origin === expectedOrigin;
+  const referer = req.headers.referer;
+  if (referer) { try { return new URL(referer).origin === expectedOrigin; } catch { return false; } }
+  return req.headers['sec-fetch-site'] === 'same-origin';
+}
+
 export function createAuth(settings = oidcSettings(), provider = oidc) {
   if (!settings) return null;
   const secure = settings.base.protocol === 'https:';
@@ -142,7 +150,7 @@ export function createAuth(settings = oidcSettings(), provider = oidc) {
         return true;
       }
       if (url.pathname === '/auth/logout' && req.method === 'POST') {
-        if (req.headers.origin !== settings.base.origin) { send(res, 403, 'Invalid request origin.'); return true; }
+        if (!hasValidRequestOrigin(req, settings.base.origin)) { send(res, 403, 'Invalid request origin.'); return true; }
         sessions.delete(values[sessionName]);
         send(res, 303, '', { Location: '/auth/login', 'Set-Cookie': cookie(sessionName, '', 0) });
         return true;
@@ -156,7 +164,7 @@ export function createAuth(settings = oidcSettings(), provider = oidc) {
         send(res, 200, JSON.stringify({ enabled: true, user: session.name, isAdmin: session.isAdmin, claims: session.isAdmin ? session.claims : undefined, groupOverage: session.groupOverage }), { 'Content-Type': 'application/json; charset=utf-8' });
         return true;
       }
-      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.headers.origin !== settings.base.origin) {
+      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !hasValidRequestOrigin(req, settings.base.origin)) {
         send(res, 403, JSON.stringify({ error: 'Invalid request origin' }), { 'Content-Type': 'application/json; charset=utf-8' });
         return true;
       }

@@ -99,6 +99,16 @@ test('login binds the callback to a browser flow and creates a protected session
   const mutation = response();
   await auth.handle({ method: 'POST', headers: { cookie: sessionCookie, origin: 'https://evil.example' } }, mutation, new URL('https://home.example.com/api/settings'));
   assert.equal(mutation.status, 403);
+  const fetchMetadataMutation = { method: 'POST', headers: { cookie: sessionCookie, 'sec-fetch-site': 'same-origin' } };
+  assert.equal(await auth.handle(fetchMetadataMutation, response(), new URL('https://home.example.com/api/settings')), false);
+  assert.equal(fetchMetadataMutation.authUser.isAdmin, true);
+  const crossSiteLogout = response();
+  await auth.handle({ method: 'POST', headers: { cookie: sessionCookie, referer: 'https://evil.example/page' } }, crossSiteLogout, new URL('https://home.example.com/auth/logout'));
+  assert.equal(crossSiteLogout.status, 403);
+  const logout = response();
+  await auth.handle({ method: 'POST', headers: { cookie: sessionCookie, referer: 'https://home.example.com/settings' } }, logout, new URL('https://home.example.com/auth/logout'));
+  assert.equal(logout.status, 303);
+  assert.equal(logout.headers.Location, '/auth/login');
   rmSync(directory, { recursive: true, force: true });
 });
 

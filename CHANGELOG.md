@@ -6,7 +6,13 @@
 
 - Add NVD CPE search and selection to the application editor so users can find an application and populate its CPE vendor, product, and related identity fields without locating them manually.
 
-## [0.3.1] - Unreleased
+## [0.3.2] - Unreleased
+
+### Fixed
+
+- Accept same-origin `Referer` and browser fetch-site evidence when an `Origin` header is unavailable, preventing valid logout requests from being rejected behind a reverse proxy while retaining cross-site request protection.
+
+## [0.3.1] - 2026-09-22
 
 ### Added
 
