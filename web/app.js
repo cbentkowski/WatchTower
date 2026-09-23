@@ -126,7 +126,8 @@ function renderView() {
 function showEnvironmentStatus(data) {
   const smtp = data.smtp;
   if (smtp.unauthenticated) { $('settings-env-status').textContent = 'Unauthenticated relay selected. SMTP credentials are not used.'; return; }
-  $('settings-env-status').textContent = `Credential variables: ${smtp.usernameEnv || 'username not configured'} ${smtp.usernameEnv ? data.envStatus.usernamePresent ? '(present)' : '(missing)' : ''}; ${smtp.passwordEnv || 'password not configured'} ${smtp.passwordEnv ? data.envStatus.passwordPresent ? '(present)' : '(missing)' : ''}. Values are never shown or saved here.`;
+  const passwordStatus = data.envStatus.passwordPresent ? 'password secret present' : data.envStatus.passwordFileConfigured ? 'password secret file missing or empty' : 'SMTP_PASSWORD_FILE not configured';
+  $('settings-env-status').textContent = `Credential status: ${smtp.usernameEnv || 'username not configured'} ${smtp.usernameEnv ? data.envStatus.usernamePresent ? '(present)' : '(missing)' : ''}; ${passwordStatus}. Secret values are never shown or saved here.`;
 }
 
 async function loadLogs() {
@@ -284,10 +285,7 @@ async function saveSettings(event) {
   payload.secure = security === 'tls';
   payload.requireTls = security === 'starttls';
   payload.unauthenticated = form.querySelector('[name="unauthenticated"]').checked;
-  if (payload.unauthenticated) {
-    payload.usernameEnv = form.querySelector('[name="usernameEnv"]').value;
-    payload.passwordEnv = form.querySelector('[name="passwordEnv"]').value;
-  }
+  if (payload.unauthenticated) payload.usernameEnv = form.querySelector('[name="usernameEnv"]').value;
   payload.enabled = form.querySelector('[name="enabled"]').checked;
   payload.port = payload.port === '' ? '' : Number(payload.port);
   payload.sendHour = payload.sendHour === '' ? '' : Number(payload.sendHour);
@@ -320,10 +318,7 @@ async function testEmailSettings() {
   payload.enabled = true;
   payload.port = payload.port === '' ? '' : Number(payload.port);
   payload.sendHour = payload.sendHour === '' ? '' : Number(payload.sendHour);
-  if (payload.unauthenticated) {
-    payload.usernameEnv = form.querySelector('[name="usernameEnv"]').value;
-    payload.passwordEnv = form.querySelector('[name="passwordEnv"]').value;
-  }
+  if (payload.unauthenticated) payload.usernameEnv = form.querySelector('[name="usernameEnv"]').value;
   $('settings-test-email').disabled = true;
   $('settings-message').hidden = true;
   try {

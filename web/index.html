@@ -43,7 +43,7 @@
             <label>Web port <input name="publicPort" type="number" min="1" max="65535" required></label>
           </div>
         </section>
-        <section class="panel settings-panel"><div class="panel-head"><div><h2>Email delivery</h2><p>Saved in <code>config/smtp.yaml</code>. Disabled by default. When authentication is used, credentials stay in container environment variables.</p></div></div>
+        <section class="panel settings-panel"><div class="panel-head"><div><h2>Email delivery</h2><p>Saved in <code>config/smtp.yaml</code>. Disabled by default. Authenticated SMTP reads its password from a mounted secret file.</p></div></div>
           <label class="setting-relay setting-enabled"><input name="enabled" type="checkbox"> Enable email delivery</label>
           <div class="form-grid">
             <label>SMTP host <input name="host" placeholder="smtp.example.com"></label>
@@ -52,7 +52,7 @@
             <label>Time zone <input name="timeZone" placeholder="America/Chicago"></label>
             <label>Send hour (0–23) <input name="sendHour" type="number" min="0" max="23"></label>
             <label class="credential-field">Username environment variable <input name="usernameEnv" placeholder="WATCHTOWER_SMTP_USER"></label>
-            <label class="credential-field">Password environment variable <input name="passwordEnv" placeholder="WATCHTOWER_SMTP_PASSWORD"></label>
+            <div class="credential-field"><span>SMTP password secret</span><p class="form-hint">Mounted file configured with <code>SMTP_PASSWORD_FILE</code>.</p></div>
             <label>Test recipient <input name="testRecipient" type="email" placeholder="you@example.com"></label>
           </div><fieldset class="setting-checks"><legend>Connection security</legend><label><input name="transportSecurity" type="radio" value="tls"> SSL/TLS from connection start (port 465)</label><label><input name="transportSecurity" type="radio" value="starttls"> Require STARTTLS upgrade (port 587)</label><label><input name="transportSecurity" type="radio" value="none"> No TLS requirement (port 25)</label></fieldset>
           <label class="setting-relay"><input name="unauthenticated" type="checkbox"> Use an unauthenticated SMTP relay</label><p class="form-hint">The security choice sets a suggested port. You can edit the port afterward.</p>

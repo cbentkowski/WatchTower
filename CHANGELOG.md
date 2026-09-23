@@ -9,6 +9,7 @@
 - Add a dedicated Feeds interface with immutable feed IDs, audit logging, error visibility, and application associations.
 - Add Feed Viewer, Feed Editor, and Feed Manager RBAC roles with a new feed grant scope.
 - Add an SMTP test button that sends with the currently entered settings without saving them.
+- Load authenticated SMTP passwords from the mounted secret file named by `SMTP_PASSWORD_FILE`, verify it before enabling delivery, and reread it for tests and scheduled messages so rotations do not require a rebuild.
 
 ### Security
 
