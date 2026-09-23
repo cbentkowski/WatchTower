@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0d1725">
+  <script>try{document.documentElement.dataset.theme=localStorage.getItem('dashboard-theme')||'light'}catch{}</script>
+  <title>WatchTower · Vulnerability Dashboard</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail" aria-label="Dashboard">
+      <div class="brand"><img class="brand-icon" src="/favicon.svg" alt="" width="37" height="37"><span>WatchTower<span class="brand-sub">VULNERABILITY INTELLIGENCE</span></span></div>
+        <nav class="rail-nav" aria-label="Workspaces"><button id="overview-nav" class="rail-link active" type="button"><span>▦</span> Overview</button><div class="rail-label workspace-heading">WORKSPACES</div><div id="workspace-list"></div><button id="access-nav" class="rail-link settings-link" type="button" hidden><span>♙</span> Access Control</button><button id="logs-nav" class="rail-link" type="button" hidden><span>☷</span> Logs</button><button id="settings-nav" class="rail-link" type="button" hidden><span>⚙</span> Settings</button></nav>
+      <div id="admin-actions" class="rail-actions" hidden><button id="add-app" type="button">＋ Add application</button><button id="manage-workspaces" type="button">＋ Add / edit workspace</button></div>
+      <div class="rail-foot">Source checks refresh hourly.<br>Inventory: <code>config/applications.yaml</code></div>
+    </aside>
+    <main>
+      <header class="topbar"><span class="crumb">Security posture <span>/</span> <span id="crumb-current">Overview</span></span><div class="top-actions"><span id="updated" class="updated">Checking sources…</span><button id="theme-toggle" type="button" aria-label="Switch to dark mode" aria-pressed="false">☾ <span>Dark mode</span></button><form id="logout-form" action="/auth/logout" method="post" hidden><span id="signed-in-user"></span><button type="submit">Sign out</button></form></div></header>
+      <div id="dashboard-content" class="content">
+        <div class="page-head"><div><div id="page-eyebrow" class="eyebrow">APPLICATION EXPOSURE</div><h1 id="page-title">Vulnerability Dashboard</h1><p id="page-description">Installed versions, known exploits, and support deadlines in one view.</p></div><div class="page-actions"><button id="edit-workspace" type="button" hidden>✎ Edit workspace</button><button id="refresh" type="button" hidden><span>↻</span> Refresh checks</button></div></div>
+        <section class="summary" aria-label="Status summary">
+          <div id="filter-all" class="summary-card total" data-filter="all"><span>MONITORED APPLICATIONS</span><strong id="total">—</strong><small>Enabled in inventory</small></div>
+          <div id="filter-red" class="summary-card red" data-filter="red"><span>NEEDS ACTION</span><strong id="red">—</strong><small>High risk or end of life</small></div>
+          <div id="filter-yellow" class="summary-card yellow" data-filter="yellow"><span>APPROACHING EOL</span><strong id="yellow">—</strong><small>Within 90 days</small></div>
+          <div id="filter-green" class="summary-card green" data-filter="green"><span>CLEAR</span><strong id="green">—</strong><small>Supported, no high risk CVEs</small></div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div><h2 id="table-title">Needs action</h2><p id="table-description">Applications with high risk findings or past end of life.</p></div><span id="count" class="count"></span></div>
+          <div class="table-wrap"><table><thead><tr><th>APPLICATION</th><th>INSTALLED VERSION</th><th>SUPPORT</th><th>FINDINGS</th><th>STATUS</th><th></th></tr></thead><tbody id="rows"><tr><td colspan="6" class="loading">Checking applications…</td></tr></tbody></table></div>
+        </section>
+        <p class="footnote"><strong>How status is assigned:</strong> Red means a high or critical CVE, known exploitation, or end of life. Yellow means support ends within 90 days. Green requires successful source checks and no high risk findings. Unknown means evidence is incomplete. Atlassian and GitLab use vendor security data first; NVD is the fallback.</p>
+      </div>
+      <div id="settings-content" class="content" hidden>
+        <div class="page-head"><div><div class="eyebrow">CONFIGURATION</div><h1>Settings</h1><p>Configure delivery for workspace notifications.</p></div></div>
+        <form id="settings-form">
+        <section class="panel settings-panel general-panel"><div class="panel-head"><div><h2>General</h2><p>Public address used in notification links. Suggested from this browser until you save it.</p></div></div>
+          <div class="form-grid">
+            <label>Protocol <select name="protocol" required><option value="http">HTTP</option><option value="https">HTTPS</option></select></label>
+            <label>Hostname <input name="publicHost" required placeholder="watchtower.example.com"></label>
+            <label>Web port <input name="publicPort" type="number" min="1" max="65535" required></label>
+          </div>
+        </section>
+        <section class="panel settings-panel"><div class="panel-head"><div><h2>Email delivery</h2><p>Saved in <code>config/smtp.yaml</code>. Disabled by default. When authentication is used, credentials stay in container environment variables.</p></div></div>
+          <label class="setting-relay setting-enabled"><input name="enabled" type="checkbox"> Enable email delivery</label>
+          <div class="form-grid">
+            <label>SMTP host <input name="host" placeholder="smtp.example.com"></label>
+            <label>SMTP port <input name="port" type="number" min="1" max="65535"></label>
+            <label>From address <input name="from" type="email" placeholder="alerts@example.com"></label>
+            <label>Time zone <input name="timeZone" placeholder="America/Chicago"></label>
+            <label>Send hour (0–23) <input name="sendHour" type="number" min="0" max="23"></label>
+            <label class="credential-field">Username environment variable <input name="usernameEnv" placeholder="WATCHTOWER_SMTP_USER"></label>
+            <label class="credential-field">Password environment variable <input name="passwordEnv" placeholder="WATCHTOWER_SMTP_PASSWORD"></label>
+          </div><fieldset class="setting-checks"><legend>Connection security</legend><label><input name="transportSecurity" type="radio" value="tls"> SSL/TLS from connection start (port 465)</label><label><input name="transportSecurity" type="radio" value="starttls"> Require STARTTLS upgrade (port 587)</label><label><input name="transportSecurity" type="radio" value="none"> No TLS requirement (port 25)</label></fieldset>
+          <label class="setting-relay"><input name="unauthenticated" type="checkbox"> Use an unauthenticated SMTP relay</label><p class="form-hint">The security choice sets a suggested port. You can edit the port afterward.</p>
+          <p id="settings-env-status" class="form-hint"></p><p id="settings-message" class="form-error" role="status" hidden></p><div class="form-actions"><button id="settings-save" type="submit">Save settings</button></div>
+        </section>
+        </form>
+        <p class="footnote">Set recipients in each workspace's editor. Emails include a confirmation link for acknowledging an application alert.</p>
+      </div>
+      <div id="logs-content" class="content" hidden>
+        <div class="page-head"><div><div class="eyebrow">TROUBLESHOOTING</div><h1>Logs</h1><p>Recent scans, feed requests, and errors.</p></div><button id="logs-refresh" type="button">↻ Refresh logs</button></div>
+        <section class="panel"><div class="panel-head"><div><h2>Recent events</h2><p>Newest first. Logs are saved in <code>data/logs.jsonl</code>.</p></div></div><div id="logs-list" class="logs-list"><p class="muted">Loading logs…</p></div></section>
+      </div>
+      <div id="access-content" class="content" hidden>
+        <div class="page-head"><div><div class="eyebrow">AUTHORIZATION</div><h1>Access Control</h1><p>Map OIDC claims to standard WatchTower roles and resources.</p></div></div>
+        <form id="access-form">
+          <section class="panel settings-panel"><div class="panel-head"><div><h2>Identity mappings</h2><p>Claim values are matched exactly and case sensitively.</p></div><button id="add-identity" type="button">＋ Add mapping</button></div><div id="identity-list"></div></section>
+          <section class="panel settings-panel"><div class="panel-head"><div><h2>Grants</h2><p>Each grant can assign multiple roles to one or more resources.</p></div><button id="add-grant" type="button">＋ Add grant</button></div><div id="grant-list"></div></section>
+          <section class="panel settings-panel"><div class="panel-head"><div><h2>Current administrator session</h2><p>Use these values to verify the claims sent by your identity provider.</p></div></div><pre id="session-claims" class="claims"></pre></section>
+          <p id="access-message" class="form-error" role="status" hidden></p><div class="form-actions"><button id="access-save" type="submit">Save access control</button></div>
+        </form>
+      </div>
+    </main>
+  </div>
+  <dialog id="details"><div class="dialog-head"><div><span id="detail-kicker" class="eyebrow">APPLICATION DETAIL</span><h2 id="detail-name"></h2></div><div class="dialog-actions"><button id="edit-app" type="button" hidden>✎ Edit application</button><button id="close" class="close" aria-label="Close details">×</button></div></div><div id="detail-body"></div></dialog>
+  <dialog id="editor"><div class="dialog-head"><div><span class="eyebrow">INVENTORY SETUP</span><h2 id="editor-title"></h2></div><button id="editor-close" class="close" type="button" aria-label="Close editor">×</button></div><form id="editor-form"><div id="editor-fields"></div><p id="editor-error" class="form-error" role="alert" hidden></p><div class="form-actions"><button type="button" id="editor-cancel">Cancel</button><button type="submit" id="editor-save">Save</button></div></form></dialog>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

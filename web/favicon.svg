@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Lighthouse casting a beam to the right">
+  <rect width="64" height="64" rx="14" fill="#102434"/>
+  <path d="M34 24 61 10v32L34 31Z" fill="#4bd4b2" opacity=".52"/>
+  <path d="M35 25 61 19v14l-26-4Z" fill="#a1ffe0" opacity=".9"/>
+  <path d="M19 53h21M22 49l3-27h10l3 27Z" fill="#dffbf2" stroke="#4bd4b2" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M21 22h18l-3-6H24Z" fill="#4bd4b2"/>
+  <path d="M25 16V9h10v7" fill="none" stroke="#dffbf2" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M25 32h12M23 41h16" stroke="#4bd4b2" stroke-width="2" opacity=".7"/>
+  <rect x="28" y="25" width="6" height="6" rx="1" fill="#102434"/>
+  <path d="M17 54h26" stroke="#4bd4b2" stroke-width="3" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,15 @@
+# Workspace names are free text. The same application may appear in multiple workspaces.
+workspaces:
+  - id: fa3e854f-c700-4dd6-8b3f-1ab4b745579e
+    legacyId: "infrastructure"
+    name: "Infrastructure"
+    applications:
+      - 18aa8473-c803-42a2-aa1f-5f1fe64d0a62
+      - 661303b7-3f16-4b90-ade5-1db3b6e611d5
+  - id: 97bbef8c-fe39-48e3-a42f-e0881d3e5049
+    legacyId: "collaboration"
+    name: "Collaboration"
+    applications:
+      - b5b9bd56-29cf-4014-9c5e-222d3c1f9bdf
+      - c8718c8e-6c4a-4db8-8d9b-dabf8d1425ae
+      - 661303b7-3f16-4b90-ade5-1db3b6e611d5
