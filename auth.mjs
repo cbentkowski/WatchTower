@@ -48,6 +48,12 @@ function send(res, status, body, headers = {}) {
   res.end(body);
 }
 
+function authPage(title, message, buttonLabel = 'Sign in') {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>${title} · WatchTower</title><style>
+    :root{font-family:Arial,sans-serif;color:#18283a;background:#eef3f6}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 50% 15%,#fff 0,#eef3f6 48%,#dce8ed 100%)}main{width:min(430px,100%);padding:42px;text-align:center;background:#fff;border:1px solid #dce6eb;border-radius:16px;box-shadow:0 20px 60px #1732461c}.logo{width:80px;height:80px;margin:0 auto 20px}h1{margin:0;font-size:31px;letter-spacing:-.04em;color:#122336}.sub{margin:6px 0 28px;color:#13987c;font-size:10px;font-weight:700;letter-spacing:.2em}.message{margin:0 0 28px;color:#607487;line-height:1.6}a{display:inline-block;padding:12px 20px;border-radius:8px;background:#147d69;color:#fff;text-decoration:none;font-weight:700}a:hover{background:#0f6b59}small{display:block;margin-top:28px;color:#8495a2}@media(prefers-color-scheme:dark){:root{color:#d8e5ed;background:#09131d}body{background:radial-gradient(circle at 50% 15%,#193242 0,#0d1c29 50%,#08121b 100%)}main{background:#102434;border-color:#294353;box-shadow:0 20px 60px #0008}h1{color:#eefbf7}.message{color:#b2c5d0}small{color:#7f98a9}}
+  </style></head><body><main><svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="WatchTower lighthouse"><rect width="64" height="64" rx="14" fill="#102434"/><path d="M34 24 61 10v32L34 31Z" fill="#4bd4b2" opacity=".52"/><path d="M35 25 61 19v14l-26-4Z" fill="#a1ffe0" opacity=".9"/><path d="M19 53h21M22 49l3-27h10l3 27Z" fill="#dffbf2" stroke="#4bd4b2" stroke-width="2.5" stroke-linejoin="round"/><path d="M21 22h18l-3-6H24Z" fill="#4bd4b2"/><path d="M25 16V9h10v7" fill="none" stroke="#dffbf2" stroke-width="2.5"/><path d="M17 54h26" stroke="#4bd4b2" stroke-width="3" stroke-linecap="round"/></svg><h1>WatchTower</h1><div class="sub">VULNERABILITY INTELLIGENCE</div><p class="message">${message}</p><a href="/auth/login">${buttonLabel}</a><small>Authentication is provided by your configured identity provider.</small></main></body></html>`;
+}
+
 function hasValidRequestOrigin(req, expectedOrigin) {
   const origin = req.headers.origin;
   if (origin === expectedOrigin) return true;
@@ -86,6 +92,15 @@ export function createAuth(settings = oidcSettings(), provider = oidc) {
       prune();
       const values = cookies(req);
       const session = sessions.get(values[sessionName]);
+      if (url.pathname === '/login' && req.method === 'GET') {
+        if (session) { send(res, 303, '', { Location: '/' }); return true; }
+        send(res, 200, authPage('Sign in', 'Sign in to view application security and lifecycle status.'), { 'Content-Type': 'text/html; charset=utf-8' });
+        return true;
+      }
+      if (url.pathname === '/signed-out' && req.method === 'GET') {
+        send(res, 200, authPage('Signed out', 'You have successfully signed out of WatchTower.', 'Sign in again'), { 'Content-Type': 'text/html; charset=utf-8' });
+        return true;
+      }
       if (url.pathname === '/auth/login' && req.method === 'GET') {
         if (session) { send(res, 303, '', { Location: '/' }); return true; }
         const state = provider.randomState();
@@ -152,12 +167,13 @@ export function createAuth(settings = oidcSettings(), provider = oidc) {
       if (url.pathname === '/auth/logout' && req.method === 'POST') {
         if (!hasValidRequestOrigin(req, settings.base.origin)) { send(res, 403, 'Invalid request origin.'); return true; }
         sessions.delete(values[sessionName]);
-        send(res, 303, '', { Location: '/auth/login', 'Set-Cookie': cookie(sessionName, '', 0) });
+        flows.delete(values[flowName]);
+        send(res, 303, '', { Location: '/signed-out', 'Set-Cookie': [cookie(sessionName, '', 0), cookie(flowName, '', 0)] });
         return true;
       }
       if (!session) {
         if (url.pathname.startsWith('/api/')) send(res, 401, JSON.stringify({ error: 'Sign-in required' }), { 'Content-Type': 'application/json; charset=utf-8' });
-        else send(res, 303, '', { Location: '/auth/login' });
+        else send(res, 303, '', { Location: '/login' });
         return true;
       }
       if (url.pathname === '/api/session' && req.method === 'GET') {
