@@ -6,7 +6,15 @@
 
 - Add NVD CPE search and selection to the application editor so users can find an application and populate its CPE vendor, product, and related identity fields without locating them manually.
 
-## [0.3.0] - Unreleased
+## [0.3.1] - Unreleased
+
+### Added
+
+- Document a branch-first contribution workflow with pull requests into `main`.
+- Add GitHub Actions validation for pull requests and automated version plus `latest` image publishing to Docker Hub after changes reach `main`.
+- Add the standard `npm test` command used by local development and continuous integration.
+
+## [0.3.0] - 2026-09-22
 
 ### Fixed
 
