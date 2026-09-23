@@ -102,6 +102,9 @@ test('login binds the callback to a browser flow and creates a protected session
   const fetchMetadataMutation = { method: 'POST', headers: { cookie: sessionCookie, 'sec-fetch-site': 'same-origin' } };
   assert.equal(await auth.handle(fetchMetadataMutation, response(), new URL('https://home.example.com/api/settings')), false);
   assert.equal(fetchMetadataMutation.authUser.isAdmin, true);
+  const proxiedMutation = { method: 'POST', headers: { cookie: sessionCookie, origin: 'http://watchtower:4173', 'sec-fetch-site': 'same-origin' } };
+  assert.equal(await auth.handle(proxiedMutation, response(), new URL('https://home.example.com/api/settings')), false);
+  assert.equal(proxiedMutation.authUser.isAdmin, true);
   const crossSiteLogout = response();
   await auth.handle({ method: 'POST', headers: { cookie: sessionCookie, referer: 'https://evil.example/page' } }, crossSiteLogout, new URL('https://home.example.com/auth/logout'));
   assert.equal(crossSiteLogout.status, 403);
@@ -109,6 +112,10 @@ test('login binds the callback to a browser flow and creates a protected session
   await auth.handle({ method: 'POST', headers: { cookie: sessionCookie, referer: 'https://home.example.com/settings' } }, logout, new URL('https://home.example.com/auth/logout'));
   assert.equal(logout.status, 303);
   assert.equal(logout.headers.Location, '/auth/login');
+  const proxiedLogout = response();
+  await auth.handle({ method: 'POST', headers: { cookie: sessionCookie, origin: 'http://watchtower:4173', 'sec-fetch-site': 'same-origin' } }, proxiedLogout, new URL('https://home.example.com/auth/logout'));
+  assert.equal(proxiedLogout.status, 303);
+  assert.equal(proxiedLogout.headers.Location, '/auth/login');
   rmSync(directory, { recursive: true, force: true });
 });
 
