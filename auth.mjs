@@ -50,9 +50,9 @@ function send(res, status, body, headers = {}) {
 
 function hasValidRequestOrigin(req, expectedOrigin) {
   const origin = req.headers.origin;
-  if (origin) return origin === expectedOrigin;
+  if (origin === expectedOrigin) return true;
   const referer = req.headers.referer;
-  if (referer) { try { return new URL(referer).origin === expectedOrigin; } catch { return false; } }
+  if (referer) { try { if (new URL(referer).origin === expectedOrigin) return true; } catch {} }
   return req.headers['sec-fetch-site'] === 'same-origin';
 }
 
