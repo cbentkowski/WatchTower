@@ -11,6 +11,9 @@
 - Publish BuildKit SBOM and provenance attestations and sign main-branch images with Cosign.
 - Add weekly Dependabot checks for npm, GitHub Actions, and Docker base image updates.
 - Pin GitHub Actions to immutable commit digests to reduce workflow supply chain risk.
+- Retain machine-readable reports from every security scanner for each workflow run and keep a separately named CycloneDX SBOM artifact for every image published from `main`.
+- Add a manual GitHub Actions penetration test that runs targeted live attack probes and an OWASP ZAP full active scan against a disposable local-access container, retains reports for 30 days, and never connects to production data.
+- Show the running WatchTower version on the administrator-only Settings page without exposing it through unauthenticated routes.
 - License WatchTower under the Apache License 2.0.
 
 ### Security

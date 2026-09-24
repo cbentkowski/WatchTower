@@ -15,6 +15,7 @@ import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, re
 import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const applicationVersion = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
 const configDirectory = process.env.CONFIG_DIR || path.join(root, 'config');
 const defaultConfigDirectory = process.env.DEFAULT_CONFIG_DIR || path.join(root, 'defaults');
 const PORT = Number(process.env.SERVER_PORT || process.env.PORT || 4173);
@@ -570,7 +571,7 @@ createServer(async (req, res) => {
       const general = configuredGeneral.host ? configuredGeneral : detectedGeneral(req);
       const password = await smtpPasswordState(process.env);
       const envStatus = { usernamePresent: Boolean(smtp.usernameEnv && process.env[smtp.usernameEnv]), passwordFileConfigured: password.configured, passwordPresent: password.present };
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ smtp, general, generalConfigured: Boolean(configuredGeneral.host), envStatus })); return;
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ version: applicationVersion, smtp, general, generalConfigured: Boolean(configuredGeneral.host), envStatus })); return;
     }
     if (url.pathname === '/api/logs' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
