@@ -253,6 +253,7 @@ async function loadSettings() {
     const response = await fetch('/api/settings', { cache: 'no-store' });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not load settings');
+    $('settings-version').textContent = data.version || 'Unknown';
     const form = $('settings-form');
     for (const [key, value] of Object.entries(data.smtp)) {
       const input = form.querySelector(`[name="${key}"]`);

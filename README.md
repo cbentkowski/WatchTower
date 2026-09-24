@@ -79,4 +79,8 @@ Application details show the newest release overall, the newest patch on the ins
 
 This is a triage view. A green result reflects the data available at check time and correct CPE mapping; it does not prove the product is vulnerability-free. CVEs may not yet be scored or published, and a zero-day report without a CVE or CISA listing will not be detected automatically. Vendor security pages are linked for manual review. Verify affected versions and vendor advisories before remediation. The YAML parser intentionally supports only the flat fields shown in the example, not the full YAML language.
 
+## License
+
+WatchTower is licensed under the [Apache License 2.0](LICENSE).
+
 For managed services such as Azure Database for PostgreSQL, upstream PostgreSQL CVE matches are potential exposure signals. The cloud provider may apply patches or limit affected features independently. Check the linked Azure release notes and your server's maintenance history before treating every upstream CVE as confirmed exposure.

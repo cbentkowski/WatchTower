@@ -1,4 +1,4 @@
-name: Test and build container
+name: Test, scan, and build container
 
 on:
   pull_request:
@@ -14,15 +14,25 @@ concurrency:
   group: container-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1
+  SEMGREP_IMAGE: semgrep/semgrep:1.177.0
+  HADOLINT_IMAGE: hadolint/hadolint:v2.14.0-debian
+  TRIVY_IMAGE: aquasec/trivy:0.74.0
+  GRYPE_IMAGE: anchore/grype:v0.119.0
+  SYFT_IMAGE: anchore/syft:v1.52.0
+  DOCKLE_IMAGE: goodwithtech/dockle:v0.4.15
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:stable
+
 jobs:
   test:
     name: Node.js tests
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -31,13 +41,207 @@ jobs:
       - name: Run tests
         run: npm test
 
-  container:
-    name: Build container
-    needs: test
+  source-security:
+    name: Source security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Prepare source security reports
+        run: |
+          mkdir -p "$RUNNER_TEMP/source-security"
+          chmod 777 "$RUNNER_TEMP/source-security"
+      - name: Audit production dependencies
+        id: npm_audit
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high --json > "$RUNNER_TEMP/source-security/npm-audit.json"
+      - name: Scan Git history for secrets with Gitleaks
+        id: gitleaks
+        continue-on-error: true
+        run: >-
+          docker run --rm --volume "$PWD:/repo:ro" --workdir /repo
+          --volume "$RUNNER_TEMP/source-security:/reports"
+          "$GITLEAKS_IMAGE" git /repo --redact --no-banner
+          --report-format json --report-path /reports/gitleaks.json
+      - name: Analyze source with Semgrep
+        id: semgrep
+        continue-on-error: true
+        run: >-
+          docker run --rm --volume "$PWD:/src:ro" --workdir /src
+          --volume "$RUNNER_TEMP/source-security:/reports"
+          "$SEMGREP_IMAGE" semgrep scan --config p/javascript --config p/nodejs
+          --error --severity ERROR --exclude node_modules
+          --json --output /reports/semgrep.json /src
+      - name: Lint Dockerfile with Hadolint
+        id: hadolint
+        continue-on-error: true
+        run: |
+          docker run --rm --volume "$PWD:/src:ro" "$HADOLINT_IMAGE" \
+          hadolint --failure-threshold error --format json /src/Dockerfile \
+            > "$RUNNER_TEMP/source-security/hadolint.json"
+      - name: Upload source security reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: source-security-reports-${{ github.sha }}
+          path: ${{ runner.temp }}/source-security/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Enforce source security gates
+        if: always()
+        env:
+          NPM_AUDIT: ${{ steps.npm_audit.outcome }}
+          GITLEAKS: ${{ steps.gitleaks.outcome }}
+          SEMGREP: ${{ steps.semgrep.outcome }}
+          HADOLINT: ${{ steps.hadolint.outcome }}
+        run: |
+          for result in "$NPM_AUDIT" "$GITLEAKS" "$SEMGREP" "$HADOLINT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "One or more source security gates failed. Review the uploaded reports."
+              exit 1
+            fi
+          done
+
+  container-security:
+    name: Container security
+    needs: [test, source-security]
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build local scan image
+        run: docker build --pull --tag watchtower:security-scan .
+      - name: Export image for read-only scanners
+        run: |
+          mkdir -p "$RUNNER_TEMP/watchtower-security" "$RUNNER_TEMP/container-security" "$RUNNER_TEMP/zap"
+          chmod 777 "$RUNNER_TEMP/container-security" "$RUNNER_TEMP/zap"
+          docker save watchtower:security-scan --output "$RUNNER_TEMP/watchtower-security/watchtower.tar"
+      - name: Scan fixable image vulnerabilities with Trivy
+        id: trivy
+        continue-on-error: true
+        run: >-
+          docker run --rm --volume "$RUNNER_TEMP/watchtower-security:/scan:ro"
+          --volume "$RUNNER_TEMP/container-security:/reports"
+          "$TRIVY_IMAGE" image --input /scan/watchtower.tar --ignore-unfixed
+          --severity HIGH,CRITICAL --exit-code 1 --no-progress --scanners vuln
+          --format json --output /reports/trivy.json
+      - name: Scan fixable image vulnerabilities with Grype
+        id: grype
+        continue-on-error: true
+        run: |
+          docker run --rm --volume "$RUNNER_TEMP/watchtower-security:/scan:ro" \
+          "$GRYPE_IMAGE" docker-archive:/scan/watchtower.tar --only-fixed --fail-on high --output json \
+            > "$RUNNER_TEMP/container-security/grype.json"
+      - name: Check image hardening with Dockle
+        id: dockle
+        continue-on-error: true
+        run: |
+          docker run --rm --volume "$RUNNER_TEMP/watchtower-security:/scan:ro" \
+          "$DOCKLE_IMAGE" --input /scan/watchtower.tar --exit-code 1 --exit-level warn \
+          --ignore CIS-DI-0005,CIS-DI-0008 --format json \
+            > "$RUNNER_TEMP/container-security/dockle.json"
+      - name: Generate CycloneDX SBOM with Syft
+        id: syft
+        continue-on-error: true
+        run: >-
+          docker run --rm --volume "$RUNNER_TEMP/watchtower-security:/scan"
+          "$SYFT_IMAGE" docker-archive:/scan/watchtower.tar
+          --output cyclonedx-json=/scan/watchtower.cdx.json
+      - name: Start an isolated WatchTower instance for ZAP
+        id: zap_app
+        continue-on-error: true
+        run: |
+          docker run --detach --name watchtower-zap \
+            --env AUTH_DISABLED=true \
+            --env AUTO_SCAN=false \
+            --publish 4173:4173 \
+            watchtower:security-scan
+          for _ in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4173/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs watchtower-zap
+          exit 1
+      - name: Run OWASP ZAP baseline scan
+        id: zap
+        continue-on-error: true
+        run: >-
+          docker run --rm --network host --volume "$RUNNER_TEMP/zap:/zap/wrk:rw"
+          "$ZAP_IMAGE" zap-baseline.py -t http://127.0.0.1:4173
+          -I -r zap-baseline.html -J zap-baseline.json
+      - name: Enforce ZAP Medium and High policy
+        id: zap_policy
+        continue-on-error: true
+        run: node .github/scripts/check-zap-report.mjs "$RUNNER_TEMP/zap/zap-baseline.json"
+      - name: Capture application logs
+        if: always()
+        run: docker logs watchtower-zap > "$RUNNER_TEMP/zap/watchtower.log" 2>&1 || true
+      - name: Stop isolated instance
+        if: always()
+        run: docker rm --force watchtower-zap || true
+      - name: Upload container security reports and SBOM
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: container-security-reports-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/container-security/
+            ${{ runner.temp }}/watchtower-security/watchtower.cdx.json
+            ${{ runner.temp }}/zap/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Read application version
+        if: github.event_name == 'push'
+        id: scanned_package
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Retain main branch CycloneDX SBOM
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: watchtower-${{ steps.scanned_package.outputs.version }}-${{ github.sha }}-cyclonedx-sbom
+          path: ${{ runner.temp }}/watchtower-security/watchtower.cdx.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Enforce container security gates
+        if: always()
+        env:
+          TRIVY: ${{ steps.trivy.outcome }}
+          GRYPE: ${{ steps.grype.outcome }}
+          DOCKLE: ${{ steps.dockle.outcome }}
+          SYFT: ${{ steps.syft.outcome }}
+          ZAP_APP: ${{ steps.zap_app.outcome }}
+          ZAP: ${{ steps.zap.outcome }}
+          ZAP_POLICY: ${{ steps.zap_policy.outcome }}
+        run: |
+          for result in "$TRIVY" "$GRYPE" "$DOCKLE" "$SYFT" "$ZAP_APP" "$ZAP" "$ZAP_POLICY"; do
+            if [[ "$result" != "success" ]]; then
+              echo "One or more container security gates failed. Review the uploaded reports."
+              exit 1
+            fi
+          done
+
+  publish:
+    name: Publish container
+    needs: [test, source-security, container-security]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Read application version
         id: package
         shell: bash
@@ -60,18 +264,29 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Sign in to Docker Hub
         if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build and publish eligible images
-        uses: docker/build-push-action@v6
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           push: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
           tags: ${{ steps.image.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          sbom: true
+          provenance: mode=max
+      - name: Install Cosign
+        if: github.event_name == 'push'
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+      - name: Sign published release by digest
+        if: github.event_name == 'push'
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "devynn76/watchtower@${IMAGE_DIGEST}"

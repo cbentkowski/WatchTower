@@ -1,1 +1,1 @@
-{"name":"vulnerability-dashboard","version":"0.4.0","private":true,"type":"module","engines":{"node":">=22"},"scripts":{"start":"node server.mjs","test":"node --test"},"dependencies":{"nodemailer":"^10.0.10","openid-client":"6.8.8"}}
+{"name":"vulnerability-dashboard","version":"0.4.1","private":true,"license":"Apache-2.0","type":"module","engines":{"node":">=22"},"scripts":{"start":"node server.mjs","test":"node --test"},"dependencies":{"nodemailer":"^10.0.10","openid-client":"6.8.8"}}
