@@ -15,6 +15,7 @@ import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, re
 import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const applicationVersion = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
 const configDirectory = process.env.CONFIG_DIR || path.join(root, 'config');
 const defaultConfigDirectory = process.env.DEFAULT_CONFIG_DIR || path.join(root, 'defaults');
 const PORT = Number(process.env.SERVER_PORT || process.env.PORT || 4173);
@@ -540,8 +541,16 @@ createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), geolocation=(), microphone=(), payment=(), usb=()');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
     const url = new URL(req.url, `http://${req.headers.host}`);
+    if (url.pathname === '/healthz' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end('{"status":"ok"}'); return;
+    }
     const acknowledgement = url.pathname.match(/^\/ack\/([A-Za-z0-9_-]{43})$/);
     if (acknowledgement && ['GET', 'POST'].includes(req.method)) {
       const token = acknowledgement[1];
@@ -562,7 +571,7 @@ createServer(async (req, res) => {
       const general = configuredGeneral.host ? configuredGeneral : detectedGeneral(req);
       const password = await smtpPasswordState(process.env);
       const envStatus = { usernamePresent: Boolean(smtp.usernameEnv && process.env[smtp.usernameEnv]), passwordFileConfigured: password.configured, passwordPresent: password.present };
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ smtp, general, generalConfigured: Boolean(configuredGeneral.host), envStatus })); return;
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ version: applicationVersion, smtp, general, generalConfigured: Boolean(configuredGeneral.host), envStatus })); return;
     }
     if (url.pathname === '/api/logs' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });

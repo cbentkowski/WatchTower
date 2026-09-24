@@ -44,10 +44,17 @@ test('configured OIDC protects real HTTP routes before the API handler', async (
     assert.ok(api, 'server started');
     assert.equal(api.status, 401);
     assert.equal(api.headers.get('cache-control'), 'no-store');
+    const settings = await fetch(`http://127.0.0.1:${port}/api/settings`, { redirect: 'manual' });
+    assert.equal(settings.status, 401);
     const page = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' });
     assert.equal(page.status, 303);
     assert.equal(page.headers.get('location'), '/login');
     assert.match(page.headers.get('content-security-policy'), /script-src 'self'/);
+    assert.equal(page.headers.get('cross-origin-opener-policy'), 'same-origin');
+    assert.match(page.headers.get('permissions-policy'), /camera=\(\)/);
+    const health = await fetch(`http://127.0.0.1:${port}/healthz`, { redirect: 'manual' });
+    assert.equal(health.status, 200);
+    assert.deepEqual(await health.json(), { status: 'ok' });
   } finally {
     child.kill();
     await rm(data, { recursive: true, force: true });

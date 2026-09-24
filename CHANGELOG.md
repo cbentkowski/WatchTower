@@ -1,6 +1,26 @@
 # Changelog
 
-## [0.4.0] - Unreleased
+## [0.4.1] - Unreleased
+
+### Added
+
+- Run Gitleaks, Semgrep, npm audit, and Hadolint against every pull request.
+- Build an isolated image for Trivy, Grype, and Dockle scanning before any preview or release image is published.
+- Generate and retain a CycloneDX SBOM with Syft for every pull request and release build.
+- Run an OWASP ZAP baseline scan against an ephemeral WatchTower instance on every pull request.
+- Publish BuildKit SBOM and provenance attestations and sign main-branch images with Cosign.
+- Add weekly Dependabot checks for npm, GitHub Actions, and Docker base image updates.
+- Pin GitHub Actions to immutable commit digests to reduce workflow supply chain risk.
+- Retain machine-readable reports from every security scanner for each workflow run and keep a separately named CycloneDX SBOM artifact for every image published from `main`.
+- Add a manual GitHub Actions penetration test that runs targeted live attack probes and an OWASP ZAP full active scan against a disposable local-access container, retains reports for 30 days, and never connects to production data.
+- Show the running WatchTower version on the administrator-only Settings page without exposing it through unauthenticated routes.
+- License WatchTower under the Apache License 2.0.
+
+### Security
+
+- Gate Docker Hub preview and release publishing on successful tests, source analysis, secret scanning, dependency auditing, image vulnerability scanning, image hardening checks, and dynamic application scanning.
+
+## [0.4.0] - 2026-09-23
 
 ### Added
 
