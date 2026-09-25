@@ -40,16 +40,20 @@ function localTime(date, timeZone) {
 }
 
 function classify(app) {
-  const vulnerable = app.status === 'red' && (app.vulnerabilities || []).some(item => Number(item.score) >= 7 || item.knownExploited);
+  const findings = app.vulnerabilities || [];
+  const vulnerable = app.status === 'red' && findings.some(item => Number(item.score) >= 7 || item.knownExploited);
+  const urgentFindings = app.status === 'red' ? findings.filter(item => Number(item.score) >= 9 || item.knownExploited) : [];
+  const urgentFingerprint = urgentFindings.map(item => `${item.id || 'unknown'}:${Number(item.score) || 0}:${Boolean(item.knownExploited)}`).sort().join('|');
   const days = Number(app.lifecycle?.daysRemaining);
   const approaching = app.lifecycle?.state === 'approaching' && Number.isFinite(days) && days >= 0 && days <= 30;
   const expired = app.lifecycle?.state === 'expired';
-  return { vulnerable, approaching, expired, days };
+  return { vulnerable, urgent: Boolean(urgentFingerprint), urgentFingerprint, approaching, expired, days };
 }
 
-function dueReasons(entry, flags, today) {
+function dueReasons(entry, flags, today, urgentChanged) {
   const reasons = [];
-  if (flags.vulnerable && daysSince(entry.redLastSentOn, today) >= 7) reasons.push(entry.redLastSentOn ? 'Needs action reminder' : 'Needs action');
+  if (urgentChanged) reasons.push(entry.redLastSentOn ? 'New Critical or known-exploited finding' : 'Needs action');
+  else if (flags.vulnerable && daysSince(entry.redLastSentOn, today) >= 7) reasons.push(entry.redLastSentOn ? 'Needs action reminder' : 'Needs action');
   if (flags.approaching && !entry.eol30SentOn) reasons.push(flags.days === 0 ? 'End of life today' : `End of life in ${flags.days} days`);
   if (flags.expired && daysSince(entry.expiredLastSentOn, today) >= 7) reasons.push(entry.expiredLastSentOn ? 'Past end of life reminder' : 'Past end of life');
   return reasons;
@@ -108,6 +112,7 @@ export function createNotifier({ dataDirectory, settingsLoader, env = process.en
     catch (error) { console.error(`SMTP credentials unavailable: ${error.message}`); return; }
     const mailer = transport || (settings.host && settings.from ? transportFactory({ host: settings.host, port: settings.port, secure: settings.secure, requireTLS: settings.requireTls, auth, connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 30_000 }) : null);
     const active = new Set();
+    let changed = false;
     const groups = snapshot.workspaces || [];
     const apps = snapshot.results || [];
     for (const group of groups) {
@@ -124,11 +129,13 @@ export function createNotifier({ dataDirectory, settingsLoader, env = process.en
         entry.workspaceName = group.name;
         entry.version = app.version;
         if (!flags.vulnerable) entry.redLastSentOn = null;
+        if (!flags.urgent && entry.urgentFingerprint) { delete entry.urgentFingerprint; changed = true; }
         if (!flags.approaching && !flags.expired) entry.eol30SentOn = null;
         if (!flags.expired) entry.expiredLastSentOn = null;
-        if (entry.acknowledgedAt || currentHour < settings.sendHour) continue;
-        const reasons = dueReasons(entry, flags, day);
-        if (reasons.length) alerts.push({ app, entry, flags, reasons, token: entry.token });
+        const urgentChanged = flags.urgent && entry.urgentFingerprint !== flags.urgentFingerprint;
+        if (entry.acknowledgedAt || (!urgentChanged && currentHour !== settings.sendHour)) continue;
+        const reasons = dueReasons(entry, flags, day, urgentChanged);
+        if (reasons.length) alerts.push({ app, entry, flags, urgentChanged, reasons, token: entry.token });
       }
       if (!alerts.length || !mailer || !baseUrl) continue;
       await save(); // Persist acknowledgment tokens before sending their links.
@@ -136,8 +143,9 @@ export function createNotifier({ dataDirectory, settingsLoader, env = process.en
       try {
         const response = await mailer.sendMail({ from: settings.from || 'WatchTower <watchtower@localhost>', to: recipients.join(', '), ...message });
         if (response?.rejected?.length) throw new Error(`Recipients rejected: ${response.rejected.join(', ')}`);
-        for (const { entry, flags, reasons } of alerts) {
-          if (flags.vulnerable && reasons.some(reason => reason.startsWith('Needs action'))) entry.redLastSentOn = day;
+        for (const { entry, flags, urgentChanged, reasons } of alerts) {
+          if (flags.vulnerable && (urgentChanged || reasons.some(reason => reason.startsWith('Needs action')))) entry.redLastSentOn = day;
+          if (urgentChanged) entry.urgentFingerprint = flags.urgentFingerprint;
           if (flags.approaching && reasons.some(reason => reason.startsWith('End of life'))) entry.eol30SentOn = day;
           if (flags.expired && reasons.some(reason => reason.startsWith('Past end of life'))) entry.expiredLastSentOn = day;
         }
@@ -145,7 +153,6 @@ export function createNotifier({ dataDirectory, settingsLoader, env = process.en
         console.log(`Sent ${alerts.length} notification(s) for workspace ${group.id}`);
       } catch (error) { console.error(`Could not email workspace ${group.id}: ${error.message}`); }
     }
-    let changed = false;
     for (const key of Object.keys(state.entries)) if (!active.has(key)) { delete state.entries[key]; changed = true; }
     if (changed) await save();
   }
