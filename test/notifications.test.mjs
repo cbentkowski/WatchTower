@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createNotifier, sendTestEmail } from '../notifications.mjs';
 import { smtpPasswordState, validateSmtpSettings } from '../settings.mjs';
 
-const settings = { enabled: true, host: 'smtp.example.com', port: 587, secure: false, requireTls: true, unauthenticated: true, from: 'alerts@example.com', baseUrl: 'https://watchtower.example.com', timeZone: 'UTC', sendHour: 8, usernameEnv: '' };
+const settings = { enabled: true, host: 'smtp.example.com', port: 587, secure: false, requireTls: true, unauthenticated: true, from: 'alerts@example.com', baseUrl: 'https://watchtower.example.com', timeZone: 'UTC', sendHour: 9, usernameEnv: '' };
 const app = (version = '1.0') => ({ id: 'app', name: 'Test App', version, status: 'red', vulnerabilities: [{ id: 'CVE-2026-1234', score: 9 }], lifecycle: { state: 'supported' }, reasons: ['High risk finding'] });
 const snapshot = current => ({ workspaces: [{ id: 'team', name: 'Team', notificationEmails: 'team@example.com', applications: ['app'] }], results: [current] });
 
@@ -59,6 +59,62 @@ test('EOL alert fires once within 30 days and weekly after expiration', async t 
   now = new Date('2026-10-28T09:00:00Z');
   await notifier.onScan(snapshot(eolApp(-8)));
   assert.equal(sent.length, 3);
+});
+
+test('ordinary alerts wait for the configured local hour instead of sending on a later scan', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-window-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const sent = [];
+  let now = new Date('2026-09-20T20:00:00Z');
+  const high = { ...app(), vulnerabilities: [{ id: 'CVE-2026-5678', score: 8 }] };
+  const notifier = createNotifier({ dataDirectory: directory, settingsLoader: async () => ({ ...settings, sendHour: 8 }), clock: () => now, transport: { sendMail: async message => { sent.push(message); return { accepted: ['team@example.com'], rejected: [] }; } } });
+  await notifier.onScan(snapshot(high));
+  assert.equal(sent.length, 0);
+  now = new Date('2026-09-21T08:00:00Z');
+  await notifier.onScan(snapshot(high));
+  assert.equal(sent.length, 1);
+});
+
+test('new Critical and known-exploited alerts send immediately but reminders use the scheduled window', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-urgent-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const sent = [];
+  let now = new Date('2026-09-20T20:00:00Z');
+  const notifier = createNotifier({ dataDirectory: directory, settingsLoader: async () => ({ ...settings, sendHour: 8 }), clock: () => now, transport: { sendMail: async message => { sent.push(message); return { accepted: ['team@example.com'], rejected: [] }; } } });
+  await notifier.onScan(snapshot(app()));
+  await notifier.onScan(snapshot(app()));
+  assert.equal(sent.length, 1);
+  now = new Date('2026-09-27T20:00:00Z');
+  await notifier.onScan(snapshot(app()));
+  assert.equal(sent.length, 1);
+  now = new Date('2026-09-28T08:00:00Z');
+  await notifier.onScan(snapshot(app()));
+  assert.equal(sent.length, 2);
+
+  const kevDirectory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-kev-'));
+  t.after(() => rm(kevDirectory, { recursive: true, force: true }));
+  const kevSent = [];
+  const kev = { ...app(), vulnerabilities: [{ id: 'CVE-2026-9999', score: 5, knownExploited: true }] };
+  const kevNotifier = createNotifier({ dataDirectory: kevDirectory, settingsLoader: async () => ({ ...settings, sendHour: 8 }), clock: () => new Date('2026-09-20T20:00:00Z'), transport: { sendMail: async message => { kevSent.push(message); return { accepted: ['team@example.com'], rejected: [] }; } } });
+  await kevNotifier.onScan(snapshot(kev));
+  assert.equal(kevSent.length, 1);
+});
+
+test('a new Critical finding sends immediately after an earlier High notification', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-escalation-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const sent = [];
+  let now = new Date('2026-09-20T08:00:00Z');
+  const high = { ...app(), vulnerabilities: [{ id: 'CVE-2026-7000', score: 8 }] };
+  const critical = { ...app(), vulnerabilities: [...high.vulnerabilities, { id: 'CVE-2026-7001', score: 9.8 }] };
+  const notifier = createNotifier({ dataDirectory: directory, settingsLoader: async () => ({ ...settings, sendHour: 8 }), clock: () => now, transport: { sendMail: async message => { sent.push(message); return { accepted: ['team@example.com'], rejected: [] }; } } });
+  await notifier.onScan(snapshot(high));
+  assert.equal(sent.length, 1);
+  now = new Date('2026-09-20T20:00:00Z');
+  await notifier.onScan(snapshot(critical));
+  await notifier.onScan(snapshot(critical));
+  assert.equal(sent.length, 2);
+  assert.match(sent[1].text, /New Critical or known-exploited finding/);
 });
 
 test('identifier renames preserve notification tokens and acknowledgements', async t => {
