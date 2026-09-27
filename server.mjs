@@ -1,6 +1,6 @@
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile, writeFile, rename, mkdir, rm, access, copyFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
@@ -11,7 +11,7 @@ import { readGeneralSettings, writeGeneralSettings, validateGeneralSettings, gen
 import { createLogger } from './logger.mjs';
 import { createAuth } from './auth.mjs';
 import { createYamlMonitor } from './yaml-monitor.mjs';
-import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, standardRoles } from './rbac.mjs';
+import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, claimsForIdentityMappings, explainAccess, protectedRoleState, standardRoles } from './rbac.mjs';
 import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, readFeeds, secureFetchText, validateFeedInput, writeFeeds } from './feeds.mjs';
 import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
 import { loadTlsConfiguration } from './tls.mjs';
@@ -73,6 +73,8 @@ let snapshot = null;
 let refreshPromise = null;
 let nvdLastRequest = 0;
 let lifecycleCatalogCache = null;
+const permissionPreviews = new Map();
+const previewLifetime = 8 * 60 * 60 * 1000;
 const snapshotReady = readFile(snapshotFile, 'utf8').then(raw => {
   const saved = JSON.parse(raw);
   if (saved.checkedAt && Array.isArray(saved.results) && Array.isArray(saved.workspaces)) snapshot = saved;
@@ -221,6 +223,32 @@ async function readBody(req) {
   try { return JSON.parse(body); } catch { throw new Error('Invalid JSON'); }
 }
 
+function requestCookies(req) {
+  return Object.fromEntries(String(req.headers.cookie || '').split(';').map(part => part.trim().split(/=(.*)/s, 2)).filter(([name, value]) => name && value !== undefined));
+}
+
+function previewActorKey(req) {
+  return req.authUser ? `${req.authUser.issuer}|${req.authUser.subject}` : 'local-development';
+}
+
+function previewCookie(req, value, seconds) {
+  const secure = detectedGeneral(req).protocol === 'https' ? '; Secure' : '';
+  return `watchtower_preview=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${seconds}${secure}`;
+}
+
+function attachPermissionPreview(req) {
+  for (const [id, item] of permissionPreviews) if (item.expires <= Date.now()) permissionPreviews.delete(id);
+  const token = requestCookies(req).watchtower_preview;
+  const preview = permissionPreviews.get(token);
+  if (!preview) return;
+  if (preview.expires <= Date.now() || preview.actorKey !== previewActorKey(req)) {
+    permissionPreviews.delete(token);
+    return;
+  }
+  req.permissionPreview = preview;
+  req.permissionPreviewToken = token;
+}
+
 async function readFeedCache() {
   try { return JSON.parse(await readFile(feedCacheFile, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return { checkedAt: null, feeds: {} }; throw error; }
@@ -256,10 +284,23 @@ function parseWorkspaces(source, apps, allowLegacyIds = false) {
   return groups;
 }
 
-async function authorization(req, includeDisabled = true) {
+async function authorizationResources(includeDisabled = true) {
   const apps = parseInventory(await readFile(path.join(configDirectory, 'applications.yaml'), 'utf8'), includeDisabled);
   const workspaces = parseWorkspaces(await readFile(path.join(configDirectory, 'workspaces.yaml'), 'utf8'), apps.filter(app => app.enabled !== false));
   const feeds = await readFeeds(feedFile);
+  return { apps, workspaces, feeds };
+}
+
+async function authorization(req, includeDisabled = true) {
+  const { apps, workspaces, feeds } = await authorizationResources(includeDisabled);
+  const config = req.permissionPreview?.config || await readRbac(rbacFile);
+  const user = req.permissionPreview ? { issuer: 'permission-preview', claims: req.permissionPreview.claims } : req.authUser || { issuer: 'local', isAdmin: true };
+  const access = calculateAccess(user, config, apps, workspaces, feeds);
+  return { apps, workspaces, feeds, access };
+}
+
+async function realAuthorization(req, includeDisabled = true) {
+  const { apps, workspaces, feeds } = await authorizationResources(includeDisabled);
   const access = calculateAccess(req.authUser || { issuer: 'local', isAdmin: true }, await readRbac(rbacFile), apps, workspaces, feeds);
   return { apps, workspaces, feeds, access };
 }
@@ -267,6 +308,14 @@ async function authorization(req, includeDisabled = true) {
 function forbidden(res, message = 'You do not have permission to perform this action') {
   res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify({ error: message }));
+}
+
+function selectedPreviewConfig(config, grantIds) {
+  if (grantIds === undefined) return config;
+  if (!Array.isArray(grantIds)) throw new Error('Permission verification grant selection must be an array');
+  const selected = new Set(grantIds.map(String));
+  if ([...selected].some(id => !config.grants.some(grant => grant.id === id))) throw new Error('Permission verification references an unknown grant');
+  return { groups: config.groups, grants: config.grants.filter(grant => selected.has(grant.id)) };
 }
 
 async function migrateResourceIds() {
@@ -602,11 +651,24 @@ const requestHandler = async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY' }); res.end(acknowledgePage(entry, confirmed)); return;
     }
     if (auth && await auth.handle(req, res, url)) return;
-    if (url.pathname === '/api/session' && req.method === 'GET') {
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({ enabled: false, user: 'Local development session', isAdmin: true })); return;
+    attachPermissionPreview(req);
+    const previewExit = url.pathname === '/api/rbac/preview' && req.method === 'DELETE';
+    if (req.permissionPreview && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !previewExit) {
+      forbidden(res, 'Permission Preview is read-only. Exit preview to make changes.'); return;
     }
-    if ((url.pathname.startsWith('/api/settings') || ['/api/logs', '/api/rbac'].includes(url.pathname)) && auth && !req.authUser?.isAdmin) { forbidden(res, 'Administrator role required'); return; }
+    if (url.pathname === '/api/session' && req.method === 'GET') {
+      const { access } = await authorization(req);
+      const real = await realAuthorization(req);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ enabled: Boolean(auth), user: req.authUser?.name || 'Local development session', isAdmin: access.isAdmin, canManageAccess: access.accessManage, claims: real.access.isAdmin ? req.authUser?.claims : undefined, groupOverage: Boolean(req.authUser?.groupOverage), preview: req.permissionPreview ? { name: req.permissionPreview.name, mappingIds: req.permissionPreview.mappingIds, expires: new Date(req.permissionPreview.expires).toISOString() } : null })); return;
+    }
+    if ((url.pathname.startsWith('/api/settings') || url.pathname === '/api/logs') && !(await authorization(req)).access.isAdmin) { forbidden(res, 'Administrator role required'); return; }
+    if (url.pathname === '/api/rbac/preview' && req.method === 'DELETE') {
+      const preview = req.permissionPreview;
+      if (req.permissionPreviewToken) permissionPreviews.delete(req.permissionPreviewToken);
+      if (preview) await logger.audit('Permission Preview exited', auditActor(req), { type: 'rbac-preview', id: preview.id }, { identityMappings: preview.mappingIds }, preview.name);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': previewCookie(req, '', 0) }); res.end(JSON.stringify({ preview: null })); return;
+    }
     if (url.pathname === '/api/settings' && req.method === 'GET') {
       const smtp = await readSmtpSettings(smtpFile);
       const configuredGeneral = await readGeneralSettings(generalFile);
@@ -654,14 +716,38 @@ const requestHandler = async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ applications: visibleApps, workspaces: visibleWorkspaces, feeds: visibleFeeds, access: accessJson(access) })); return;
     }
     if (url.pathname === '/api/rbac' && req.method === 'GET') {
-      const { apps, workspaces, feeds } = await authorization(req);
+      const { apps, workspaces, feeds, access } = await authorization(req);
+      if (!access.accessManage) { forbidden(res, 'Access Administrator role required'); return; }
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({ ...await readRbac(rbacFile), roles: standardRoles, applications: apps, workspaces, feeds, session: { name: req.authUser?.name || 'Local development session', claims: req.authUser?.claims || {}, groupOverage: Boolean(req.authUser?.groupOverage) } })); return;
+      res.end(JSON.stringify({ ...await readRbac(rbacFile), roles: standardRoles, applications: apps, workspaces, feeds, session: { name: req.permissionPreview?.name || req.authUser?.name || 'Local development session', claims: req.permissionPreview?.claims || req.authUser?.claims || {}, groupOverage: req.permissionPreview ? false : Boolean(req.authUser?.groupOverage) } })); return;
+    }
+    if (url.pathname === '/api/rbac/evaluate' && req.method === 'POST') {
+      const { apps, workspaces, feeds, access } = await realAuthorization(req);
+      if (!access.accessManage) { forbidden(res, 'Access Administrator role required'); return; }
+      const body = await readBody(req);
+      const config = selectedPreviewConfig(validateRbacInput(body.config, apps, workspaces, feeds), body.grantIds);
+      const explanation = explainAccess(config, body.mappingIds, apps, workspaces, feeds);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(explanation)); return;
+    }
+    if (url.pathname === '/api/rbac/preview' && req.method === 'POST') {
+      const { apps, workspaces, feeds, access } = await realAuthorization(req);
+      if (!access.accessManage) { forbidden(res, 'Access Administrator role required'); return; }
+      const body = await readBody(req);
+      const config = selectedPreviewConfig(validateRbacInput(body.config, apps, workspaces, feeds), body.grantIds);
+      const explanation = explainAccess(config, body.mappingIds, apps, workspaces, feeds);
+      const name = String(body.name || explanation.selectedMappings.map(item => item.name).join(' + ') || 'No matched identity').trim().slice(0, 160);
+      const token = randomBytes(32).toString('base64url');
+      const preview = { id: randomUUID(), actorKey: previewActorKey(req), name, mappingIds: explanation.selectedMappings.map(item => item.id), claims: claimsForIdentityMappings(config, body.mappingIds), config, expires: Date.now() + previewLifetime };
+      permissionPreviews.set(token, preview);
+      await logger.audit('Permission Preview started', auditActor(req), { type: 'rbac-preview', id: preview.id }, { identityMappings: preview.mappingIds }, name);
+      res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Set-Cookie': previewCookie(req, token, previewLifetime / 1000) }); res.end(JSON.stringify({ preview: { name, mappingIds: preview.mappingIds, expires: new Date(preview.expires).toISOString() }, explanation })); return;
     }
     if (url.pathname === '/api/rbac' && req.method === 'POST') {
-      const { apps, workspaces, feeds } = await authorization(req);
+      const { apps, workspaces, feeds, access } = await realAuthorization(req);
+      if (!access.accessManage) { forbidden(res, 'Access Administrator role required'); return; }
       const previous = await readRbac(rbacFile);
       const config = validateRbacInput(await readBody(req), apps, workspaces, feeds);
+      if (!access.isAdmin && protectedRoleState(previous, 'access-administrator') !== protectedRoleState(config, 'access-administrator')) { forbidden(res, 'Only a protected administrator can change Access Administrator assignments'); return; }
       await yamlMonitor.webWrite(rbacFile, () => writeRbac(rbacFile, config));
       await logger.audit('Access control updated', auditActor(req), { type: 'rbac', id: 'access-control' }, { groups: { from: previous.groups.length, to: config.groups.length }, grants: { from: previous.grants.length, to: config.grants.length } }, `${config.groups.length} identity mappings; ${config.grants.length} grants`);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(config)); return;
@@ -936,7 +1022,7 @@ const requestHandler = async (req, res) => {
       const data = !snapshot || Date.now() - new Date(snapshot.checkedAt).getTime() > refreshMs || url.searchParams.has('refresh') ? await refresh() : snapshot;
       const results = (data.results || []).filter(app => access.appView.has(app.id));
       const workspaces = (data.workspaces || []).filter(group => access.workspaceView.has(group.id)).map(group => ({ ...group, applications: group.applications.filter(id => access.appView.has(id)) }));
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ ...data, results, workspaces, access: accessJson(access), groupOverage: Boolean(req.authUser?.groupOverage) })); return;
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ ...data, results, workspaces, access: accessJson(access), groupOverage: req.permissionPreview ? false : Boolean(req.authUser?.groupOverage) })); return;
     }
     const files = { '/': 'index.html', '/styles.css': 'styles.css', '/theme-init.js': 'theme-init.js', '/app.js': 'app.js', '/favicon.svg': 'favicon.svg' };
     const file = files[url.pathname];

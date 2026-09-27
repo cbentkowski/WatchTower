@@ -176,10 +176,6 @@ export function createAuth(settings = oidcSettings(), provider = oidc) {
         else send(res, 303, '', { Location: '/login' });
         return true;
       }
-      if (url.pathname === '/api/session' && req.method === 'GET') {
-        send(res, 200, JSON.stringify({ enabled: true, user: session.name, isAdmin: session.isAdmin, claims: session.isAdmin ? session.claims : undefined, groupOverage: session.groupOverage }), { 'Content-Type': 'application/json; charset=utf-8' });
-        return true;
-      }
       if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !hasValidRequestOrigin(req, settings.base.origin)) {
         send(res, 403, JSON.stringify({ error: 'Invalid request origin' }), { 'Content-Type': 'application/json; charset=utf-8' });
         return true;

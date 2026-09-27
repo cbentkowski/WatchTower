@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <div id="preview-banner" class="preview-banner" role="status" hidden><div><strong>Permission Preview</strong><span id="preview-name"></span><small>Read-only mode. The application is enforcing the previewed permissions.</small></div><button id="preview-exit" type="button">Exit preview</button></div>
   <div class="shell">
     <aside class="rail" aria-label="Dashboard">
       <div class="brand"><img class="brand-icon" src="/favicon.svg" alt="" width="37" height="37"><span>WatchTower<span class="brand-sub">VULNERABILITY INTELLIGENCE</span></span></div>
@@ -75,6 +76,7 @@
         <form id="access-form">
           <section class="panel settings-panel"><div class="panel-head"><div><h2>Identity mappings</h2><p>Claim values are matched exactly and case sensitively.</p></div><button id="add-identity" type="button">＋ Add mapping</button></div><div id="identity-list"></div></section>
           <section class="panel settings-panel"><div class="panel-head"><div><h2>Grants</h2><p>Each grant can assign multiple roles to one or more resources.</p></div><button id="add-grant" type="button">＋ Add grant</button></div><div id="grant-list"></div></section>
+          <section class="panel settings-panel"><div class="panel-head"><div><h2>Verify effective access</h2><p>Select identity mappings above, then inspect or preview their combined permissions. Select none to test an unmatched authenticated user.</p></div></div><div class="access-verification-actions"><button id="access-evaluate" type="button">Verify selected access</button><button id="access-preview" type="button">Preview selected access</button></div><div id="access-explanation" class="access-explanation"><p class="muted">No access calculation has been run.</p></div></section>
           <section class="panel settings-panel"><div class="panel-head"><div><h2>Current administrator session</h2><p>Use these values to verify the claims sent by your identity provider.</p></div></div><pre id="session-claims" class="claims"></pre></section>
           <p id="access-message" class="form-error" role="status" hidden></p><div class="form-actions"><button id="access-save" type="submit">Save access control</button></div>
         </form>

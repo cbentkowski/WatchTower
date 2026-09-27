@@ -95,8 +95,9 @@ test('login binds the callback to a browser flow and creates a protected session
   assert.equal(callback.status, 303);
   const sessionCookie = callback.headers['Set-Cookie'][1].split(';')[0];
   const sessionResponse = response();
-  assert.equal(await auth.handle({ method: 'GET', headers: { cookie: sessionCookie } }, sessionResponse, new URL('https://home.example.com/api/session')), true);
-  assert.equal(JSON.parse(sessionResponse.body).isAdmin, true);
+  const sessionRequest = { method: 'GET', headers: { cookie: sessionCookie } };
+  assert.equal(await auth.handle(sessionRequest, sessionResponse, new URL('https://home.example.com/api/session')), false);
+  assert.equal(sessionRequest.authUser.isAdmin, true);
   const api = response();
   const authenticated = { method: 'GET', headers: { cookie: sessionCookie } };
   assert.equal(await auth.handle(authenticated, api, new URL('https://home.example.com/api/settings')), false);
