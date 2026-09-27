@@ -2,7 +2,7 @@
 
 This roadmap describes the planned direction from WatchTower 0.5.0 through 1.0.0 and the likely scaling work after 1.0. Priorities may change as features are designed and tested. GitHub milestones and issues are the source of truth for delivery status.
 
-## 0.5.0 — Beacon
+## 0.5.0 - Beacon
 
 Focus: finish the current native HTTPS and notification-window work.
 
@@ -11,7 +11,7 @@ Focus: finish the current native HTTPS and notification-window work.
 - Immediate one-time alerts for newly discovered Critical and known-exploited vulnerabilities.
 - Configured delivery windows for High, end-of-life, and repeat reminders.
 
-## 0.6.0 — Cartographer
+## 0.6.0 - Cartographer
 
 Focus: make application-to-CPE mapping easier to configure and safer to trust.
 
@@ -24,7 +24,7 @@ Focus: make application-to-CPE mapping easier to configure and safer to trust.
 - Warn about deprecated, overly broad, malformed, empty, or otherwise suspicious mappings.
 - Store the canonical CPE, parsed fields, mapping mode, and last test metadata while keeping implementation fields out of the ordinary application editor.
 
-## 0.7.0 — Steward
+## 0.7.0 - Steward
 
 Focus: connect findings to responsible teams and a recorded response process.
 
@@ -37,7 +37,7 @@ Focus: connect findings to responsible teams and a recorded response process.
 - Replace the single notification behavior with policies based on severity, exploitation evidence, application context, ownership, workspace, finding state, and age.
 - Support immediate delivery, digest windows, reminder intervals, and escalation routing without requiring a ticketing-system integration.
 
-## 0.8.0 — Signal
+## 0.8.0 - Signal
 
 Focus: help users decide which applicable vulnerabilities deserve attention first.
 
@@ -48,7 +48,7 @@ Focus: help users decide which applicable vulnerabilities deserve attention firs
 - Add priority filters and make priority signals available to notification policies.
 - Clearly communicate the freshness, source, and limitations of prioritization data.
 
-## 0.9.0 — Chronicle
+## 0.9.0 - Chronicle
 
 Focus: make changes and remediation progress visible without requiring users to reconstruct events from raw logs.
 
@@ -62,7 +62,7 @@ Focus: make changes and remediation progress visible without requiring users to 
 
 File-backed storage remains the default. History files should be compact, append-oriented, indexed in memory where useful, and suitable for the expected single-process deployment model.
 
-## 1.0.0 — Keystone
+## 1.0.0 - Keystone
 
 Focus: establish dependable operational and compatibility guarantees around the complete workflow.
 
@@ -75,7 +75,7 @@ Focus: establish dependable operational and compatibility guarantees around the 
 - Add end-to-end coverage for application mapping, scanning, prioritization, notification, acknowledgement, disposition, and history.
 - Publish administrator, operator, upgrade, backup, and troubleshooting documentation.
 
-## Post-1.0 — Optional scalable storage
+## Post-1.0 - Optional scalable storage
 
 Focus: preserve the lightweight file-backed experience while allowing larger installations to adopt indexed database storage.
 
