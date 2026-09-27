@@ -51,7 +51,7 @@
             <label>SMTP port <input name="port" type="number" min="1" max="65535"></label>
             <label>From address <input name="from" type="email" placeholder="alerts@example.com"></label>
             <label>Time zone <input name="timeZone" placeholder="America/Chicago"></label>
-            <label>Send hour (0–23) <input name="sendHour" type="number" min="0" max="23"></label>
+            <label>Send hour (24-hour local time, 0–23) <input name="sendHour" type="number" min="0" max="23"></label>
             <label class="credential-field">Username environment variable <input name="usernameEnv" placeholder="WATCHTOWER_SMTP_USER"></label>
             <div class="credential-field"><span>SMTP password secret</span><p class="form-hint">Mounted file configured with <code>SMTP_PASSWORD_FILE</code>.</p></div>
             <label>Test recipient <input name="testRecipient" type="email" placeholder="you@example.com"></label>

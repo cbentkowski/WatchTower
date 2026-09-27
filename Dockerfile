@@ -5,7 +5,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -d /home/container -s /bin/sh container
 
-COPY --chown=container:container package.json package-lock.json server.mjs auth.mjs rbac.mjs feeds.mjs nvd.mjs yaml-monitor.mjs notifications.mjs settings.mjs general.mjs logger.mjs /opt/watchtower/
+COPY --chown=container:container package.json package-lock.json server.mjs auth.mjs rbac.mjs feeds.mjs nvd.mjs yaml-monitor.mjs notifications.mjs settings.mjs general.mjs logger.mjs tls.mjs /opt/watchtower/
 RUN cd /opt/watchtower \
     && npm ci --omit=dev \
     && npm cache clean --force \
@@ -21,7 +21,7 @@ USER container
 ENV USER=container HOME=/home/container HOST=0.0.0.0 CONFIG_DIR=/home/container/config DEFAULT_CONFIG_DIR=/opt/watchtower/defaults DATA_DIR=/home/container/data
 WORKDIR /home/container
 EXPOSE 4173
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["node", "-e", "fetch('http://127.0.0.1:4173/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["node", "-e", "const tls=String(process.env.TLS_ENABLED).toLowerCase()==='true';import(tls?'node:https':'node:http').then(({get})=>get({host:'127.0.0.1',port:process.env.SERVER_PORT||process.env.PORT||4173,path:'/healthz',rejectUnauthorized:false},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1)))"]
 STOPSIGNAL SIGINT
 ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
 CMD ["/entrypoint.sh"]

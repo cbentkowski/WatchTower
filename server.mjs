@@ -1,4 +1,5 @@
-import { createServer } from 'node:http';
+import { createServer as createHttpServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import { randomUUID } from 'node:crypto';
 import { readFile, writeFile, rename, mkdir, rm, access, copyFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +14,7 @@ import { createYamlMonitor } from './yaml-monitor.mjs';
 import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, standardRoles } from './rbac.mjs';
 import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, readFeeds, secureFetchText, validateFeedInput, writeFeeds } from './feeds.mjs';
 import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
+import { loadTlsConfiguration } from './tls.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const applicationVersion = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
@@ -20,6 +22,7 @@ const configDirectory = process.env.CONFIG_DIR || path.join(root, 'config');
 const defaultConfigDirectory = process.env.DEFAULT_CONFIG_DIR || path.join(root, 'defaults');
 const PORT = Number(process.env.SERVER_PORT || process.env.PORT || 4173);
 const HOST = process.env.HOST || '127.0.0.1';
+const tlsConfiguration = await loadTlsConfiguration();
 const dataDirectory = process.env.DATA_DIR || path.join(root, 'data');
 const configFiles = ['applications.yaml', 'workspaces.yaml', 'feeds.yaml', 'smtp.yaml', 'general.yaml'];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -535,7 +538,7 @@ async function refreshApplication(appId) {
 }
 
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
-createServer(async (req, res) => {
+const requestHandler = async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -834,7 +837,19 @@ createServer(async (req, res) => {
     if (!file) { res.writeHead(404); res.end('Not found'); return; }
     res.writeHead(200, { 'Content-Type': mime[path.extname(file)] }); res.end(await readFile(path.join(root, 'web', file)));
   } catch (error) { res.writeHead(['POST', 'PUT', 'DELETE'].includes(req.method) ? 400 : 500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: error.message })); }
-}).listen(PORT, HOST, () => { console.log(`Vulnerability dashboard: http://${HOST}:${PORT}`); logger.log('info', 'Server started', `Listening on ${HOST}:${PORT}`); });
+};
+
+let server;
+try {
+  server = tlsConfiguration.enabled ? createHttpsServer(tlsConfiguration.options, requestHandler) : createHttpServer(requestHandler);
+} catch (error) {
+  throw new Error(`Native TLS initialization failed: ${error.code || error.message}`);
+}
+server.listen(PORT, HOST, () => {
+  const listener = `${tlsConfiguration.protocol}://${HOST}:${PORT}`;
+  console.log(`Vulnerability dashboard: ${listener}`);
+  logger.log('info', 'Server started', `Listening on ${listener}`);
+});
 
 createInterface({ input: process.stdin }).on('line', line => {
   if (line.trim().toLowerCase() !== 'scan') return;
