@@ -524,6 +524,8 @@ async function searchCpes(startIndex = 0) {
 }
 
 async function parseManualCpe() {
+  $('cpe-error').hidden = true;
+  $('cpe-error').textContent = '';
   try {
     const response = await fetch('/api/cpes/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cpeName: $('cpe-manual-value').value, mode: 'product', version: $('editor-form').elements.version.value }) });
     const data = await response.json();
