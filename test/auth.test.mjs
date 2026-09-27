@@ -132,6 +132,19 @@ test('login binds the callback to a browser flow and creates a protected session
   rmSync(directory, { recursive: true, force: true });
 });
 
+test('login redirects alternate hostnames to the configured OIDC origin', async () => {
+  const auth = createAuth(oidcSettings(values), {});
+  const alternate = response();
+  await auth.handle({ method: 'GET', headers: { host: 'watchtower.example.com' }, socket: { encrypted: true } }, alternate, new URL('https://watchtower.example.com/auth/login'));
+  assert.equal(alternate.status, 308);
+  assert.equal(alternate.headers.Location, 'https://home.example.com/auth/login');
+
+  const proxied = response();
+  await auth.handle({ method: 'GET', headers: { host: 'watchtower:4173', 'x-forwarded-host': 'watchtower.example.com', 'x-forwarded-proto': 'https' } }, proxied, new URL('http://watchtower:4173/login'));
+  assert.equal(proxied.status, 308);
+  assert.equal(proxied.headers.Location, 'https://home.example.com/login');
+});
+
 test('administrator authorization covers every privileged API', () => {
   for (const route of ['/api/settings', '/api/settings/test-email', '/api/logs', '/api/config', '/api/applications', '/api/applications/test', '/api/workspaces', '/api/status?refresh=1']) {
     assert.equal(requiresAdministrator(new URL(route, 'https://home.example.com')), true, route);
