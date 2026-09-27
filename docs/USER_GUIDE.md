@@ -168,7 +168,7 @@ Administrators use **Access Control** to map exact identity-provider claims to W
 4. Enter the exact, case-sensitive claim value.
 5. Leave the mapping enabled and save access control.
 
-Use **Current administrator session** to inspect claims supplied for the signed-in administrator.
+Use **Current administrator session** to inspect claims supplied for the signed-in administrator or Access Administrator.
 
 ### Add a grant
 
@@ -176,13 +176,27 @@ Use **Current administrator session** to inspect claims supplied for the signed-
 2. Choose a global, workspace, application, or feed scope.
 3. Select one or more roles available for that scope.
 4. For a scoped grant, select the resources it covers.
-5. Save access control and test with a non-administrator account.
+5. Select one or more identity mappings for verification and inspect their combined effective permissions.
+6. Save access control after the proposed grants behave as intended.
 
-Available responsibilities include workspace viewing and management, workspace membership, workspace application editing, notification management, application viewing and editing, feed viewing and editing, global feed management, and manual scan operation.
+Available responsibilities include access administration, workspace viewing and management, workspace membership, workspace application editing, notification management, application viewing and editing, feed viewing and editing, global feed management, and manual scan operation.
+
+### Verify and preview access
+
+Select **Include in verification** on any combination of identity mappings and grants. All saved grants are selected initially; clear individual grants to test narrower proposed combinations. Select no identity mappings to represent an authenticated user whose claims match no configured mapping.
+
+- **Verify selected access** calculates permissions from the current form, including changes that have not been saved. It lists every contributing grant and the effective global, application, workspace, and feed permissions.
+- **Preview selected access** reloads WatchTower with those permissions enforced by the server. A persistent banner identifies the preview and provides the exit action.
+
+Permission Preview is always read-only. It shows resources and controls available to the selected access, but the server rejects every mutation until the preview is exited. The original privileged session remains authenticated underneath the preview so the banner can always restore it.
+
+When previewing proposed changes, WatchTower keeps an expiring draft in the current browser tab. Exiting Permission Preview returns to Access Control with the same unsaved identity mappings, grants, and verification selections. The draft is removed after a successful save, when Access Control is left outside a preview, when the tab's browser session ends, or after eight hours.
+
+The global **Access Administrator** role can manage mappings, ordinary grants, verification, and Permission Preview without receiving access to applications, feeds, scans, logs, or settings. Only a protected administrator authenticated through the configured administrator group or `WatchTower.Administrator` role can add, remove, or change Access Administrator assignments.
 
 Permissions from matching grants are combined. Workspace Application Editor applies to every current and future application assigned to that workspace. Workspace Membership Manager is separate because changing membership can expand a user's access.
 
-Keep at least one tested administrator path before narrowing access. Unmatched authenticated users receive no application access.
+Keep at least one tested protected-administrator path before narrowing access. Unmatched authenticated users receive no application access.
 
 ## Refreshing checks
 

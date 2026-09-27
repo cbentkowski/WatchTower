@@ -95,8 +95,9 @@ test('login binds the callback to a browser flow and creates a protected session
   assert.equal(callback.status, 303);
   const sessionCookie = callback.headers['Set-Cookie'][1].split(';')[0];
   const sessionResponse = response();
-  assert.equal(await auth.handle({ method: 'GET', headers: { cookie: sessionCookie } }, sessionResponse, new URL('https://home.example.com/api/session')), true);
-  assert.equal(JSON.parse(sessionResponse.body).isAdmin, true);
+  const sessionRequest = { method: 'GET', headers: { cookie: sessionCookie } };
+  assert.equal(await auth.handle(sessionRequest, sessionResponse, new URL('https://home.example.com/api/session')), false);
+  assert.equal(sessionRequest.authUser.isAdmin, true);
   const api = response();
   const authenticated = { method: 'GET', headers: { cookie: sessionCookie } };
   assert.equal(await auth.handle(authenticated, api, new URL('https://home.example.com/api/settings')), false);
@@ -129,6 +130,19 @@ test('login binds the callback to a browser flow and creates a protected session
   assert.equal(proxiedLogout.status, 303);
   assert.equal(proxiedLogout.headers.Location, '/signed-out');
   rmSync(directory, { recursive: true, force: true });
+});
+
+test('login redirects alternate hostnames to the configured OIDC origin', async () => {
+  const auth = createAuth(oidcSettings(values), {});
+  const alternate = response();
+  await auth.handle({ method: 'GET', headers: { host: 'watchtower.example.com' }, socket: { encrypted: true } }, alternate, new URL('https://watchtower.example.com/auth/login'));
+  assert.equal(alternate.status, 308);
+  assert.equal(alternate.headers.Location, 'https://home.example.com/auth/login');
+
+  const proxied = response();
+  await auth.handle({ method: 'GET', headers: { host: 'watchtower:4173', 'x-forwarded-host': 'watchtower.example.com', 'x-forwarded-proto': 'https' } }, proxied, new URL('http://watchtower:4173/login'));
+  assert.equal(proxied.status, 308);
+  assert.equal(proxied.headers.Location, 'https://home.example.com/login');
 });
 
 test('administrator authorization covers every privileged API', () => {

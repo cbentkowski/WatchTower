@@ -62,6 +62,15 @@ function hasValidRequestOrigin(req, expectedOrigin) {
   return req.headers['sec-fetch-site'] === 'same-origin';
 }
 
+function requestOrigin(req, url) {
+  const forwardedHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
+  const host = forwardedHost || req.headers.host || url.host;
+  const forwardedProtocol = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  const protocol = forwardedProtocol || (req.socket?.encrypted ? 'https' : url.protocol.replace(':', ''));
+  try { return new URL(`${protocol}://${host}`).origin; }
+  catch { return url.origin; }
+}
+
 export function createAuth(settings = oidcSettings(), provider = oidc) {
   if (!settings) return null;
   const secure = settings.base.protocol === 'https:';
@@ -92,6 +101,11 @@ export function createAuth(settings = oidcSettings(), provider = oidc) {
       prune();
       const values = cookies(req);
       const session = sessions.get(values[sessionName]);
+      if (req.method === 'GET' && ['/login', '/auth/login', '/auth/callback'].includes(url.pathname) && requestOrigin(req, url) !== settings.base.origin) {
+        const canonical = new URL(`${url.pathname}${url.search}`, settings.base);
+        send(res, 308, '', { Location: canonical.href });
+        return true;
+      }
       if (url.pathname === '/login' && req.method === 'GET') {
         if (session) { send(res, 303, '', { Location: '/' }); return true; }
         send(res, 200, authPage('Sign in', 'Sign in to view application security and lifecycle status.'), { 'Content-Type': 'text/html; charset=utf-8' });
@@ -174,10 +188,6 @@ export function createAuth(settings = oidcSettings(), provider = oidc) {
       if (!session) {
         if (url.pathname.startsWith('/api/')) send(res, 401, JSON.stringify({ error: 'Sign-in required' }), { 'Content-Type': 'application/json; charset=utf-8' });
         else send(res, 303, '', { Location: '/login' });
-        return true;
-      }
-      if (url.pathname === '/api/session' && req.method === 'GET') {
-        send(res, 200, JSON.stringify({ enabled: true, user: session.name, isAdmin: session.isAdmin, claims: session.isAdmin ? session.claims : undefined, groupOverage: session.groupOverage }), { 'Content-Type': 'application/json; charset=utf-8' });
         return true;
       }
       if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !hasValidRequestOrigin(req, settings.base.origin)) {
