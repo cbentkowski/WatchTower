@@ -190,6 +190,8 @@ Select **Include in verification** on any combination of identity mappings and g
 
 Permission Preview is always read-only. It shows resources and controls available to the selected access, but the server rejects every mutation until the preview is exited. The original privileged session remains authenticated underneath the preview so the banner can always restore it.
 
+When previewing proposed changes, WatchTower keeps an expiring draft in the current browser tab. Exiting Permission Preview returns to Access Control with the same unsaved identity mappings, grants, and verification selections. The draft is removed after a successful save, when Access Control is left outside a preview, when the tab's browser session ends, or after eight hours.
+
 The global **Access Administrator** role can manage mappings, ordinary grants, verification, and Permission Preview without receiving access to applications, feeds, scans, logs, or settings. Only a protected administrator authenticated through the configured administrator group or `WatchTower.Administrator` role can add, remove, or change Access Administrator assignments.
 
 Permissions from matching grants are combined. Workspace Application Editor applies to every current and future application assigned to that workspace. Workspace Membership Manager is separate because changing membership can expand a user's access.

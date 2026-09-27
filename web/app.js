@@ -22,8 +22,12 @@ let accessData = null;
 let isAdmin = false;
 let canManageAccess = false;
 let activePreview = null;
+let renderedHash = location.hash;
+let previewNavigation = false;
 const selectedMappingIds = new Set();
 const selectedGrantIds = new Set();
+const accessDraftKey = 'watchtower-access-preview-draft';
+const accessDraftLifetime = 8 * 60 * 60 * 1000;
 let permissions = { accessManage: false, scan: false, feeds: { manage: false, view: [], edit: [] }, applications: { view: [], edit: [] }, workspaces: { view: [], edit: [], membership: [], notifications: [] } };
 const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeUrl = (url) => { try { const u = new URL(url); return u.protocol === 'https:' ? u.href : '#'; } catch { return '#'; } };
@@ -65,6 +69,14 @@ function renderSidebar() {
 }
 
 function renderView() {
+  if (renderedHash === '#access' && location.hash !== '#access' && !activePreview && !previewNavigation) {
+    clearAccessDraft();
+    accessLoaded = false;
+    accessData = null;
+    selectedMappingIds.clear();
+    selectedGrantIds.clear();
+  }
+  renderedHash = location.hash;
   const settingsPage = location.hash === '#settings';
   const logsPage = location.hash === '#logs';
   const accessPage = location.hash === '#access';
@@ -361,9 +373,29 @@ function renderAccess() {
   $('session-claims').textContent = JSON.stringify(accessData.session, null, 2);
   for (const row of $('identity-list').querySelectorAll('.identity-row')) row.querySelector('[data-field="claimSource"]').value = accessData.groups.find(item => item.id === row.dataset.id)?.claimSource || 'groups';
 }
+function clearAccessDraft() {
+  try { sessionStorage.removeItem(accessDraftKey); } catch {}
+}
+function saveAccessDraft(config) {
+  try {
+    sessionStorage.setItem(accessDraftKey, JSON.stringify({ config, mappingIds: [...selectedMappingIds], grantIds: [...selectedGrantIds], expires: Date.now() + accessDraftLifetime }));
+  } catch {}
+}
+function restoreAccessDraft() {
+  try {
+    const draft = JSON.parse(sessionStorage.getItem(accessDraftKey) || 'null');
+    if (!draft || draft.expires <= Date.now() || !Array.isArray(draft.config?.groups) || !Array.isArray(draft.config?.grants)) { clearAccessDraft(); return false; }
+    accessData = { ...accessData, groups: draft.config.groups, grants: draft.config.grants };
+    selectedMappingIds.clear();
+    for (const id of draft.mappingIds || []) selectedMappingIds.add(id);
+    selectedGrantIds.clear();
+    for (const id of draft.grantIds || []) selectedGrantIds.add(id);
+    return true;
+  } catch { clearAccessDraft(); return false; }
+}
 async function loadAccess() {
   accessLoaded = true;
-  try { const response = await fetch('/api/rbac', { cache: 'no-store' }); accessData = await response.json(); if (!response.ok) throw new Error(accessData.error || 'Could not load access control'); selectedGrantIds.clear(); for (const grant of accessData.grants) selectedGrantIds.add(grant.id); renderAccess(); }
+  try { const response = await fetch('/api/rbac', { cache: 'no-store' }); accessData = await response.json(); if (!response.ok) throw new Error(accessData.error || 'Could not load access control'); if (!restoreAccessDraft()) { selectedMappingIds.clear(); selectedGrantIds.clear(); for (const grant of accessData.grants) selectedGrantIds.add(grant.id); } renderAccess(); }
   catch (error) { accessLoaded = false; $('access-message').textContent = error.message; $('access-message').hidden = false; }
 }
 function collectAccess() {
@@ -373,7 +405,7 @@ function collectAccess() {
 }
 async function saveAccess(event) {
   event.preventDefault(); $('access-save').disabled = true;
-  try { const response = await fetch('/api/rbac', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(collectAccess()) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not save access control'); accessLoaded = false; await loadAccess(); $('access-message').textContent = 'Access control saved.'; $('access-message').classList.add('success'); $('access-message').hidden = false; }
+  try { const response = await fetch('/api/rbac', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(collectAccess()) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not save access control'); clearAccessDraft(); accessLoaded = false; await loadAccess(); $('access-message').textContent = 'Access control saved.'; $('access-message').classList.add('success'); $('access-message').hidden = false; }
   catch (error) { $('access-message').textContent = error.message; $('access-message').classList.remove('success'); $('access-message').hidden = false; }
   finally { $('access-save').disabled = false; }
 }
@@ -401,7 +433,7 @@ async function verifyAccess(startPreview = false) {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not verify access');
     renderAccessExplanation(startPreview ? data.explanation : data);
-    if (startPreview) { location.hash = 'overview'; location.reload(); }
+    if (startPreview) { saveAccessDraft(config); previewNavigation = true; location.hash = 'overview'; location.reload(); }
   } catch (error) {
     $('access-message').textContent = error.message;
     $('access-message').classList.remove('success');
@@ -870,6 +902,7 @@ fetch('/api/session', { cache: 'no-store' }).then(response => response.json()).t
   isAdmin = Boolean(data.isAdmin);
   canManageAccess = Boolean(data.canManageAccess);
   activePreview = data.preview;
+  if (!activePreview && location.hash !== '#access') clearAccessDraft();
   $('admin-actions').hidden = !isAdmin;
   $('refresh').hidden = !isAdmin;
   $('logs-nav').hidden = !isAdmin;
