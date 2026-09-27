@@ -9,6 +9,8 @@ let detailAppId = null;
 let editorConfig = { applications: [], workspaces: [] };
 let cpeMapping = null;
 let cpeDraft = null;
+let lifecycleMapping = null;
+let lifecycleDraft = null;
 let cpeSearchPage = { previousIndex: null, nextIndex: null, startIndex: 0, totalResults: 0 };
 let settingsLoaded = false;
 let logsLoaded = false;
@@ -417,7 +419,8 @@ async function openEditor(mode, targetId = null) {
         <label>Installed version <input name="version" required pattern="[A-Za-z0-9._-]+" placeholder="1.2.3"></label>
         <section class="form-full mapping-summary"><div><span>VULNERABILITY MAPPING</span><strong id="mapping-title">No CPE selected</strong><code id="mapping-cpe"></code><small id="mapping-mode"></small></div><button id="change-cpe" type="button">Choose CPE</button></section>
         <input name="cpeName" type="hidden"><input name="cpeMode" type="hidden"><input name="cpeTitle" type="hidden"><input name="cpeDeprecated" type="hidden"><input name="cpeLastTestedAt" type="hidden"><input name="cpeTestCandidateCount" type="hidden"><input name="cpeTestApplicableCount" type="hidden">
-        <label>Lifecycle product <input name="lifecycleProduct" pattern="[A-Za-z0-9._-]+" placeholder="endoflife.date product ID"></label>
+        <section class="form-full mapping-summary"><div><span>LIFECYCLE MAPPING</span><strong id="lifecycle-title">No lifecycle product selected</strong><code id="lifecycle-product"></code><small id="lifecycle-mode"></small></div><button id="change-lifecycle" type="button">Choose source</button></section>
+        <input name="lifecycleProduct" type="hidden">
         <label>Manual end-of-life date <input name="eolDate" type="date"></label>
         <label>Lifecycle source URL <input name="lifecycleUrl" type="url" placeholder="https://…"></label>
         <label>Vendor security URL <input name="vendorBulletinUrl" type="url" placeholder="https://…"></label>
@@ -427,7 +430,9 @@ async function openEditor(mode, targetId = null) {
         <label>Latest LTS override <input name="latestLtsVersion" placeholder="Optional"></label>
       </div>${targetId ? `<p class="form-hint">Application ID: <code>${escape(targetId)}</code> (immutable)</p>` : ''}<p class="form-hint">Provide a lifecycle product or a manual end-of-life date. Vulnerability mappings use the canonical NVD CPE Dictionary.</p>${editorConfig.workspaces.length ? `<fieldset><legend>Add to workspaces</legend><div class="check-grid">${editorConfig.workspaces.map(group => `<label><input type="checkbox" name="workspace" value="${escape(group.id)}"> ${escape(group.name)}</label>`).join('')}</div></fieldset>` : ''}${editorConfig.feeds?.length ? `<fieldset><legend>Associated feeds</legend><div class="check-grid">${editorConfig.feeds.map(feed => `<label><input type="checkbox" name="feed" value="${escape(feed.id)}"> ${escape(feed.name)}</label>`).join('')}</div></fieldset>` : ''}`;
       $('change-cpe').addEventListener('click', openCpeDialog);
+      $('change-lifecycle').addEventListener('click', openLifecycleDialog);
       cpeMapping = null;
+      lifecycleMapping = null;
       if (targetId) {
         const app = editorConfig.applications.find(item => item.id === targetId);
         if (!app) throw new Error('Application not found');
@@ -438,8 +443,10 @@ async function openEditor(mode, targetId = null) {
         for (const input of $('editor-form').querySelectorAll('[name="workspace"]')) input.checked = Boolean(editorConfig.workspaces.find(group => group.id === input.value)?.applications.includes(targetId));
         for (const input of $('editor-form').querySelectorAll('[name="feed"]')) input.checked = Boolean(editorConfig.feeds.find(feed => feed.id === input.value)?.applicationIds.includes(targetId));
         cpeMapping = { cpeName: app.cpeName || `cpe:2.3:a:${app.cpeVendor}:${app.cpeProduct}:*:*:*:*:${app.cpeEdition || '*'}:*:*:*`, mode: app.cpeMode || 'product', title: app.cpeTitle || app.name, deprecated: app.cpeDeprecated === true || app.cpeDeprecated === 'true', testedAt: app.cpeLastTestedAt || '', candidateCount: app.cpeTestCandidateCount || '', applicableCount: app.cpeTestApplicableCount || '' };
+        if (app.lifecycleProduct) lifecycleMapping = { name: app.lifecycleProduct, label: app.lifecycleProduct, sourceUrl: app.lifecycleUrl || `https://endoflife.date/${app.lifecycleProduct}` };
       }
       renderMappingSummary();
+      renderLifecycleSummary();
     } else {
       $('editor-fields').innerHTML = `<label class="form-full">Workspace to edit <select id="workspace-choice"><option value="">New workspace</option>${editorConfig.workspaces.map(group => `<option value="${escape(group.id)}">${escape(group.name)}</option>`).join('')}</select></label><div class="form-grid"><label>Workspace name <input name="name" required placeholder="Customer, system, or group name"></label></div><p id="workspace-id-label" class="form-hint"></p><label class="form-full notification-emails">Notification emails <input name="notificationEmails" type="text" placeholder="alex@example.com, team@example.com"></label><p class="form-hint">Separate recipients with commas. Leave blank to turn off email for this workspace.</p><fieldset><legend>Applications in this workspace</legend><div class="check-grid">${editorConfig.applications.filter(app => app.enabled !== false).map(app => `<label><input type="checkbox" name="application" value="${escape(app.id)}"> ${escape(app.name)}</label>`).join('') || '<p class="muted">Add an application first.</p>'}</div></fieldset>`;
       $('workspace-choice').addEventListener('change', populateWorkspaceEditor);
@@ -454,6 +461,86 @@ function renderMappingSummary() {
   $('mapping-cpe').textContent = cpeMapping?.cpeName || '';
   $('mapping-mode').textContent = cpeMapping ? `${cpeMapping.mode === 'exact' ? 'Exact CPE' : 'Product mapping'}${cpeMapping.testedAt ? ` · tested ${new Date(cpeMapping.testedAt).toLocaleString()}` : ' · not tested'}` : 'Choose a mapping before saving.';
   for (const [name, value] of Object.entries({ cpeName: cpeMapping?.cpeName || '', cpeMode: cpeMapping?.mode || '', cpeTitle: cpeMapping?.title || '', cpeDeprecated: String(Boolean(cpeMapping?.deprecated)), cpeLastTestedAt: cpeMapping?.testedAt || '', cpeTestCandidateCount: cpeMapping?.candidateCount ?? '', cpeTestApplicableCount: cpeMapping?.applicableCount ?? '' })) form.elements[name].value = value;
+}
+
+function renderLifecycleSummary() {
+  const form = $('editor-form');
+  $('lifecycle-title').textContent = lifecycleMapping?.label || lifecycleMapping?.name || 'No lifecycle product selected';
+  $('lifecycle-product').textContent = lifecycleMapping?.name || '';
+  $('lifecycle-mode').textContent = lifecycleMapping ? `${lifecycleMapping.matchedRelease ? `Matched release ${lifecycleMapping.matchedRelease.cycle}` : 'endoflife.date product'}${lifecycleMapping.testedAt ? ` · tested ${new Date(lifecycleMapping.testedAt).toLocaleString()}` : ''}` : 'Choose an endoflife.date product or use a manual date.';
+  form.elements.lifecycleProduct.value = lifecycleMapping?.name || '';
+  form.elements.lifecycleUrl.value = lifecycleMapping?.sourceUrl || '';
+}
+
+function openLifecycleDialog() {
+  lifecycleDraft = lifecycleMapping ? { ...lifecycleMapping } : null;
+  $('lifecycle-error').hidden = true;
+  $('lifecycle-error').textContent = '';
+  $('lifecycle-search-form').elements.q.value = lifecycleMapping?.name || $('editor-form').elements.name.value;
+  $('lifecycle-search-hint').textContent = cpeMapping ? `Suggested results use ${cpeMapping.title || cpeMapping.cpeName} as a ranking hint.` : 'Select a CPE first for better lifecycle suggestions.';
+  renderLifecycleSelection();
+  $('lifecycle-dialog').showModal();
+  searchLifecycleProducts();
+}
+
+function lifecycleDate(value) {
+  if (value === false) return 'Not announced';
+  if (value === true) return 'Ended';
+  return value || 'Unknown';
+}
+
+function renderLifecycleSelection() {
+  $('lifecycle-selection').hidden = !lifecycleDraft?.product;
+  if (!lifecycleDraft?.product) return;
+  const { product, matchedRelease, warnings = [] } = lifecycleDraft;
+  $('lifecycle-selection-title').textContent = product.label;
+  $('lifecycle-selection-name').textContent = product.name;
+  $('lifecycle-identifiers').innerHTML = product.identifiers.length ? product.identifiers.map(item => `<code>${escape(item.type)}: ${escape(item.id)}</code>`).join('') : '<span class="muted">No package or CPE identifiers published.</span>';
+  $('lifecycle-warnings').innerHTML = warnings.map(item => `<p class="cpe-warning ${escape(item.level)}"><strong>${escape(item.level)}</strong> ${escape(item.message)}</p>`).join('');
+  $('lifecycle-match').innerHTML = matchedRelease ? `<p class="form-error success">Installed version matches release ${escape(matchedRelease.cycle)} · latest ${escape(matchedRelease.latest || 'unavailable')} · EOL ${escape(lifecycleDate(matchedRelease.eol))}</p>` : '<p class="form-hint">Test the installed version before using this mapping.</p>';
+  $('lifecycle-releases').innerHTML = product.releases.slice(0, 30).map(item => `<tr class="${matchedRelease?.cycle === item.cycle ? 'matched' : ''}"><td><strong>${escape(item.label)}</strong></td><td>${escape(item.latest || '—')}</td><td>${escape(item.releaseDate || '—')}</td><td>${escape(lifecycleDate(item.eol))}</td><td>${item.maintained ? '<span class="badge green">Maintained</span>' : '<span class="badge red">Not maintained</span>'}</td></tr>`).join('');
+}
+
+async function searchLifecycleProducts() {
+  const form = new FormData($('lifecycle-search-form'));
+  const params = new URLSearchParams({ q: String(form.get('q') || '').trim(), vendor: $('editor-form').elements.vendor.value.trim(), cpe: cpeMapping?.cpeName || '', category: String(form.get('category') || '') });
+  $('lifecycle-results').innerHTML = '<p class="muted">Searching endoflife.date…</p>';
+  try {
+    const response = await fetch(`/api/lifecycle-products?${params}`, { cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Lifecycle search failed');
+    const category = $('lifecycle-search-form').elements.category;
+    if (category.options.length === 1) for (const name of data.categories) category.add(new Option(name.replace(/-/g, ' '), name));
+    $('lifecycle-results').innerHTML = data.products.length ? `<div class="cpe-table-wrap"><table class="cpe-table"><thead><tr><th>PRODUCT</th><th>IDENTIFIER</th><th>CATEGORY</th><th>TAGS</th></tr></thead><tbody>${data.products.map((item, index) => `<tr tabindex="0" data-lifecycle-index="${index}"><td><div class="lifecycle-result-title"><strong>${escape(item.label)}</strong>${index === 0 && item.score ? '<span class="badge green">Best match</span>' : ''}</div></td><td><code>${escape(item.name)}</code></td><td>${escape(item.category)}</td><td>${escape(item.tags.join(', '))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No lifecycle products matched. Try fewer words or use a manual EOL date.</p>';
+    for (const row of $('lifecycle-results').querySelectorAll('[data-lifecycle-index]')) {
+      const select = () => loadLifecycleProduct(data.products[Number(row.dataset.lifecycleIndex)].name);
+      row.addEventListener('click', select);
+      row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(); } });
+    }
+  } catch (error) { $('lifecycle-results').innerHTML = `<p class="form-error">${escape(error.message)}</p>`; }
+}
+
+async function loadLifecycleProduct(name) {
+  $('lifecycle-error').hidden = true;
+  $('lifecycle-selection').hidden = false;
+  $('lifecycle-selection-title').textContent = 'Loading lifecycle data…';
+  try {
+    const params = new URLSearchParams({ version: $('editor-form').elements.version.value.trim(), cpe: cpeMapping?.cpeName || '' });
+    const response = await fetch(`/api/lifecycle-products/${encodeURIComponent(name)}?${params}`, { cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not load lifecycle product');
+    lifecycleDraft = data;
+    renderLifecycleSelection();
+    $('lifecycle-selection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (error) { $('lifecycle-selection').hidden = true; $('lifecycle-error').textContent = error.message; $('lifecycle-error').hidden = false; }
+}
+
+function useLifecycleMapping() {
+  if (!lifecycleDraft?.product) return;
+  lifecycleMapping = { name: lifecycleDraft.product.name, label: lifecycleDraft.product.label, sourceUrl: lifecycleDraft.sourceUrl, matchedRelease: lifecycleDraft.matchedRelease, testedAt: lifecycleDraft.testedAt };
+  $('editor-form').elements.eolDate.value = '';
+  renderLifecycleSummary();
+  $('lifecycle-dialog').close();
 }
 
 function openCpeDialog() {
@@ -677,6 +764,11 @@ $('cpe-parse').addEventListener('click', parseManualCpe);
 $('cpe-test').addEventListener('click', testCpeMapping);
 $('cpe-use').addEventListener('click', useCpeMapping);
 for (const radio of document.querySelectorAll('[name="cpeMappingMode"]')) radio.addEventListener('change', () => { if (!cpeDraft) return; cpeDraft = { ...cpeDraft, mode: radio.value, warnings: selectedCpeWarnings(cpeDraft, radio.value), testedAt: '', candidateCount: '', applicableCount: '' }; renderCpeWarnings(cpeDraft.warnings); $('cpe-test-result').innerHTML = '<p class="muted">Mapping mode changed. Test the mapping again to validate this query.</p>'; });
+$('lifecycle-close').addEventListener('click', () => $('lifecycle-dialog').close());
+$('lifecycle-search-form').addEventListener('submit', event => { event.preventDefault(); searchLifecycleProducts(); });
+$('lifecycle-search-reset').addEventListener('click', () => { $('lifecycle-search-form').reset(); searchLifecycleProducts(); });
+$('lifecycle-test').addEventListener('click', () => { if (lifecycleDraft?.product) loadLifecycleProduct(lifecycleDraft.product.name); });
+$('lifecycle-use').addEventListener('click', useLifecycleMapping);
 for (const card of document.querySelectorAll('.summary-card[data-filter]')) {
   card.addEventListener('click', () => toggleFilter(card.dataset.filter));
   card.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && activeWorkspace()) { e.preventDefault(); toggleFilter(card.dataset.filter); } });

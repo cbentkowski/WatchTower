@@ -9,6 +9,8 @@
 - Parse complete CPE 2.3 names and support product-level or exact-CPE mapping modes.
 - Test proposed mappings against NVD, preview applicable CVEs, and retain test metadata with the application.
 - Warn about deprecated, overly broad, conflicting, inconclusive, and sampled mappings before they are saved.
+- Search endoflife.date lifecycle products by name, alias, category, and tag with CPE-informed ranking, release-cycle previews, and installed-version validation.
+- Select lifecycle mappings from an in-app dialog while retaining manual end-of-life dates and source URLs for unlisted products.
 
 ### Changed
 

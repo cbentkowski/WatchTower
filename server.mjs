@@ -16,6 +16,7 @@ import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, re
 import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
 import { loadTlsConfiguration } from './tls.mjs';
 import { cpeSearchMatch, effectiveCpe, legacyCpe, mappingFromApp, mappingWarnings, parseCpe23, productCpe } from './cpe.mjs';
+import { matchLifecycleRelease, normalizeLifecycleProduct, searchLifecycleProducts } from './lifecycle.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const applicationVersion = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
@@ -71,6 +72,7 @@ const scanIntervalMs = Number.isFinite(intervalMinutes) && intervalMinutes > 0 ?
 let snapshot = null;
 let refreshPromise = null;
 let nvdLastRequest = 0;
+let lifecycleCatalogCache = null;
 const snapshotReady = readFile(snapshotFile, 'utf8').then(raw => {
   const saved = JSON.parse(raw);
   if (saved.checkedAt && Array.isArray(saved.results) && Array.isArray(saved.workspaces)) snapshot = saved;
@@ -320,6 +322,21 @@ async function fetchNvdJson(url) {
   if (wait) await new Promise(resolve => setTimeout(resolve, wait));
   nvdLastRequest = Date.now();
   return fetchJson(url, 20000, process.env.NVD_API_KEY ? { apiKey: process.env.NVD_API_KEY } : {});
+}
+
+async function lifecycleCatalog() {
+  if (lifecycleCatalogCache && Date.now() - lifecycleCatalogCache.loadedAt < 60 * 60 * 1000) return lifecycleCatalogCache.products;
+  const data = await fetchJson('https://endoflife.date/api/v1/products/', 20000);
+  if (!Array.isArray(data.result)) throw new Error('endoflife.date returned an invalid product catalog');
+  lifecycleCatalogCache = { loadedAt: Date.now(), products: data.result };
+  return lifecycleCatalogCache.products;
+}
+
+async function lifecycleProduct(name) {
+  if (!idPattern.test(name)) throw new Error('Invalid lifecycle product identifier');
+  const data = await fetchJson(`https://endoflife.date/api/v1/products/${encodeURIComponent(name)}/`, 20000);
+  if (!data.result || typeof data.result !== 'object') throw new Error('endoflife.date returned an invalid product record');
+  return normalizeLifecycleProduct(data.result);
 }
 
 function severity(cve) {
@@ -702,6 +719,35 @@ const requestHandler = async (req, res) => {
       if (!data.totalResults) warnings.push({ code: 'no-candidates', level: 'warning', message: 'NVD returned no vulnerability candidates. This is inconclusive; verify the product mapping before saving.' });
       if ((data.totalResults || 0) > candidates.length) warnings.push({ code: 'sampled-results', level: 'info', message: `NVD returned ${data.totalResults} candidates; applicability was previewed against the first ${candidates.length}.` });
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ testedAt: new Date().toISOString(), queryCpe, candidateCount: data.totalResults || 0, testedCandidateCount: candidates.length, applicableCount: applicable.length, sample, warnings })); return;
+    }
+    if (url.pathname === '/api/lifecycle-products' && req.method === 'GET') {
+      const { access } = await authorization(req);
+      if (!access.isAdmin && !access.appEdit.size) { forbidden(res, 'Application Editor role required'); return; }
+      const query = String(url.searchParams.get('q') || '').trim();
+      const vendor = String(url.searchParams.get('vendor') || '').trim();
+      const cpe = String(url.searchParams.get('cpe') || '').trim();
+      const category = String(url.searchParams.get('category') || '').trim();
+      for (const value of [query, vendor, cpe, category]) if (value.length > 200 || /[\u0000-\u001f]/.test(value)) throw new Error('Lifecycle search fields must contain at most 200 printable characters');
+      const catalog = await lifecycleCatalog();
+      const products = searchLifecycleProducts(catalog, { query, vendor, cpe, category }).slice(0, 50);
+      const categories = [...new Set(catalog.map(item => String(item.category || '')).filter(Boolean))].sort();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ products, categories })); return;
+    }
+    const lifecycleRoute = url.pathname.match(/^\/api\/lifecycle-products\/([A-Za-z0-9._-]+)$/);
+    if (lifecycleRoute && req.method === 'GET') {
+      const { access } = await authorization(req);
+      if (!access.isAdmin && !access.appEdit.size) { forbidden(res, 'Application Editor role required'); return; }
+      const product = await lifecycleProduct(lifecycleRoute[1]);
+      const version = String(url.searchParams.get('version') || '').trim();
+      const matchedRelease = matchLifecycleRelease(product.releases, version);
+      const selectedCpe = String(url.searchParams.get('cpe') || '');
+      const cpeIdentifiers = product.identifiers.filter(item => item.type === 'cpe').map(item => item.id);
+      const cpeIdentity = selectedCpe ? cpeIdentifiers.some(item => selectedCpe.startsWith(`${item}:`) || selectedCpe === item) : null;
+      const warnings = [];
+      if (version && !matchedRelease) warnings.push({ level: 'warning', message: `Installed version ${version} did not match a known ${product.label} release cycle.` });
+      if (selectedCpe && cpeIdentifiers.length && !cpeIdentity) warnings.push({ level: 'warning', message: 'The selected CPE does not match the CPE identifiers published for this lifecycle product.' });
+      if (cpeIdentity) warnings.push({ level: 'info', message: 'The lifecycle product publishes an identifier matching the selected CPE.' });
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ product, matchedRelease, cpeIdentity, warnings, testedAt: new Date().toISOString(), sourceUrl: product.links.html || `https://endoflife.date/${product.name}` })); return;
     }
     if (url.pathname === '/api/feeds' && req.method === 'GET') {
       const { apps, feeds, access } = await authorization(req);
