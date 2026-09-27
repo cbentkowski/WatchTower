@@ -24,20 +24,44 @@ Focus: make application-to-CPE mapping easier to configure and safer to trust.
 - Warn about deprecated, overly broad, malformed, empty, or otherwise suspicious mappings.
 - Store the canonical CPE, parsed fields, mapping mode, and last test metadata while keeping implementation fields out of the ordinary application editor.
 
-## 0.7.0 - Steward
+## 0.7.0 - Vantage
 
-Focus: connect findings to responsible teams and a recorded response process.
+Focus: make delegated access understandable and verifiable without requiring separate identity-provider test users.
+
+- Add a persistent Permission Preview mode for administrators and delegated access administrators.
+- Preview the effective access produced by a saved identity mapping or a selected combination of proposed grants before changes are saved.
+- Apply previewed permissions on the server so navigation, visible resources, controls, and authorization results match the selected access.
+- Keep the underlying administrator session intact and display an always-visible banner that identifies the previewed access and provides a reliable exit action.
+- Keep preview sessions read-only while showing which actions the previewed access would permit.
+- Explain which identity mappings, roles, scopes, resources, and combined grants produce each effective permission.
+- Add a delegated Access Administrator role with safeguards that prevent it from assigning or modifying protected administrator access.
+- Record access-control changes and Permission Preview activity in the audit log.
+- Add automated authorization coverage for individual roles, scoped grants, combined grants, unmatched users, and protected-administrator boundaries.
+
+## 0.8.0 - Steward
+
+Focus: connect applications and findings to responsible teams and meaningful operational context.
 
 - Add reusable owners with primary and escalation contact information.
 - Add application context including criticality, environment, exposure, tags, and owner assignments.
+
+## 0.9.0 - Resolve
+
+Focus: give applicable findings a recorded and accountable response process.
+
 - Add finding states such as New, Investigating, Remediation planned, Mitigated, Resolved, Risk accepted, Not affected, and False positive.
 - Record assignee, due date, notes, actor, timestamps, and optional risk-acceptance expiration.
 - Add an optional ticket URL compatible with Jira, ServiceNow, GitHub Issues, Azure DevOps, and similar systems.
 - Reopen findings when relevant evidence changes or a temporary disposition expires.
+
+## 0.10.0 - Relay
+
+Focus: route relevant findings to the right people at the right time.
+
 - Replace the single notification behavior with policies based on severity, exploitation evidence, application context, ownership, workspace, finding state, and age.
 - Support immediate delivery, digest windows, reminder intervals, and escalation routing without requiring a ticketing-system integration.
 
-## 0.8.0 - Signal
+## 0.11.0 - Signal
 
 Focus: help users decide which applicable vulnerabilities deserve attention first.
 
@@ -48,7 +72,7 @@ Focus: help users decide which applicable vulnerabilities deserve attention firs
 - Add priority filters and make priority signals available to notification policies.
 - Clearly communicate the freshness, source, and limitations of prioritization data.
 
-## 0.9.0 - Chronicle
+## 0.12.0 - Chronicle
 
 Focus: make changes and remediation progress visible without requiring users to reconstruct events from raw logs.
 
@@ -112,9 +136,12 @@ Milestone release branches use `feature/<version>-<title>`. Spaces and punctuati
 Examples:
 
 - `feature/0.6.0-Cartographer`
-- `feature/0.7.0-Steward`
-- `feature/0.8.0-Signal`
-- `feature/0.9.0-Chronicle`
+- `feature/0.7.0-Vantage`
+- `feature/0.8.0-Steward`
+- `feature/0.9.0-Resolve`
+- `feature/0.10.0-Relay`
+- `feature/0.11.0-Signal`
+- `feature/0.12.0-Chronicle`
 - `feature/1.0.0-Keystone`
 
 Post-1.0 work will receive names and release branches after it is divided into specific 1.x versions.
