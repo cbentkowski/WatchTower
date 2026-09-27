@@ -99,6 +99,12 @@ WatchTower uses `x.y.z` release numbers with a deliberate separation between fix
 
 Feature work is assigned to a minor or major milestone rather than being added to a planned patch release. Urgent fixes may be released from the current supported feature line without waiting for the next minor release.
 
+## Release process
+
+Each version PR is assigned to its release milestone and must pass the required checks before it is merged into `main`. After the merge commit passes the same test, security, and container publishing workflow, WatchTower creates an annotated `vX.Y.Z` tag and a GitHub release from the matching curated file in `release-notes/`.
+
+Release notes summarize user-visible changes without issue or pull-request links. Each release also links to its immutable version tag in the `devynn76/watchtower` Docker Hub repository. The `latest` container tag continues to identify the newest successfully published version.
+
 ## Release branch naming
 
 Milestone release branches use `feature/<version>-<title>`. Spaces and punctuation are removed from the title, and the first letter of each word is capitalized.
