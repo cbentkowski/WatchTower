@@ -89,6 +89,16 @@ Focus: preserve the lightweight file-backed experience while allowing larger ins
 
 The initial supported migration direction is expected to be files to database. Continuous bidirectional synchronization is not planned.
 
+## Versioning policy
+
+WatchTower uses `x.y.z` release numbers with a deliberate separation between fixes and features:
+
+- `z` patch releases contain bug fixes, security fixes, dependency maintenance, and documentation corrections without adding product features.
+- `y` minor releases contain backward-compatible features and enhancements and may also include accumulated fixes.
+- `x` major releases are reserved for substantial product changes, major new capabilities, or compatibility-breaking changes.
+
+Feature work is assigned to a minor or major milestone rather than being added to a planned patch release. Urgent fixes may be released from the current supported feature line without waiting for the next minor release.
+
 ## Release branch naming
 
 Milestone release branches use `feature/<version>-<title>`. Spaces and punctuation are removed from the title, and the first letter of each word is capitalized.
