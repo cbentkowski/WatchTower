@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.0] - Unreleased
+
+### Added
+
+- Add optional native HTTPS with mounted certificate-chain and private-key files while retaining HTTP as the default listener.
+- Keep the configured public protocol, hostname, and port independent from the internal listener for reverse proxies, Istio, OIDC callbacks, and notification links.
+
+### Security
+
+- Fail closed at startup when native TLS is enabled with missing, empty, unreadable, malformed, or mismatched certificate files, and require TLS 1.2 or newer.
+- Keep OIDC as the authentication mechanism; native HTTPS does not request or validate client certificates.
+
+### Fixed
+
+- Send newly discovered Critical and known-exploited vulnerability alerts immediately once, while limiting High, EOL, and repeat reminders to the configured 24-hour local-time window.
+
 ## [0.4.1] - Unreleased
 
 ### Added

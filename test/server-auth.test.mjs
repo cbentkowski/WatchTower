@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
-import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { request } from 'node:https';
 
 async function freePort() {
   const socket = createServer();
@@ -12,6 +13,19 @@ async function freePort() {
   const port = socket.address().port;
   await new Promise(resolve => socket.close(resolve));
   return port;
+}
+
+function httpsGet(url) {
+  return new Promise((resolve, reject) => {
+    const req = request(url, { rejectUnauthorized: false }, response => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', chunk => { body += chunk; });
+      response.on('end', () => resolve({ status: response.statusCode, body }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
 }
 
 test('server refuses to start without OIDC or an explicit private-development override', async () => {
@@ -23,6 +37,73 @@ test('server refuses to start without OIDC or an explicit private-development ov
   const code = await new Promise(resolve => child.on('exit', resolve));
   assert.notEqual(code, 0);
   assert.match(errors, /OIDC is required/);
+});
+
+test('server fails closed when native TLS is enabled without certificate files', async () => {
+  const env = { ...process.env, AUTO_SCAN: 'false', AUTH_DISABLED: 'true', TLS_ENABLED: 'true' };
+  for (const name of ['TLS_CERT_FILE', 'TLS_KEY_FILE']) delete env[name];
+  const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve(import.meta.dirname, '..'), env, stdio: ['ignore', 'ignore', 'pipe'] });
+  let errors = '';
+  child.stderr.on('data', chunk => { errors += chunk; });
+  const code = await new Promise(resolve => child.on('exit', resolve));
+  assert.notEqual(code, 0);
+  assert.match(errors, /TLS_CERT_FILE and TLS_KEY_FILE are required/);
+});
+
+test('native HTTPS serves the health endpoint from mounted certificate files', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'watchtower-tls-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const config = path.join(directory, 'config');
+  await mkdir(config);
+  await writeFile(path.join(config, 'general.yaml'), 'general:\n  protocol: "http"\n  host: "public.example"\n  port: 80\n');
+  const cert = path.join(directory, 'certificate.pem');
+  const key = path.join(directory, 'private-key.pem');
+  const generated = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-sha256', '-days', '1', '-subj', '/CN=localhost', '-keyout', key, '-out', cert], { encoding: 'utf8' });
+  assert.equal(generated.status, 0, generated.stderr);
+  const port = await freePort();
+  const child = spawn(process.execPath, ['server.mjs'], {
+    cwd: path.resolve(import.meta.dirname, '..'),
+    env: { ...process.env, HOST: '127.0.0.1', SERVER_PORT: String(port), CONFIG_DIR: config, DEFAULT_CONFIG_DIR: path.resolve(import.meta.dirname, '..', 'config'), DATA_DIR: path.join(directory, 'data'), AUTO_SCAN: 'false', AUTH_DISABLED: 'true', TLS_ENABLED: 'true', TLS_CERT_FILE: cert, TLS_KEY_FILE: key },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  let errors = '';
+  child.stderr.on('data', chunk => { errors += chunk; });
+  try {
+    let health;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      try { health = await httpsGet(`https://127.0.0.1:${port}/healthz`); break; }
+      catch { await new Promise(resolve => setTimeout(resolve, 100)); }
+    }
+    assert.ok(health, `HTTPS server started: ${errors}`);
+    assert.equal(health.status, 200);
+    assert.deepEqual(JSON.parse(health.body), { status: 'ok' });
+    const settings = await httpsGet(`https://127.0.0.1:${port}/api/settings`);
+    assert.equal(settings.status, 200);
+    assert.deepEqual(JSON.parse(settings.body).general, { protocol: 'http', host: 'public.example', port: 80 });
+  } finally { child.kill(); }
+});
+
+test('server fails closed when the native TLS private key does not match the certificate', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'watchtower-tls-mismatch-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const cert = path.join(directory, 'certificate.pem');
+  const firstKey = path.join(directory, 'first-key.pem');
+  const secondCert = path.join(directory, 'second-certificate.pem');
+  const secondKey = path.join(directory, 'second-key.pem');
+  for (const [outputCert, outputKey, commonName] of [[cert, firstKey, 'first'], [secondCert, secondKey, 'second']]) {
+    const generated = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-sha256', '-days', '1', '-subj', `/CN=${commonName}`, '-keyout', outputKey, '-out', outputCert], { encoding: 'utf8' });
+    assert.equal(generated.status, 0, generated.stderr);
+  }
+  const child = spawn(process.execPath, ['server.mjs'], {
+    cwd: path.resolve(import.meta.dirname, '..'),
+    env: { ...process.env, AUTO_SCAN: 'false', AUTH_DISABLED: 'true', TLS_ENABLED: 'true', TLS_CERT_FILE: cert, TLS_KEY_FILE: secondKey },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  let errors = '';
+  child.stderr.on('data', chunk => { errors += chunk; });
+  const code = await new Promise(resolve => child.on('exit', resolve));
+  assert.notEqual(code, 0);
+  assert.match(errors, /Native TLS initialization failed/);
 });
 
 test('configured OIDC protects real HTTP routes before the API handler', async () => {
