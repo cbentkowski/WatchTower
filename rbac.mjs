@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile, writeFile, rename } from 'node:fs/promises';
 
 export const standardRoles = Object.freeze({
+  'access-administrator': { name: 'Access Administrator', scopes: ['global'] },
   'workspace-viewer': { name: 'Workspace Viewer', scopes: ['workspace'] },
   'workspace-manager': { name: 'Workspace Manager', scopes: ['workspace'] },
   'workspace-membership-manager': { name: 'Workspace Membership Manager', scopes: ['workspace'] },
@@ -82,11 +83,12 @@ export function validateRbacInput(input, apps, workspaces, feeds = []) {
 }
 
 export function calculateAccess(user, config, apps, workspaces, feeds = []) {
-  if (user?.isAdmin || user?.issuer === 'local') return { isAdmin: true, scan: true, feedManage: true, feedView: new Set(feeds.map(f => f.id)), feedEdit: new Set(feeds.map(f => f.id)), appView: new Set(apps.map(a => a.id)), appEdit: new Set(apps.map(a => a.id)), workspaceView: new Set(workspaces.map(w => w.id)), workspaceEdit: new Set(workspaces.map(w => w.id)), workspaceMembership: new Set(workspaces.map(w => w.id)), workspaceNotifications: new Set(workspaces.map(w => w.id)) };
+  if (user?.isAdmin || user?.issuer === 'local') return { isAdmin: true, accessManage: true, scan: true, feedManage: true, feedView: new Set(feeds.map(f => f.id)), feedEdit: new Set(feeds.map(f => f.id)), appView: new Set(apps.map(a => a.id)), appEdit: new Set(apps.map(a => a.id)), workspaceView: new Set(workspaces.map(w => w.id)), workspaceEdit: new Set(workspaces.map(w => w.id)), workspaceMembership: new Set(workspaces.map(w => w.id)), workspaceNotifications: new Set(workspaces.map(w => w.id)) };
   const claims = user?.claims || {};
   const matched = new Set(config.groups.filter(group => group.enabled && (claims[group.claimSource] || []).includes(group.claimValue)).map(group => group.id));
-  const access = { isAdmin: false, scan: false, feedManage: false, feedView: new Set(), feedEdit: new Set(), appView: new Set(), appEdit: new Set(), workspaceView: new Set(), workspaceEdit: new Set(), workspaceMembership: new Set(), workspaceNotifications: new Set() };
+  const access = { isAdmin: false, accessManage: false, scan: false, feedManage: false, feedView: new Set(), feedEdit: new Set(), appView: new Set(), appEdit: new Set(), workspaceView: new Set(), workspaceEdit: new Set(), workspaceMembership: new Set(), workspaceNotifications: new Set() };
   for (const grant of config.grants.filter(item => matched.has(item.groupId))) {
+    if (grant.scopeType === 'global' && grant.roles.includes('access-administrator')) access.accessManage = true;
     if (grant.scopeType === 'global' && grant.roles.includes('scan-operator')) access.scan = true;
     if (grant.scopeType === 'global' && grant.roles.includes('feed-manager')) { access.feedManage = true; for (const feed of feeds) { access.feedView.add(feed.id); access.feedEdit.add(feed.id); } }
     if (grant.scopeType === 'feed') for (const id of grant.resourceIds) {
@@ -113,4 +115,47 @@ export function calculateAccess(user, config, apps, workspaces, feeds = []) {
   return access;
 }
 
-export function accessJson(access) { return { isAdmin: access.isAdmin, scan: access.scan, feeds: { manage: access.feedManage, view: [...access.feedView], edit: [...access.feedEdit] }, applications: { view: [...access.appView], edit: [...access.appEdit] }, workspaces: { view: [...access.workspaceView], edit: [...access.workspaceEdit], membership: [...access.workspaceMembership], notifications: [...access.workspaceNotifications] } }; }
+export function accessJson(access) { return { isAdmin: access.isAdmin, accessManage: access.accessManage, scan: access.scan, feeds: { manage: access.feedManage, view: [...access.feedView], edit: [...access.feedEdit] }, applications: { view: [...access.appView], edit: [...access.appEdit] }, workspaces: { view: [...access.workspaceView], edit: [...access.workspaceEdit], membership: [...access.workspaceMembership], notifications: [...access.workspaceNotifications] } }; }
+
+export function claimsForIdentityMappings(config, groupIds) {
+  const selected = new Set(groupIds || []);
+  const claims = { groups: [], roles: [], 'realm_access.roles': [], 'resource_access.roles': [] };
+  for (const group of config.groups.filter(item => selected.has(item.id))) claims[group.claimSource].push(group.claimValue);
+  for (const source of Object.keys(claims)) claims[source] = [...new Set(claims[source])];
+  return claims;
+}
+
+export function protectedRoleState(config, roleId) {
+  const grants = config.grants.filter(grant => grant.roles.includes(roleId)).map(grant => ({ ...grant, roles: [...grant.roles].sort(), resourceIds: [...grant.resourceIds].sort() })).sort((a, b) => a.id.localeCompare(b.id));
+  const groupIds = new Set(grants.map(grant => grant.groupId));
+  const groups = config.groups.filter(group => groupIds.has(group.id)).sort((a, b) => a.id.localeCompare(b.id));
+  return JSON.stringify({ groups, grants });
+}
+
+export function explainAccess(config, groupIds, apps, workspaces, feeds = []) {
+  const selected = new Set(groupIds || []);
+  const unknown = [...selected].filter(id => !config.groups.some(group => group.id === id));
+  if (unknown.length) throw new Error('Permission verification references an unknown identity mapping');
+  const claims = claimsForIdentityMappings(config, [...selected]);
+  const access = calculateAccess({ issuer: 'permission-preview', claims }, config, apps, workspaces, feeds);
+  const matched = new Set(config.groups.filter(group => group.enabled && selected.has(group.id)).map(group => group.id));
+  const resources = { application: new Map(apps.map(item => [item.id, item.name])), workspace: new Map(workspaces.map(item => [item.id, item.name])), feed: new Map(feeds.map(item => [item.id, item.name])) };
+  const grants = config.grants.filter(grant => matched.has(grant.groupId)).map(grant => ({
+    id: grant.id,
+    identity: config.groups.find(group => group.id === grant.groupId)?.name || grant.groupId,
+    scopeType: grant.scopeType,
+    roles: grant.roles.map(id => ({ id, name: standardRoles[id].name })),
+    resources: grant.scopeType === 'global' ? [] : grant.resourceIds.map(id => ({ id, name: resources[grant.scopeType].get(id) || id })),
+  }));
+  const names = (items, ids) => [...ids].map(id => ({ id, name: items.find(item => item.id === id)?.name || id }));
+  return {
+    selectedMappings: config.groups.filter(group => selected.has(group.id)).map(group => ({ id: group.id, name: group.name, claimSource: group.claimSource, claimValue: group.claimValue, enabled: group.enabled })),
+    grants,
+    access: accessJson(access),
+    effective: {
+      applications: { view: names(apps, access.appView), edit: names(apps, access.appEdit) },
+      workspaces: { view: names(workspaces, access.workspaceView), edit: names(workspaces, access.workspaceEdit), membership: names(workspaces, access.workspaceMembership), notifications: names(workspaces, access.workspaceNotifications) },
+      feeds: { view: names(feeds, access.feedView), edit: names(feeds, access.feedEdit) },
+    },
+  };
+}

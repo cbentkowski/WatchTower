@@ -20,7 +20,15 @@ let feedData = { feeds: [], applications: [], canManage: false };
 let currentFeedId = null;
 let accessData = null;
 let isAdmin = false;
-let permissions = { scan: false, feeds: { manage: false, view: [], edit: [] }, applications: { view: [], edit: [] }, workspaces: { view: [], edit: [], membership: [], notifications: [] } };
+let canManageAccess = false;
+let activePreview = null;
+let renderedHash = location.hash;
+let previewNavigation = false;
+const selectedMappingIds = new Set();
+const selectedGrantIds = new Set();
+const accessDraftKey = 'watchtower-access-preview-draft';
+const accessDraftLifetime = 8 * 60 * 60 * 1000;
+let permissions = { accessManage: false, scan: false, feeds: { manage: false, view: [], edit: [] }, applications: { view: [], edit: [] }, workspaces: { view: [], edit: [], membership: [], notifications: [] } };
 const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeUrl = (url) => { try { const u = new URL(url); return u.protocol === 'https:' ? u.href : '#'; } catch { return '#'; } };
 const labels = { red: 'Needs action', yellow: 'Approaching EOL', green: 'Clear', unknown: 'Unknown' };
@@ -61,6 +69,14 @@ function renderSidebar() {
 }
 
 function renderView() {
+  if (renderedHash === '#access' && location.hash !== '#access' && !activePreview && !previewNavigation) {
+    clearAccessDraft();
+    accessLoaded = false;
+    accessData = null;
+    selectedMappingIds.clear();
+    selectedGrantIds.clear();
+  }
+  renderedHash = location.hash;
   const settingsPage = location.hash === '#settings';
   const logsPage = location.hash === '#logs';
   const accessPage = location.hash === '#access';
@@ -338,7 +354,7 @@ async function testEmailSettings() {
 }
 
 function identityRow(group = {}) {
-  return `<article class="access-row identity-row" data-id="${escape(group.id || '')}"><div class="form-grid"><label>Display name <input data-field="name" required value="${escape(group.name || '')}" placeholder="Infrastructure Admins"></label><label>Claim source <select data-field="claimSource"><option value="groups">groups</option><option value="roles">roles</option><option value="realm_access.roles">realm_access.roles</option><option value="resource_access.roles">resource_access.roles</option></select></label><label class="form-full">Exact claim value <input data-field="claimValue" required value="${escape(group.claimValue || '')}" placeholder="Group UUID or role name"></label></div><label><input data-field="enabled" type="checkbox" ${group.enabled === false ? '' : 'checked'}> Enabled</label><button class="remove-access" type="button">Remove</button>${group.id ? `<small>ID: <code>${escape(group.id)}</code></small>` : ''}</article>`;
+  return `<article class="access-row identity-row" data-id="${escape(group.id || '')}"><div class="form-grid"><label>Display name <input data-field="name" required value="${escape(group.name || '')}" placeholder="Infrastructure Admins"></label><label>Claim source <select data-field="claimSource"><option value="groups">groups</option><option value="roles">roles</option><option value="realm_access.roles">realm_access.roles</option><option value="resource_access.roles">resource_access.roles</option></select></label><label class="form-full">Exact claim value <input data-field="claimValue" required value="${escape(group.claimValue || '')}" placeholder="Group UUID or role name"></label></div><div class="identity-options"><label><input data-field="enabled" type="checkbox" ${group.enabled === false ? '' : 'checked'}> Enabled</label><label><input data-preview-mapping type="checkbox" ${selectedMappingIds.has(group.id) ? 'checked' : ''}> Include in verification</label></div><button class="remove-access" type="button">Remove</button>${group.id ? `<small>ID: <code>${escape(group.id)}</code></small>` : ''}</article>`;
 }
 
 function grantRow(grant = {}) {
@@ -347,7 +363,7 @@ function grantRow(grant = {}) {
   const roleOptions = Object.entries(accessData?.roles || {}).filter(([, value]) => value.scopes.includes(scope));
   const resources = scope === 'workspace' ? accessData?.workspaces || [] : scope === 'application' ? accessData?.applications || [] : scope === 'feed' ? accessData?.feeds || [] : [];
   const resourceTitle = scope === 'workspace' ? 'Workspaces' : scope === 'application' ? 'Applications' : 'Feeds';
-  return `<article class="access-row grant-row" data-id="${escape(grant.id || '')}"><div class="form-grid"><label>Identity mapping <select data-field="groupId" required>${groups.map(group => `<option value="${escape(group.id)}" ${group.id === grant.groupId ? 'selected' : ''}>${escape(group.name)}</option>`).join('')}</select></label><label>Scope <select data-field="scopeType"><option value="workspace" ${scope === 'workspace' ? 'selected' : ''}>Workspace</option><option value="application" ${scope === 'application' ? 'selected' : ''}>Application</option><option value="feed" ${scope === 'feed' ? 'selected' : ''}>Feed</option><option value="global" ${scope === 'global' ? 'selected' : ''}>Global</option></select></label></div><fieldset><legend>Roles</legend><div class="check-grid">${roleOptions.map(([id, role]) => `<label><input data-role="${escape(id)}" type="checkbox" ${grant.roles?.includes(id) ? 'checked' : ''}> ${escape(role.name)}</label>`).join('')}</div></fieldset>${scope === 'global' ? '' : `<fieldset><legend>${resourceTitle}</legend><select data-field="resourceIds" multiple size="5">${resources.map(item => `<option value="${escape(item.id)}" ${grant.resourceIds?.includes(item.id) ? 'selected' : ''}>${escape(resourceLabel(item, resources))}</option>`).join('')}</select></fieldset>`}<button class="remove-access" type="button">Remove</button>${grant.id ? `<small>ID: <code>${escape(grant.id)}</code></small>` : ''}</article>`;
+  return `<article class="access-row grant-row" data-id="${escape(grant.id || '')}"><div class="form-grid"><label>Identity mapping <select data-field="groupId" required>${groups.map(group => `<option value="${escape(group.id)}" ${group.id === grant.groupId ? 'selected' : ''}>${escape(group.name)}</option>`).join('')}</select></label><label>Scope <select data-field="scopeType"><option value="workspace" ${scope === 'workspace' ? 'selected' : ''}>Workspace</option><option value="application" ${scope === 'application' ? 'selected' : ''}>Application</option><option value="feed" ${scope === 'feed' ? 'selected' : ''}>Feed</option><option value="global" ${scope === 'global' ? 'selected' : ''}>Global</option></select></label></div><fieldset><legend>Roles</legend><div class="check-grid">${roleOptions.map(([id, role]) => `<label><input data-role="${escape(id)}" type="checkbox" ${grant.roles?.includes(id) ? 'checked' : ''}> ${escape(role.name)}</label>`).join('')}</div></fieldset>${scope === 'global' ? '' : `<fieldset><legend>${resourceTitle}</legend><select data-field="resourceIds" multiple size="5">${resources.map(item => `<option value="${escape(item.id)}" ${grant.resourceIds?.includes(item.id) ? 'selected' : ''}>${escape(resourceLabel(item, resources))}</option>`).join('')}</select></fieldset>`}<label class="verification-option"><input data-preview-grant type="checkbox" ${selectedGrantIds.has(grant.id) ? 'checked' : ''}> Include this grant in verification</label><button class="remove-access" type="button">Remove</button>${grant.id ? `<small>ID: <code>${escape(grant.id)}</code></small>` : ''}</article>`;
 }
 
 function resourceLabel(item, list) { return list.filter(other => other.name === item.name).length > 1 ? `${item.name} (${item.id})` : item.name; }
@@ -357,9 +373,29 @@ function renderAccess() {
   $('session-claims').textContent = JSON.stringify(accessData.session, null, 2);
   for (const row of $('identity-list').querySelectorAll('.identity-row')) row.querySelector('[data-field="claimSource"]').value = accessData.groups.find(item => item.id === row.dataset.id)?.claimSource || 'groups';
 }
+function clearAccessDraft() {
+  try { sessionStorage.removeItem(accessDraftKey); } catch {}
+}
+function saveAccessDraft(config) {
+  try {
+    sessionStorage.setItem(accessDraftKey, JSON.stringify({ config, mappingIds: [...selectedMappingIds], grantIds: [...selectedGrantIds], expires: Date.now() + accessDraftLifetime }));
+  } catch {}
+}
+function restoreAccessDraft() {
+  try {
+    const draft = JSON.parse(sessionStorage.getItem(accessDraftKey) || 'null');
+    if (!draft || draft.expires <= Date.now() || !Array.isArray(draft.config?.groups) || !Array.isArray(draft.config?.grants)) { clearAccessDraft(); return false; }
+    accessData = { ...accessData, groups: draft.config.groups, grants: draft.config.grants };
+    selectedMappingIds.clear();
+    for (const id of draft.mappingIds || []) selectedMappingIds.add(id);
+    selectedGrantIds.clear();
+    for (const id of draft.grantIds || []) selectedGrantIds.add(id);
+    return true;
+  } catch { clearAccessDraft(); return false; }
+}
 async function loadAccess() {
   accessLoaded = true;
-  try { const response = await fetch('/api/rbac', { cache: 'no-store' }); accessData = await response.json(); if (!response.ok) throw new Error(accessData.error || 'Could not load access control'); renderAccess(); }
+  try { const response = await fetch('/api/rbac', { cache: 'no-store' }); accessData = await response.json(); if (!response.ok) throw new Error(accessData.error || 'Could not load access control'); if (!restoreAccessDraft()) { selectedMappingIds.clear(); selectedGrantIds.clear(); for (const grant of accessData.grants) selectedGrantIds.add(grant.id); } renderAccess(); }
   catch (error) { accessLoaded = false; $('access-message').textContent = error.message; $('access-message').hidden = false; }
 }
 function collectAccess() {
@@ -369,16 +405,52 @@ function collectAccess() {
 }
 async function saveAccess(event) {
   event.preventDefault(); $('access-save').disabled = true;
-  try { const response = await fetch('/api/rbac', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(collectAccess()) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not save access control'); accessLoaded = false; await loadAccess(); $('access-message').textContent = 'Access control saved.'; $('access-message').classList.add('success'); $('access-message').hidden = false; }
+  try { const response = await fetch('/api/rbac', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(collectAccess()) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not save access control'); clearAccessDraft(); accessLoaded = false; await loadAccess(); $('access-message').textContent = 'Access control saved.'; $('access-message').classList.add('success'); $('access-message').hidden = false; }
   catch (error) { $('access-message').textContent = error.message; $('access-message').classList.remove('success'); $('access-message').hidden = false; }
   finally { $('access-save').disabled = false; }
+}
+
+function accessList(title, items) {
+  return `<div><strong>${escape(title)}</strong>${items.length ? `<ul>${items.map(item => `<li>${escape(item.name)}</li>`).join('')}</ul>` : '<p class="muted">None</p>'}</div>`;
+}
+
+function renderAccessExplanation(data) {
+  const mappings = data.selectedMappings.length ? data.selectedMappings.map(item => `${item.name}${item.enabled ? '' : ' (disabled)'}`).join(', ') : 'Unmatched authenticated user';
+  const grants = data.grants.length ? data.grants.map(grant => `<article><strong>${escape(grant.identity)}</strong><span>${escape(grant.scopeType)}</span><p>${grant.roles.map(role => escape(role.name)).join(', ')}</p>${grant.resources.length ? `<small>${grant.resources.map(item => escape(item.name)).join(', ')}</small>` : ''}</article>`).join('') : '<p class="muted">No grants matched.</p>';
+  const globals = [data.access.accessManage ? 'Access Administrator' : '', data.access.scan ? 'Scan Operator' : '', data.access.feeds.manage ? 'Feed Manager' : ''].filter(Boolean).map(name => ({ name }));
+  $('access-explanation').innerHTML = `<div class="verification-summary"><span>SELECTED IDENTITY</span><strong>${escape(mappings)}</strong></div><h3>Contributing grants</h3><div class="verification-grants">${grants}</div><h3>Effective permissions</h3><div class="verification-grid">${accessList('Global', globals)}${accessList('Applications visible', data.effective.applications.view)}${accessList('Applications editable', data.effective.applications.edit)}${accessList('Workspaces visible', data.effective.workspaces.view)}${accessList('Workspaces manageable', data.effective.workspaces.edit)}${accessList('Workspace membership', data.effective.workspaces.membership)}${accessList('Workspace notifications', data.effective.workspaces.notifications)}${accessList('Feeds visible', data.effective.feeds.view)}${accessList('Feeds editable', data.effective.feeds.edit)}</div>`;
+}
+
+async function verifyAccess(startPreview = false) {
+  const button = startPreview ? $('access-preview') : $('access-evaluate');
+  button.disabled = true;
+  $('access-message').hidden = true;
+  try {
+    const config = collectAccess();
+    const selected = config.groups.filter(group => selectedMappingIds.has(group.id));
+    const name = selected.map(group => group.name).filter(Boolean).join(' + ') || 'Unmatched authenticated user';
+    const response = await fetch(startPreview ? '/api/rbac/preview' : '/api/rbac/evaluate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ config, mappingIds: [...selectedMappingIds], grantIds: [...selectedGrantIds], name }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not verify access');
+    renderAccessExplanation(startPreview ? data.explanation : data);
+    if (startPreview) { saveAccessDraft(config); previewNavigation = true; location.hash = 'overview'; location.reload(); }
+  } catch (error) {
+    $('access-message').textContent = error.message;
+    $('access-message').classList.remove('success');
+    $('access-message').hidden = false;
+  } finally { button.disabled = false; }
 }
 
 function render(data) {
   allResults = data.results || [];
   workspaces = data.workspaces || [];
   permissions = data.access || permissions;
-  isAdmin = Boolean(permissions.isAdmin || isAdmin);
+  isAdmin = Boolean(permissions.isAdmin);
+  canManageAccess = Boolean(permissions.accessManage);
+  $('admin-actions').hidden = !isAdmin;
+  $('logs-nav').hidden = !isAdmin;
+  $('settings-nav').hidden = !isAdmin;
+  $('access-nav').hidden = !canManageAccess;
   $('refresh').hidden = !(isAdmin || permissions.scan);
   $('feeds-nav').hidden = !(isAdmin || permissions.feeds?.view?.length || permissions.feeds?.manage);
   $('updated').textContent = `Checked ${new Date(data.checkedAt).toLocaleString()}`;
@@ -791,9 +863,21 @@ $('logs-refresh').addEventListener('click', loadLogs);
 $('settings-form').addEventListener('submit', saveSettings);
 $('settings-test-email').addEventListener('click', testEmailSettings);
 $('access-form').addEventListener('submit', saveAccess);
+$('access-evaluate').addEventListener('click', () => verifyAccess(false));
+$('access-preview').addEventListener('click', () => verifyAccess(true));
+$('identity-list').addEventListener('change', event => {
+  if (!event.target.matches('[data-preview-mapping]')) return;
+  const id = event.target.closest('.identity-row').dataset.id;
+  if (event.target.checked) selectedMappingIds.add(id); else selectedMappingIds.delete(id);
+});
+$('grant-list').addEventListener('change', event => {
+  if (!event.target.matches('[data-preview-grant]')) return;
+  const id = event.target.closest('.grant-row').dataset.id;
+  if (event.target.checked) selectedGrantIds.add(id); else selectedGrantIds.delete(id);
+});
 $('add-identity').addEventListener('click', () => { accessData.groups = [...collectAccess().groups, { id: crypto.randomUUID(), name: '', claimSource: 'groups', claimValue: '', enabled: true }]; accessData.grants = collectAccess().grants; renderAccess(); });
-$('add-grant').addEventListener('click', () => { const current = collectAccess(); accessData.groups = current.groups; accessData.grants = [...current.grants, { id: crypto.randomUUID(), groupId: current.groups[0]?.id || '', scopeType: 'workspace', roles: [], resourceIds: [] }]; renderAccess(); });
-$('access-form').addEventListener('click', event => { const button = event.target.closest('.remove-access'); if (!button) return; const row = button.closest('.access-row'); const current = collectAccess(); accessData.groups = current.groups.filter(item => row.classList.contains('identity-row') ? item.id !== row.dataset.id : true); accessData.grants = current.grants.filter(item => row.classList.contains('grant-row') ? item.id !== row.dataset.id : item.groupId !== row.dataset.id); renderAccess(); });
+$('add-grant').addEventListener('click', () => { const current = collectAccess(); const id = crypto.randomUUID(); selectedGrantIds.add(id); accessData.groups = current.groups; accessData.grants = [...current.grants, { id, groupId: current.groups[0]?.id || '', scopeType: 'workspace', roles: [], resourceIds: [] }]; renderAccess(); });
+$('access-form').addEventListener('click', event => { const button = event.target.closest('.remove-access'); if (!button) return; const row = button.closest('.access-row'); const current = collectAccess(); if (row.classList.contains('identity-row')) { selectedMappingIds.delete(row.dataset.id); for (const grant of current.grants.filter(item => item.groupId === row.dataset.id)) selectedGrantIds.delete(grant.id); } if (row.classList.contains('grant-row')) selectedGrantIds.delete(row.dataset.id); accessData.groups = current.groups.filter(item => row.classList.contains('identity-row') ? item.id !== row.dataset.id : true); accessData.grants = current.grants.filter(item => row.classList.contains('grant-row') ? item.id !== row.dataset.id : item.groupId !== row.dataset.id); renderAccess(); });
 $('grant-list').addEventListener('change', event => { if (event.target.dataset.field !== 'scopeType') return; const current = collectAccess(); accessData.groups = current.groups; accessData.grants = current.grants; renderAccess(); });
 $('settings-form').querySelector('[name="unauthenticated"]').addEventListener('change', updateCredentialFields);
 $('settings-form').querySelector('[name="enabled"]').addEventListener('change', updateCredentialFields);
@@ -816,18 +900,34 @@ $('details').addEventListener('click', e => { if (e.target === $('details')) $('
 setTheme(document.documentElement.dataset.theme || 'light');
 fetch('/api/session', { cache: 'no-store' }).then(response => response.json()).then(data => {
   isAdmin = Boolean(data.isAdmin);
+  canManageAccess = Boolean(data.canManageAccess);
+  activePreview = data.preview;
+  if (!activePreview && location.hash !== '#access') clearAccessDraft();
   $('admin-actions').hidden = !isAdmin;
   $('refresh').hidden = !isAdmin;
   $('logs-nav').hidden = !isAdmin;
   $('settings-nav').hidden = !isAdmin;
-  $('access-nav').hidden = !isAdmin;
-  if (!isAdmin && ['#settings', '#logs', '#access'].includes(location.hash)) location.hash = 'overview';
+  $('access-nav').hidden = !canManageAccess;
+  $('preview-banner').hidden = !activePreview;
+  if (activePreview) $('preview-name').textContent = activePreview.name;
+  if (!isAdmin && ['#settings', '#logs'].includes(location.hash)) location.hash = 'overview';
+  if (!canManageAccess && location.hash === '#access') location.hash = 'overview';
   renderView();
   if (data.enabled) {
     $('signed-in-user').textContent = data.user;
     $('logout-form').hidden = false;
   }
 }).catch(() => {});
+$('preview-exit').addEventListener('click', async () => {
+  $('preview-exit').disabled = true;
+  try {
+    const response = await fetch('/api/rbac/preview', { method: 'DELETE' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not exit Permission Preview');
+    location.hash = 'access';
+    location.reload();
+  } catch (error) { alert(error.message); $('preview-exit').disabled = false; }
+});
 load();
 setInterval(() => { if (!document.hidden) load(false, true); }, 60_000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) load(false, true); });

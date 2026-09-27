@@ -1,6 +1,21 @@
 # Changelog
 
-## [0.6.0] - Unreleased
+## [0.7.0] - Unreleased
+
+### Added
+
+- Preview the effective permissions of saved or proposed identity-mapping and grant combinations without creating additional identity-provider users.
+- Enforce Permission Preview throughout the server in a read-only session with a persistent identity banner and reliable exit action.
+- Restore unsaved Access Control edits and verification selections after Permission Preview, while clearing the browser-session draft after saving or leaving Access Control.
+- Explain the identity mappings, roles, scopes, resources, and combined grants that produce effective application, workspace, feed, scan, and access-administration permissions.
+- Delegate access-control management through a protected Access Administrator role without granting application, feed, scan, settings, or system-administrator access.
+
+### Security
+
+- Prevent Permission Preview from performing mutations and bind each in-memory preview to the authenticated session that created it.
+- Restrict Access Administrator assignment changes to protected administrators.
+
+## [0.6.0] - 2026-09-27
 
 ### Added
 
