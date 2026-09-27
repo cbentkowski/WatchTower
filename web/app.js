@@ -7,6 +7,9 @@ let editorMode = null;
 let editorTargetId = null;
 let detailAppId = null;
 let editorConfig = { applications: [], workspaces: [] };
+let cpeMapping = null;
+let cpeDraft = null;
+let cpeSearchPage = { previousIndex: null, nextIndex: null, startIndex: 0, totalResults: 0 };
 let settingsLoaded = false;
 let logsLoaded = false;
 let accessLoaded = false;
@@ -412,10 +415,8 @@ async function openEditor(mode, targetId = null) {
         <label>Display name <input name="name" required placeholder="Application name"></label>
         <label>Vendor <input name="vendor" placeholder="Vendor name"></label>
         <label>Installed version <input name="version" required pattern="[A-Za-z0-9._-]+" placeholder="1.2.3"></label>
-        <label>CPE vendor <input name="cpeVendor" required pattern="[A-Za-z0-9._-]+" placeholder="vendor"></label>
-        <label>CPE product <input name="cpeProduct" required pattern="[A-Za-z0-9._-]+" placeholder="product"></label>
-        <label>CPE edition <input name="cpeEdition" pattern="[A-Za-z0-9._-]+" placeholder="Optional"></label>
-        <div class="form-full cpe-search"><label>NVD CPE search</label><div class="cpe-search-row"><input id="cpe-query" type="search" placeholder="Search product or vendor"><button id="cpe-search-button" type="button">Search NVD</button></div><div id="cpe-results" class="cpe-results"></div></div>
+        <section class="form-full mapping-summary"><div><span>VULNERABILITY MAPPING</span><strong id="mapping-title">No CPE selected</strong><code id="mapping-cpe"></code><small id="mapping-mode"></small></div><button id="change-cpe" type="button">Choose CPE</button></section>
+        <input name="cpeName" type="hidden"><input name="cpeMode" type="hidden"><input name="cpeTitle" type="hidden"><input name="cpeDeprecated" type="hidden"><input name="cpeLastTestedAt" type="hidden"><input name="cpeTestCandidateCount" type="hidden"><input name="cpeTestApplicableCount" type="hidden">
         <label>Lifecycle product <input name="lifecycleProduct" pattern="[A-Za-z0-9._-]+" placeholder="endoflife.date product ID"></label>
         <label>Manual end-of-life date <input name="eolDate" type="date"></label>
         <label>Lifecycle source URL <input name="lifecycleUrl" type="url" placeholder="https://…"></label>
@@ -424,8 +425,9 @@ async function openEditor(mode, targetId = null) {
         <label>Latest version override <input name="latestVersion" placeholder="Optional"></label>
         <label>Latest installed-line override <input name="latestBranchVersion" placeholder="Optional"></label>
         <label>Latest LTS override <input name="latestLtsVersion" placeholder="Optional"></label>
-      </div>${targetId ? `<p class="form-hint">Application ID: <code>${escape(targetId)}</code> (immutable)</p>` : ''}<p class="form-hint">Provide a lifecycle product or a manual end-of-life date. CPE search results come directly from NVD.</p>${editorConfig.workspaces.length ? `<fieldset><legend>Add to workspaces</legend><div class="check-grid">${editorConfig.workspaces.map(group => `<label><input type="checkbox" name="workspace" value="${escape(group.id)}"> ${escape(group.name)}</label>`).join('')}</div></fieldset>` : ''}${editorConfig.feeds?.length ? `<fieldset><legend>Associated feeds</legend><div class="check-grid">${editorConfig.feeds.map(feed => `<label><input type="checkbox" name="feed" value="${escape(feed.id)}"> ${escape(feed.name)}</label>`).join('')}</div></fieldset>` : ''}`;
-      $('cpe-search-button').addEventListener('click', searchCpes);
+      </div>${targetId ? `<p class="form-hint">Application ID: <code>${escape(targetId)}</code> (immutable)</p>` : ''}<p class="form-hint">Provide a lifecycle product or a manual end-of-life date. Vulnerability mappings use the canonical NVD CPE Dictionary.</p>${editorConfig.workspaces.length ? `<fieldset><legend>Add to workspaces</legend><div class="check-grid">${editorConfig.workspaces.map(group => `<label><input type="checkbox" name="workspace" value="${escape(group.id)}"> ${escape(group.name)}</label>`).join('')}</div></fieldset>` : ''}${editorConfig.feeds?.length ? `<fieldset><legend>Associated feeds</legend><div class="check-grid">${editorConfig.feeds.map(feed => `<label><input type="checkbox" name="feed" value="${escape(feed.id)}"> ${escape(feed.name)}</label>`).join('')}</div></fieldset>` : ''}`;
+      $('change-cpe').addEventListener('click', openCpeDialog);
+      cpeMapping = null;
       if (targetId) {
         const app = editorConfig.applications.find(item => item.id === targetId);
         if (!app) throw new Error('Application not found');
@@ -435,7 +437,9 @@ async function openEditor(mode, targetId = null) {
         }
         for (const input of $('editor-form').querySelectorAll('[name="workspace"]')) input.checked = Boolean(editorConfig.workspaces.find(group => group.id === input.value)?.applications.includes(targetId));
         for (const input of $('editor-form').querySelectorAll('[name="feed"]')) input.checked = Boolean(editorConfig.feeds.find(feed => feed.id === input.value)?.applicationIds.includes(targetId));
+        cpeMapping = { cpeName: app.cpeName || `cpe:2.3:a:${app.cpeVendor}:${app.cpeProduct}:*:*:*:*:${app.cpeEdition || '*'}:*:*:*`, mode: app.cpeMode || 'product', title: app.cpeTitle || app.name, deprecated: app.cpeDeprecated === true || app.cpeDeprecated === 'true', testedAt: app.cpeLastTestedAt || '', candidateCount: app.cpeTestCandidateCount || '', applicableCount: app.cpeTestApplicableCount || '' };
       }
+      renderMappingSummary();
     } else {
       $('editor-fields').innerHTML = `<label class="form-full">Workspace to edit <select id="workspace-choice"><option value="">New workspace</option>${editorConfig.workspaces.map(group => `<option value="${escape(group.id)}">${escape(group.name)}</option>`).join('')}</select></label><div class="form-grid"><label>Workspace name <input name="name" required placeholder="Customer, system, or group name"></label></div><p id="workspace-id-label" class="form-hint"></p><label class="form-full notification-emails">Notification emails <input name="notificationEmails" type="text" placeholder="alex@example.com, team@example.com"></label><p class="form-hint">Separate recipients with commas. Leave blank to turn off email for this workspace.</p><fieldset><legend>Applications in this workspace</legend><div class="check-grid">${editorConfig.applications.filter(app => app.enabled !== false).map(app => `<label><input type="checkbox" name="application" value="${escape(app.id)}"> ${escape(app.name)}</label>`).join('') || '<p class="muted">Add an application first.</p>'}</div></fieldset>`;
       $('workspace-choice').addEventListener('change', populateWorkspaceEditor);
@@ -444,26 +448,113 @@ async function openEditor(mode, targetId = null) {
   } catch (error) { $('editor-fields').innerHTML = ''; $('editor-error').textContent = error.message; $('editor-error').hidden = false; }
 }
 
-async function searchCpes() {
-  const query = $('cpe-query').value.trim();
-  const results = $('cpe-results');
-  if (query.length < 2) { results.innerHTML = '<p class="form-error">Enter at least two characters.</p>'; return; }
-  results.innerHTML = '<p class="muted">Searching NVD…</p>';
+function renderMappingSummary() {
+  const form = $('editor-form');
+  $('mapping-title').textContent = cpeMapping?.title || 'No CPE selected';
+  $('mapping-cpe').textContent = cpeMapping?.cpeName || '';
+  $('mapping-mode').textContent = cpeMapping ? `${cpeMapping.mode === 'exact' ? 'Exact CPE' : 'Product mapping'}${cpeMapping.testedAt ? ` · tested ${new Date(cpeMapping.testedAt).toLocaleString()}` : ' · not tested'}` : 'Choose a mapping before saving.';
+  for (const [name, value] of Object.entries({ cpeName: cpeMapping?.cpeName || '', cpeMode: cpeMapping?.mode || '', cpeTitle: cpeMapping?.title || '', cpeDeprecated: String(Boolean(cpeMapping?.deprecated)), cpeLastTestedAt: cpeMapping?.testedAt || '', cpeTestCandidateCount: cpeMapping?.candidateCount ?? '', cpeTestApplicableCount: cpeMapping?.applicableCount ?? '' })) form.elements[name].value = value;
+}
+
+function openCpeDialog() {
+  cpeDraft = cpeMapping ? { ...cpeMapping } : null;
+  $('cpe-error').hidden = true;
+  renderCpeSelection();
+  $('cpe-dialog').showModal();
+  $('cpe-search-form').elements.any.focus();
+}
+
+function renderCpeSelection() {
+  $('cpe-selection').hidden = !cpeDraft;
+  if (!cpeDraft) return;
+  $('cpe-selection-title').textContent = cpeDraft.title || cpeDraft.cpeName;
+  $('cpe-selection-name').textContent = cpeDraft.cpeName;
+  const components = ['part','vendor','product','version','update','edition','language','swEdition','targetSw','targetHw','other'];
+  $('cpe-components').innerHTML = components.map(name => `<div><span>${escape(name)}</span><strong>${escape(cpeDraft[name] || '—')}</strong></div>`).join('');
+  const mode = cpeDraft.mode === 'exact' ? 'exact' : 'product';
+  document.querySelector(`[name="cpeMappingMode"][value="${mode}"]`).checked = true;
+  $('cpe-test-result').innerHTML = cpeDraft.testedAt ? `<p class="form-error success">Last test: ${escape(new Date(cpeDraft.testedAt).toLocaleString())} · ${escape(cpeDraft.candidateCount)} candidates · ${escape(cpeDraft.applicableCount)} applicable in tested results</p>` : '';
+  renderCpeWarnings(cpeDraft.warnings || []);
+}
+
+function renderCpeWarnings(warnings) {
+  $('cpe-warnings').innerHTML = warnings.map(item => `<p class="cpe-warning ${escape(item.level)}"><strong>${escape(item.level)}</strong> ${escape(item.message)}</p>`).join('');
+}
+
+function selectedCpeWarnings(item, mode = 'product') {
+  const warnings = [];
+  if (item.deprecated) {
+    const replacement = item.replacements?.[0];
+    warnings.push({ code: 'deprecated', level: 'danger', message: replacement ? `This CPE is deprecated. Suggested replacement: ${replacement}` : 'This CPE is deprecated. Select its replacement when one is available.' });
+  }
+  if (mode === 'product') warnings.push({ code: 'product-wildcard', level: 'info', message: 'Product mode ignores the CPE version and evaluates the installed version against NVD affected ranges.' });
+  if (mode === 'exact' && ['*', '-'].includes(item.version)) warnings.push({ code: 'broad-exact', level: 'warning', message: 'Exact mode still contains a wildcard or not-applicable version and may be broader than expected.' });
+  const installedVersion = $('editor-form').elements.version.value.trim();
+  if (mode === 'exact' && installedVersion && !['*', '-', installedVersion].includes(item.version)) warnings.push({ code: 'version-conflict', level: 'danger', message: `The exact CPE version (${item.version}) differs from the installed version (${installedVersion}).` });
+  const qualified = ['update','edition','language','swEdition','targetSw','targetHw','other'].filter(name => !['*', '-', ''].includes(item[name]));
+  if (mode === 'product' && qualified.length) warnings.push({ code: 'qualifiers-ignored', level: 'warning', message: `Product mode ignores these exact qualifiers: ${qualified.join(', ')}.` });
+  return warnings;
+}
+
+async function searchCpes(startIndex = 0) {
+  const form = new FormData($('cpe-search-form'));
+  const params = new URLSearchParams();
+  for (const name of ['any','part','vendor','product','version','edition']) if (form.get(name)?.trim()) params.set(name, form.get(name).trim());
+  if (![...params.values()].length) { $('cpe-results').innerHTML = '<p class="form-error">Enter at least one search field.</p>'; return; }
+  if (form.get('includeDeprecated')) params.set('includeDeprecated', 'true');
+  params.set('startIndex', String(startIndex));
+  $('cpe-results').innerHTML = '<p class="muted">Searching NVD…</p>';
+  $('cpe-pagination').hidden = true;
   try {
-    const response = await fetch(`/api/cpes?q=${encodeURIComponent(query)}`, { cache: 'no-store' });
+    const response = await fetch(`/api/cpes?${params}`, { cache: 'no-store' });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'CPE search failed');
-    results.innerHTML = data.results.length ? data.results.map((item, index) => `<button class="cpe-result" type="button" data-cpe-index="${index}">${escape(item.title)}<small>${escape(item.cpeName)}</small></button>`).join('') : '<p class="muted">No application CPEs found.</p>';
-    for (const button of results.querySelectorAll('[data-cpe-index]')) button.addEventListener('click', () => {
-      const item = data.results[Number(button.dataset.cpeIndex)];
-      const form = $('editor-form');
-      form.elements.cpeVendor.value = item.vendor;
-      form.elements.cpeProduct.value = item.product;
-      form.elements.cpeEdition.value = item.edition;
-      if (!form.elements.version.value && item.version && item.version !== '*') form.elements.version.value = item.version;
-      results.innerHTML = `<p class="success">Selected ${escape(item.cpeName)}</p>`;
-    });
-  } catch (error) { results.innerHTML = `<p class="form-error">${escape(error.message)}</p>`; }
+    $('cpe-results').innerHTML = data.results.length ? `<div class="cpe-table-wrap"><table class="cpe-table"><thead><tr><th>PRODUCT</th><th>VENDOR</th><th>VERSION</th><th>EDITION</th><th>STATUS</th></tr></thead><tbody>${data.results.map((item, index) => `<tr tabindex="0" data-cpe-index="${index}"><td><strong>${escape(item.title)}</strong><code>${escape(item.cpeName)}</code></td><td>${escape(item.vendor)}</td><td>${escape(item.version)}</td><td>${escape(item.edition)}</td><td>${item.deprecated ? '<span class="badge red">Deprecated</span>' : '<span class="badge green">Current</span>'}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No CPEs matched this page. Refine the fields or continue to the next NVD page.</p>';
+    cpeSearchPage = data;
+    $('cpe-pagination').hidden = data.previousIndex == null && data.nextIndex == null;
+    $('cpe-previous').disabled = data.previousIndex == null;
+    $('cpe-next').disabled = data.nextIndex == null;
+    $('cpe-page-status').textContent = `${data.totalResults.toLocaleString()} NVD records · starting at ${data.startIndex + 1}`;
+    for (const row of $('cpe-results').querySelectorAll('[data-cpe-index]')) {
+      const select = () => { const item = data.results[Number(row.dataset.cpeIndex)]; cpeDraft = { ...item, mode: 'product', warnings: selectedCpeWarnings(item), testedAt: '', candidateCount: '', applicableCount: '' }; renderCpeSelection(); $('cpe-selection').scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+      row.addEventListener('click', select);
+      row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(); } });
+    }
+  } catch (error) { $('cpe-results').innerHTML = `<p class="form-error">${escape(error.message)}</p>`; }
+}
+
+async function parseManualCpe() {
+  try {
+    const response = await fetch('/api/cpes/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cpeName: $('cpe-manual-value').value, mode: 'product', version: $('editor-form').elements.version.value }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not parse CPE');
+    cpeDraft = { ...data.mapping, title: data.mapping.cpeName, warnings: data.warnings, testedAt: '', candidateCount: '', applicableCount: '' };
+    renderCpeSelection();
+  } catch (error) { $('cpe-error').textContent = error.message; $('cpe-error').hidden = false; }
+}
+
+async function testCpeMapping() {
+  if (!cpeDraft) return;
+  $('cpe-test').disabled = true;
+  $('cpe-test').textContent = 'Testing…';
+  $('cpe-test-result').innerHTML = '<p class="muted">Querying NVD and evaluating affected version ranges…</p>';
+  try {
+    const mode = document.querySelector('[name="cpeMappingMode"]:checked').value;
+    const response = await fetch('/api/cpes/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cpeName: cpeDraft.cpeName, mode, deprecated: cpeDraft.deprecated, version: $('editor-form').elements.version.value }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Mapping test failed');
+    cpeDraft = { ...cpeDraft, mode, testedAt: data.testedAt, candidateCount: data.candidateCount, applicableCount: data.applicableCount, warnings: data.warnings };
+    renderCpeWarnings(data.warnings);
+    $('cpe-test-result').innerHTML = `<div class="cpe-test-summary"><strong>${data.candidateCount.toLocaleString()} candidates</strong><strong>${data.applicableCount.toLocaleString()} applicable in tested results</strong><code>${escape(data.queryCpe)}</code></div>${data.sample.length ? data.sample.map(item => `<article><a href="${safeUrl(item.url)}" target="_blank" rel="noopener noreferrer">${escape(item.id)} ↗</a><small>${escape(item.published || '')}</small><p>${escape(item.description)}</p></article>`).join('') : '<p class="muted">No applicable CVEs were found in the tested results. This does not prove that the mapping is correct or the product is vulnerability-free.</p>'}`;
+  } catch (error) { $('cpe-test-result').innerHTML = `<p class="form-error">${escape(error.message)}</p>`; }
+  finally { $('cpe-test').disabled = false; $('cpe-test').textContent = 'Test this mapping'; }
+}
+
+function useCpeMapping() {
+  if (!cpeDraft) return;
+  cpeMapping = { ...cpeDraft, mode: document.querySelector('[name="cpeMappingMode"]:checked').value };
+  renderMappingSummary();
+  $('cpe-dialog').close();
 }
 
 function populateWorkspaceEditor() {
@@ -507,6 +598,7 @@ async function saveEditor(event) {
   const fields = new FormData(form);
   const currentWorkspace = editorMode === 'workspace' && editorTargetId ? editorConfig.workspaces.find(group => group.id === editorTargetId) : null;
   const payload = editorMode === 'app' ? Object.fromEntries([...fields].filter(([key]) => !['workspace', 'feed'].includes(key))) : { name: fields.get('name'), notificationEmails: fields.get('notificationEmails'), applications: currentWorkspace && !isAdmin && !permissions.workspaces.membership.includes(currentWorkspace.id) ? currentWorkspace.applications : fields.getAll('application') };
+  if (editorMode === 'app' && !payload.cpeName) { $('editor-error').textContent = 'Choose a vulnerability mapping before saving.'; $('editor-error').hidden = false; return; }
   if (editorMode === 'app' && !payload.lifecycleProduct && !payload.eolDate) { $('editor-error').textContent = 'Enter a lifecycle product or manual end-of-life date.'; $('editor-error').hidden = false; return; }
   $('editor-save').disabled = true;
   $('editor-save').textContent = 'Saving…';
@@ -574,6 +666,15 @@ $('edit-app').addEventListener('click', () => { const id = detailAppId; $('detai
 $('editor-form').addEventListener('submit', saveEditor);
 $('editor-close').addEventListener('click', () => $('editor').close());
 $('editor-cancel').addEventListener('click', () => $('editor').close());
+$('cpe-close').addEventListener('click', () => $('cpe-dialog').close());
+$('cpe-search-form').addEventListener('submit', event => { event.preventDefault(); searchCpes(0); });
+$('cpe-search-reset').addEventListener('click', () => { $('cpe-search-form').reset(); $('cpe-results').innerHTML = '<p class="muted">Search the NVD CPE Dictionary or paste a complete CPE below.</p>'; $('cpe-pagination').hidden = true; });
+$('cpe-previous').addEventListener('click', () => searchCpes(cpeSearchPage.previousIndex));
+$('cpe-next').addEventListener('click', () => searchCpes(cpeSearchPage.nextIndex));
+$('cpe-parse').addEventListener('click', parseManualCpe);
+$('cpe-test').addEventListener('click', testCpeMapping);
+$('cpe-use').addEventListener('click', useCpeMapping);
+for (const radio of document.querySelectorAll('[name="cpeMappingMode"]')) radio.addEventListener('change', () => { if (!cpeDraft) return; cpeDraft = { ...cpeDraft, mode: radio.value, warnings: selectedCpeWarnings(cpeDraft, radio.value), testedAt: '', candidateCount: '', applicableCount: '' }; renderCpeWarnings(cpeDraft.warnings); $('cpe-test-result').innerHTML = '<p class="muted">Mapping mode changed. Test the mapping again to validate this query.</p>'; });
 for (const card of document.querySelectorAll('.summary-card[data-filter]')) {
   card.addEventListener('click', () => toggleFilter(card.dataset.filter));
   card.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && activeWorkspace()) { e.preventDefault(); toggleFilter(card.dataset.filter); } });
