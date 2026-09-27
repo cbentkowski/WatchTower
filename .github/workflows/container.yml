@@ -25,8 +25,63 @@ env:
   ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:stable
 
 jobs:
+  classify:
+    name: Classify changes
+    runs-on: ubuntu-latest
+    outputs:
+      application_changed: ${{ steps.changes.outputs.application_changed }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Detect documentation-only changes
+        id: changes
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "application_changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base="$BEFORE_SHA"
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base="$PR_BASE_SHA"
+          elif [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+            base="$GITHUB_SHA^"
+          fi
+          documentation_only=true
+          while IFS= read -r file; do
+            [[ "$file" == *.md ]] || documentation_only=false
+          done < <(git diff --name-only "$base" "$GITHUB_SHA")
+          if [[ "$documentation_only" == "true" ]]; then
+            echo "application_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "application_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  documentation:
+    name: Documentation checks
+    needs: [classify]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: Validate documentation links and anchors
+        shell: bash
+        run: node .github/scripts/check-docs.mjs $(git ls-files '*.md')
+
   test:
     name: Node.js tests
+    needs: [classify]
+    if: needs.classify.outputs.application_changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -43,6 +98,8 @@ jobs:
 
   source-security:
     name: Source security
+    needs: [classify]
+    if: needs.classify.outputs.application_changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out full history
@@ -113,7 +170,12 @@ jobs:
 
   container-security:
     name: Container security
-    needs: [test, source-security]
+    needs: [classify, test, source-security]
+    if: >-
+      always() &&
+      needs.classify.outputs.application_changed == 'true' &&
+      needs.test.result == 'success' &&
+      needs.source-security.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -234,8 +296,14 @@ jobs:
 
   publish:
     name: Publish container
-    needs: [test, source-security, container-security]
-    if: github.actor != 'dependabot[bot]'
+    needs: [classify, test, source-security, container-security]
+    if: >-
+      always() &&
+      needs.classify.outputs.application_changed == 'true' &&
+      needs.test.result == 'success' &&
+      needs.source-security.result == 'success' &&
+      needs.container-security.result == 'success' &&
+      github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
