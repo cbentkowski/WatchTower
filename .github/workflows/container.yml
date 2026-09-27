@@ -291,3 +291,91 @@ jobs:
         env:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign sign --yes "devynn76/watchtower@${IMAGE_DIGEST}"
+
+  release:
+    name: Tag and publish release
+    needs: [publish]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check for a version change
+        id: version_change
+        shell: bash
+        run: |
+          if git diff --quiet "$GITHUB_SHA^" "$GITHUB_SHA" -- package.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Read and validate release metadata
+        if: steps.version_change.outputs.changed == 'true'
+        id: release
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          tag="v${version}"
+          notes="release-notes/${tag}.md"
+          if [[ ! -s "$notes" ]]; then
+            echo "Missing release notes: $notes"
+            exit 1
+          fi
+          if grep -Eqi 'github\.com/.+/(issues|pull)/|(^|[[:space:]])#[0-9]+' "$notes"; then
+            echo "Release notes must not link or refer to issues or pull requests."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "notes=$notes" >> "$GITHUB_OUTPUT"
+      - name: Create annotated version tag
+        if: steps.version_change.outputs.changed == 'true'
+        id: tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          git fetch --tags --force
+          if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+            tagged_commit="$(git rev-list -n 1 "$TAG")"
+            if [[ "$tagged_commit" != "$GITHUB_SHA" ]]; then
+              echo "$TAG already points to $tagged_commit, not tested commit $GITHUB_SHA."
+              exit 1
+            fi
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "publish=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag --annotate "$TAG" --message "WatchTower $TAG"
+            git push origin "$TAG"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build release changelog
+        if: steps.tag.outputs.publish == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          NOTES: ${{ steps.release.outputs.notes }}
+        run: |
+          cp "$NOTES" "$RUNNER_TEMP/release-notes.md"
+          {
+            echo
+            echo "## Container image"
+            echo
+            echo "[devynn76/watchtower:${VERSION}](https://hub.docker.com/r/devynn76/watchtower/tags?name=${VERSION})"
+          } >> "$RUNNER_TEMP/release-notes.md"
+      - name: Publish GitHub release
+        if: steps.tag.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: gh release create "$TAG" --verify-tag --title "WatchTower $TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
