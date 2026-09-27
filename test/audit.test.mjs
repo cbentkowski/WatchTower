@@ -36,7 +36,7 @@ test('application, workspace, and settings edits appear in audit logs', async ()
     }
     assert.equal(ready, true);
     const settings = await (await fetch(`${origin}/api/settings`)).json();
-    assert.equal(settings.version, '0.5.0');
+    assert.equal(settings.version, '0.6.0');
 
     const app = { name: 'Test App', version: '1.0', cpeVendor: 'example', cpeProduct: 'testapp', eolDate: '2030-01-01' };
     const appResponse = await post('/api/applications', app);

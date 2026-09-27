@@ -1,3 +1,5 @@
+import { mappingFromApp, productCpe } from './cpe.mjs';
+
 function versionParts(value) {
   return String(value ?? '').toLowerCase().split(/[._+~-]/).map(part => /^\d+$/.test(part) ? Number(part) : part);
 }
@@ -15,18 +17,19 @@ export function compareNvdVersions(left, right) {
   return 0;
 }
 
-function cpeFields(value) {
-  const fields = String(value || '').split(':');
-  return { part: fields[2] || '', vendor: fields[3] || '', product: fields[4] || '', version: fields[5] || '*', edition: fields[9] || '*' };
-}
-
 function same(value, expected) { return value === '*' || value === expected; }
 
 export function cpeMatchAffectsVersion(match, app) {
   if (!match?.vulnerable) return false;
-  const criteria = cpeFields(match.criteria);
-  if (!same(criteria.part, 'a') || !same(criteria.vendor, app.cpeVendor) || !same(criteria.product, app.cpeProduct)) return false;
-  if (app.cpeEdition && !same(criteria.edition, app.cpeEdition)) return false;
+  let criteria;
+  try { criteria = mappingFromApp({ cpeName: match.criteria }); } catch { return false; }
+  const selected = mappingFromApp(app);
+  if (!same(criteria.part, selected.part) || !same(criteria.vendor, selected.vendor) || !same(criteria.product, selected.product)) return false;
+  if (selected.mode === 'exact') {
+    for (const name of ['update', 'edition', 'language', 'swEdition', 'targetSw', 'targetHw', 'other']) {
+      if (!['*', '-'].includes(selected[name]) && !same(criteria[name], selected[name])) return false;
+    }
+  }
   const version = app.version;
   if (!['*', '-'].includes(criteria.version) && criteria.version !== version) return false;
   if (match.versionStartIncluding && compareNvdVersions(version, match.versionStartIncluding) < 0) return false;
@@ -41,5 +44,6 @@ export function cveAffectsApplication(cve, app) {
 }
 
 export function wildcardApplicationCpe(app) {
-  return `cpe:2.3:a:${app.cpeVendor}:${app.cpeProduct}:*:*:*:*:${app.cpeEdition || '*'}:*:*:*`;
+  const selected = mappingFromApp(app);
+  return selected.mode === 'exact' ? selected.cpeName : productCpe(selected);
 }

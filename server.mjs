@@ -15,6 +15,8 @@ import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, st
 import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, readFeeds, secureFetchText, validateFeedInput, writeFeeds } from './feeds.mjs';
 import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
 import { loadTlsConfiguration } from './tls.mjs';
+import { cpeSearchMatch, effectiveCpe, legacyCpe, mappingFromApp, mappingWarnings, parseCpe23, productCpe } from './cpe.mjs';
+import { matchLifecycleRelease, normalizeLifecycleProduct, searchLifecycleProducts } from './lifecycle.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const applicationVersion = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
@@ -70,6 +72,7 @@ const scanIntervalMs = Number.isFinite(intervalMinutes) && intervalMinutes > 0 ?
 let snapshot = null;
 let refreshPromise = null;
 let nvdLastRequest = 0;
+let lifecycleCatalogCache = null;
 const snapshotReady = readFile(snapshotFile, 'utf8').then(raw => {
   const saved = JSON.parse(raw);
   if (saved.checkedAt && Array.isArray(saved.results) && Array.isArray(saved.workspaces)) snapshot = saved;
@@ -149,18 +152,37 @@ function parseInventory(source, includeDisabled = false, allowLegacyIds = false)
       if (!/^[A-Za-z0-9._-]+$/.test(app[key])) throw new Error(`Invalid ${key} for ${app.name}`);
     }
     if (app.cpeEdition && !/^[A-Za-z0-9._-]+$/.test(app.cpeEdition)) throw new Error(`Invalid cpeEdition for ${app.name}`);
+    if (app.cpeMode && !['product', 'exact'].includes(app.cpeMode)) throw new Error(`Invalid cpeMode for ${app.name}`);
+    const hadCanonicalCpe = Boolean(app.cpeName);
+    const mapping = mappingFromApp(app);
+    app.cpeName = mapping.cpeName;
+    app.cpeMode = mapping.mode;
+    app.cpeTitle ||= app.name;
+    Object.defineProperty(app, '_needsCpeMigration', { value: !hadCanonicalCpe, enumerable: false });
   }
   if (new Set(apps.map(a => a.id)).size !== apps.length) throw new Error('Application IDs must be unique');
   return includeDisabled ? apps : apps.filter(a => a.enabled !== false);
 }
 
-const appFields = ['id', 'legacyId', 'name', 'vendor', 'version', 'cpeVendor', 'cpeProduct', 'cpeEdition', 'lifecycleProduct', 'eolDate', 'lifecycleUrl', 'vendorBulletinUrl', 'releaseUrl', 'latestVersion', 'latestBranchVersion', 'latestLtsVersion'];
+const appFields = ['id', 'legacyId', 'name', 'vendor', 'version', 'cpeName', 'cpeMode', 'cpeTitle', 'cpeDeprecated', 'cpeLastTestedAt', 'cpeTestCandidateCount', 'cpeTestApplicableCount', 'cpeVendor', 'cpeProduct', 'cpeEdition', 'lifecycleProduct', 'eolDate', 'lifecycleUrl', 'vendorBulletinUrl', 'releaseUrl', 'latestVersion', 'latestBranchVersion', 'latestLtsVersion'];
 const idPattern = /^[A-Za-z0-9._-]+$/;
 function cleanApp(input, existingId = '') {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Application details are required');
   const app = Object.fromEntries(appFields.map(key => [key, String(key === 'id' && existingId ? existingId : input[key] ?? '').trim()]));
-  for (const key of ['id', 'name', 'version', 'cpeVendor', 'cpeProduct']) if (!app[key]) throw new Error(`${key} is required`);
+  if (!app.cpeName && app.cpeVendor && app.cpeProduct) {
+    app.cpeName = legacyCpe(app);
+    app.cpeMode = app.cpeEdition ? 'exact' : 'product';
+    app.cpeTitle ||= app.name;
+  }
+  for (const key of ['id', 'name', 'version', 'cpeName']) if (!app[key]) throw new Error(`${key} is required`);
   if (!uuidPattern.test(app.id)) throw new Error('Application ID must be an immutable UUID');
+  if (!['product', 'exact'].includes(app.cpeMode)) throw new Error('cpeMode must be product or exact');
+  const mapping = parseCpe23(app.cpeName);
+  app.cpeVendor = mapping.vendor;
+  app.cpeProduct = mapping.product;
+  app.cpeEdition = mapping.edition === '*' || mapping.edition === '-' ? '' : mapping.edition;
+  const blocking = mappingWarnings({ ...mapping, mode: app.cpeMode, deprecated: app.cpeDeprecated === 'true' }, app.version).filter(item => item.code === 'version-conflict');
+  if (blocking.length) throw new Error(blocking[0].message);
   for (const key of ['version', 'cpeVendor', 'cpeProduct', 'cpeEdition', 'lifecycleProduct']) if (app[key] && !idPattern.test(app[key])) throw new Error(`${key} may contain only letters, numbers, dots, underscores, and hyphens`);
   if (!app.lifecycleProduct && !app.eolDate) throw new Error('A lifecycle product or end-of-life date is required');
   if (app.eolDate && (!/^\d{4}-\d{2}-\d{2}$/.test(app.eolDate) || !Number.isFinite(Date.parse(`${app.eolDate}T00:00:00Z`)))) throw new Error('End-of-life date must be YYYY-MM-DD');
@@ -261,9 +283,10 @@ async function migrateResourceIds() {
     workspace.applications = workspace.applications.map(id => applicationIds.get(id) || id);
     if (!uuidPattern.test(workspace.id)) { const previous = workspace.id; workspace.id = randomUUID(); workspace.legacyId ||= previous; workspaceIds.set(previous, workspace.id); }
   }
-  if (applicationIds.size) await saveAtomic(applicationFile, `# Application IDs are immutable UUIDs managed by WatchTower.\napplications:\n${applications.map(serializeApp).join('')}`);
+  const cpeMappingsMigrated = applications.some(app => app._needsCpeMigration);
+  if (applicationIds.size || cpeMappingsMigrated) await saveAtomic(applicationFile, `# Application IDs and canonical CPE mappings are managed by WatchTower.\napplications:\n${applications.map(serializeApp).join('')}`);
   if (applicationIds.size || workspaceIds.size) await saveAtomic(workspaceFile, serializeWorkspaces(workspaces));
-  if (applicationIds.size || workspaceIds.size) await rm(path.join(dataDirectory, 'status.json'), { force: true });
+  if (applicationIds.size || workspaceIds.size || cpeMappingsMigrated) await rm(path.join(dataDirectory, 'status.json'), { force: true });
   return { applications: applicationIds, workspaces: workspaceIds };
 }
 
@@ -299,6 +322,21 @@ async function fetchNvdJson(url) {
   if (wait) await new Promise(resolve => setTimeout(resolve, wait));
   nvdLastRequest = Date.now();
   return fetchJson(url, 20000, process.env.NVD_API_KEY ? { apiKey: process.env.NVD_API_KEY } : {});
+}
+
+async function lifecycleCatalog() {
+  if (lifecycleCatalogCache && Date.now() - lifecycleCatalogCache.loadedAt < 60 * 60 * 1000) return lifecycleCatalogCache.products;
+  const data = await fetchJson('https://endoflife.date/api/v1/products/', 20000);
+  if (!Array.isArray(data.result)) throw new Error('endoflife.date returned an invalid product catalog');
+  lifecycleCatalogCache = { loadedAt: Date.now(), products: data.result };
+  return lifecycleCatalogCache.products;
+}
+
+async function lifecycleProduct(name) {
+  if (!idPattern.test(name)) throw new Error('Invalid lifecycle product identifier');
+  const data = await fetchJson(`https://endoflife.date/api/v1/products/${encodeURIComponent(name)}/`, 20000);
+  if (!data.result || typeof data.result !== 'object') throw new Error('endoflife.date returned an invalid product record');
+  return normalizeLifecycleProduct(data.result);
 }
 
 function severity(cve) {
@@ -384,7 +422,8 @@ async function checkGitlab(app, kev) {
 }
 
 async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
-  const cpe = `cpe:2.3:a:${app.cpeVendor}:${app.cpeProduct}:${app.version}:*:*:*:${app.cpeEdition || '*'}:*:*:*`;
+  const mapping = mappingFromApp(app);
+  const cpe = mapping.mode === 'exact' ? mapping.cpeName : `cpe:2.3:${mapping.part}:${mapping.vendor}:${mapping.product}:${app.version}:*:*:*:*:*:*:*`;
   const result = { ...app, cpe, status: 'unknown', reasons: [], vulnerabilities: [], sources: [], checkedAt: new Date().toISOString() };
   let sourceOk = false;
   let sourceLabel = 'NVD';
@@ -630,18 +669,85 @@ const requestHandler = async (req, res) => {
     if (url.pathname === '/api/cpes' && req.method === 'GET') {
       const { access } = await authorization(req);
       if (!access.isAdmin && !access.appEdit.size) { forbidden(res, 'Application Editor role required'); return; }
-      const query = String(url.searchParams.get('q') || '').trim();
-      if (query.length < 2 || query.length > 100 || /[\u0000-\u001f]/.test(query)) throw new Error('CPE search requires 2 to 100 printable characters');
+      const allowed = ['any', 'part', 'vendor', 'product', 'version', 'edition'];
+      const filters = Object.fromEntries(allowed.map(name => [name, String(url.searchParams.get(name) || (name === 'any' ? url.searchParams.get('q') || '' : '')).trim()]));
+      if (!Object.values(filters).some(Boolean)) throw new Error('Enter at least one CPE search field');
+      for (const value of Object.values(filters)) if (value.length > 100 || /[\u0000-\u001f]/.test(value)) throw new Error('CPE search fields must contain at most 100 printable characters');
+      if (filters.part && !['a', 'o', 'h'].includes(filters.part)) throw new Error('CPE part must be a, o, or h');
+      const startIndex = Math.max(0, Number.parseInt(url.searchParams.get('startIndex') || '0', 10) || 0);
+      const pageSize = 50;
       const api = new URL('https://services.nvd.nist.gov/rest/json/cpes/2.0');
-      api.searchParams.set('keywordSearch', query);
-      api.searchParams.set('resultsPerPage', '50');
+      const keywords = [filters.any, filters.vendor, filters.product, filters.version, filters.edition].filter(value => value.length >= 2).join(' ');
+      if (keywords) api.searchParams.set('keywordSearch', keywords);
+      api.searchParams.set('resultsPerPage', String(pageSize));
+      api.searchParams.set('startIndex', String(startIndex));
       const data = await fetchNvdJson(api);
       const results = (data.products || []).map(product => {
         const name = product.cpe?.cpeName || '';
-        const parts = name.split(':');
-        return { cpeName: name, part: parts[2], vendor: parts[3] || '', product: parts[4] || '', version: parts[5] || '', edition: parts[9] === '*' ? '' : parts[9] || '', title: product.cpe?.titles?.find(item => item.lang === 'en')?.title || name };
-      }).filter(item => item.part === 'a');
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ results })); return;
+        let parsed;
+        try { parsed = parseCpe23(name); } catch { return null; }
+        const replacements = (product.cpe?.deprecatedBy || []).map(item => typeof item === 'string' ? item : item.cpeName).filter(Boolean);
+        return { ...parsed, title: product.cpe?.titles?.find(item => item.lang === 'en')?.title || name, deprecated: Boolean(product.cpe?.deprecated), replacements };
+      }).filter(Boolean).filter(item => cpeSearchMatch(item, filters)).filter(item => url.searchParams.get('includeDeprecated') === 'true' || !item.deprecated);
+      const rawEnd = startIndex + (data.products || []).length;
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ results, startIndex, resultsPerPage: pageSize, totalResults: data.totalResults || 0, nextIndex: rawEnd < (data.totalResults || 0) ? rawEnd : null, previousIndex: startIndex > 0 ? Math.max(0, startIndex - pageSize) : null })); return;
+    }
+    if (url.pathname === '/api/cpes/parse' && req.method === 'POST') {
+      const { access } = await authorization(req);
+      if (!access.isAdmin && !access.appEdit.size) { forbidden(res, 'Application Editor role required'); return; }
+      const body = await readBody(req);
+      const mapping = { ...parseCpe23(body.cpeName), mode: body.mode === 'exact' ? 'exact' : 'product', deprecated: false };
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ mapping, effectiveCpe: effectiveCpe(mapping, mapping.mode), warnings: mappingWarnings(mapping, String(body.version || '')) })); return;
+    }
+    if (url.pathname === '/api/cpes/test' && req.method === 'POST') {
+      const { access } = await authorization(req);
+      if (!access.isAdmin && !access.appEdit.size) { forbidden(res, 'Application Editor role required'); return; }
+      const body = await readBody(req);
+      const mapping = { ...parseCpe23(body.cpeName), mode: body.mode === 'exact' ? 'exact' : 'product', deprecated: body.deprecated === true };
+      const version = String(body.version || '').trim();
+      if (!version || !idPattern.test(version)) throw new Error('Enter a valid installed version before testing the mapping');
+      const app = { version, cpeName: mapping.cpeName, cpeMode: mapping.mode, cpeVendor: mapping.vendor, cpeProduct: mapping.product, cpeEdition: mapping.edition === '*' || mapping.edition === '-' ? '' : mapping.edition };
+      const queryCpe = effectiveCpe(mapping, mapping.mode);
+      const api = new URL('https://services.nvd.nist.gov/rest/json/cves/2.0');
+      api.searchParams.set('virtualMatchString', queryCpe);
+      api.searchParams.set('resultsPerPage', '200');
+      const data = await fetchNvdJson(api);
+      const candidates = data.vulnerabilities || [];
+      const applicable = candidates.filter(({ cve }) => cveAffectsApplication(cve, app));
+      const sample = applicable.slice(0, 10).map(({ cve }) => ({ id: cve.id, published: cve.published, description: cve.descriptions?.find(item => item.lang === 'en')?.value || '', url: `https://nvd.nist.gov/vuln/detail/${cve.id}` }));
+      const warnings = mappingWarnings(mapping, version);
+      if (!data.totalResults) warnings.push({ code: 'no-candidates', level: 'warning', message: 'NVD returned no vulnerability candidates. This is inconclusive; verify the product mapping before saving.' });
+      if ((data.totalResults || 0) > candidates.length) warnings.push({ code: 'sampled-results', level: 'info', message: `NVD returned ${data.totalResults} candidates; applicability was previewed against the first ${candidates.length}.` });
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ testedAt: new Date().toISOString(), queryCpe, candidateCount: data.totalResults || 0, testedCandidateCount: candidates.length, applicableCount: applicable.length, sample, warnings })); return;
+    }
+    if (url.pathname === '/api/lifecycle-products' && req.method === 'GET') {
+      const { access } = await authorization(req);
+      if (!access.isAdmin && !access.appEdit.size) { forbidden(res, 'Application Editor role required'); return; }
+      const query = String(url.searchParams.get('q') || '').trim();
+      const vendor = String(url.searchParams.get('vendor') || '').trim();
+      const cpe = String(url.searchParams.get('cpe') || '').trim();
+      const category = String(url.searchParams.get('category') || '').trim();
+      for (const value of [query, vendor, cpe, category]) if (value.length > 200 || /[\u0000-\u001f]/.test(value)) throw new Error('Lifecycle search fields must contain at most 200 printable characters');
+      const catalog = await lifecycleCatalog();
+      const products = searchLifecycleProducts(catalog, { query, vendor, cpe, category }).slice(0, 50);
+      const categories = [...new Set(catalog.map(item => String(item.category || '')).filter(Boolean))].sort();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ products, categories })); return;
+    }
+    const lifecycleRoute = url.pathname.match(/^\/api\/lifecycle-products\/([A-Za-z0-9._-]+)$/);
+    if (lifecycleRoute && req.method === 'GET') {
+      const { access } = await authorization(req);
+      if (!access.isAdmin && !access.appEdit.size) { forbidden(res, 'Application Editor role required'); return; }
+      const product = await lifecycleProduct(lifecycleRoute[1]);
+      const version = String(url.searchParams.get('version') || '').trim();
+      const matchedRelease = matchLifecycleRelease(product.releases, version);
+      const selectedCpe = String(url.searchParams.get('cpe') || '');
+      const cpeIdentifiers = product.identifiers.filter(item => item.type === 'cpe').map(item => item.id);
+      const cpeIdentity = selectedCpe ? cpeIdentifiers.some(item => selectedCpe.startsWith(`${item}:`) || selectedCpe === item) : null;
+      const warnings = [];
+      if (version && !matchedRelease) warnings.push({ level: 'warning', message: `Installed version ${version} did not match a known ${product.label} release cycle.` });
+      if (selectedCpe && cpeIdentifiers.length && !cpeIdentity) warnings.push({ level: 'warning', message: 'The selected CPE does not match the CPE identifiers published for this lifecycle product.' });
+      if (cpeIdentity) warnings.push({ level: 'info', message: 'The lifecycle product publishes an identifier matching the selected CPE.' });
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ product, matchedRelease, cpeIdentity, warnings, testedAt: new Date().toISOString(), sourceUrl: product.links.html || `https://endoflife.date/${product.name}` })); return;
     }
     if (url.pathname === '/api/feeds' && req.method === 'GET') {
       const { apps, feeds, access } = await authorization(req);
