@@ -182,3 +182,38 @@ test('direct server startup migrates legacy YAML files into the config directory
     await rm(home, { recursive: true, force: true });
   }
 });
+
+test('startup gives existing applications safe ownership and risk-context defaults', async () => {
+  const port = await freePort();
+  const home = await mkdtemp(path.join(tmpdir(), 'watchtower-context-migration-'));
+  const config = path.join(home, 'config');
+  const data = path.join(home, 'data');
+  await mkdir(config);
+  await writeFile(path.join(config, 'applications.yaml'), 'applications:\n  - id: 11111111-1111-4111-8111-111111111111\n    name: "Existing App"\n    version: "1.0"\n    cpeVendor: "example"\n    cpeProduct: "existing"\n    cpeName: "cpe:2.3:a:example:existing:*:*:*:*:*:*:*:*"\n    cpeMode: "product"\n    eolDate: "2030-01-01"\n');
+  await writeFile(path.join(config, 'workspaces.yaml'), 'workspaces:\n');
+  const child = spawn(process.execPath, ['server.mjs'], {
+    cwd: path.resolve(import.meta.dirname, '..'),
+    env: { ...process.env, HOST: '127.0.0.1', SERVER_PORT: String(port), CONFIG_DIR: config, DATA_DIR: data,
+      AUTO_SCAN: 'false', AUTH_DISABLED: 'true', OIDC_ISSUER: '', OIDC_CLIENT_ID: '', OIDC_CLIENT_SECRET: '', OIDC_CLIENT_SECRET_FILE: '', OIDC_BASE_URL: '' },
+    stdio: 'ignore',
+  });
+  try {
+    let ready = false;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      try { ready = (await fetch(`http://127.0.0.1:${port}/api/session`)).ok; if (ready) break; }
+      catch { await new Promise(resolve => setTimeout(resolve, 100)); }
+    }
+    assert.equal(ready, true);
+    const migrated = await readFile(path.join(config, 'applications.yaml'), 'utf8');
+    assert.match(migrated, /criticality: "unspecified"/);
+    assert.match(migrated, /environment: "unspecified"/);
+    assert.match(migrated, /exposure: "unknown"/);
+    assert.match(migrated, /ownerIds:\n\s+tags:/);
+    const configured = await (await fetch(`http://127.0.0.1:${port}/api/config`)).json();
+    assert.deepEqual(configured.applications[0].ownerIds, []);
+    assert.deepEqual(configured.applications[0].tags, []);
+  } finally {
+    child.kill();
+    await rm(home, { recursive: true, force: true });
+  }
+});

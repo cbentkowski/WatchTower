@@ -13,6 +13,7 @@ import { administratorRole, createAuth } from './auth.mjs';
 import { createYamlMonitor } from './yaml-monitor.mjs';
 import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, claimsForIdentityMappings, describeIdentityClaims, explainAccess, protectedRoleState, standardRoles } from './rbac.mjs';
 import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, readFeeds, secureFetchText, validateFeedInput, writeFeeds } from './feeds.mjs';
+import { readOwners, validateOwner, writeOwners } from './owners.mjs';
 import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
 import { loadTlsConfiguration } from './tls.mjs';
 import { cpeSearchMatch, effectiveCpe, legacyCpe, mappingFromApp, mappingWarnings, parseCpe23, productCpe } from './cpe.mjs';
@@ -26,7 +27,7 @@ const PORT = Number(process.env.SERVER_PORT || process.env.PORT || 4173);
 const HOST = process.env.HOST || '127.0.0.1';
 const tlsConfiguration = await loadTlsConfiguration();
 const dataDirectory = process.env.DATA_DIR || path.join(root, 'data');
-const configFiles = ['applications.yaml', 'workspaces.yaml', 'feeds.yaml', 'smtp.yaml', 'general.yaml'];
+const configFiles = ['applications.yaml', 'workspaces.yaml', 'feeds.yaml', 'owners.yaml', 'smtp.yaml', 'general.yaml'];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const exists = file => access(file).then(() => true, () => false);
 async function ensureConfiguration() {
@@ -45,6 +46,7 @@ async function ensureConfiguration() {
 await ensureConfiguration();
 const rbacFile = path.join(configDirectory, 'rbac.yaml');
 const feedFile = path.join(configDirectory, 'feeds.yaml');
+const ownerFile = path.join(configDirectory, 'owners.yaml');
 if (!await exists(rbacFile)) await writeRbac(rbacFile, { groups: [], grants: [] });
 const resourceMigration = await migrateResourceIds();
 const logger = createLogger(dataDirectory);
@@ -96,6 +98,7 @@ const yamlMonitor = createYamlMonitor({
     'applications.yaml': path.join(configDirectory, 'applications.yaml'),
     'workspaces.yaml': path.join(configDirectory, 'workspaces.yaml'),
     'feeds.yaml': feedFile,
+    'owners.yaml': ownerFile,
     'smtp.yaml': smtpFile,
     'general.yaml': generalFile,
     'rbac.yaml': rbacFile,
@@ -148,15 +151,20 @@ function scalar(value) {
 function parseInventory(source, includeDisabled = false, allowLegacyIds = false) {
   const apps = [];
   let current = null;
+  let listField = '';
   for (const line of source.split(/\r?\n/)) {
     if (!line.trim() || line.trimStart().startsWith('#') || line.trim() === 'applications:') continue;
     const entry = line.match(/^  - ([A-Za-z][\w]*):\s*(.*)$/);
     const field = line.match(/^    ([A-Za-z][\w]*):\s*(.*)$/);
-    if (entry) { current = {}; apps.push(current); current[entry[1]] = scalar(entry[2]); }
-    else if (field && current) current[field[1]] = scalar(field[2]);
+    const listItem = line.match(/^      -\s*(.*)$/);
+    if (entry) { current = {}; apps.push(current); current[entry[1]] = scalar(entry[2]); listField = ''; }
+    else if (field && current && ['ownerIds', 'tags'].includes(field[1]) && !field[2].trim()) { listField = field[1]; current[listField] = []; }
+    else if (field && current) { current[field[1]] = scalar(field[2]); listField = ''; }
+    else if (listItem && current && listField) current[listField].push(scalar(listItem[1]));
     else throw new Error(`Unsupported inventory YAML line: ${line}`);
   }
   for (const app of apps) {
+    const hadContext = ['criticality', 'environment', 'exposure', 'ownerIds', 'tags'].every(key => Object.hasOwn(app, key));
     for (const key of ['id', 'name', 'version', 'cpeVendor', 'cpeProduct']) {
       if (!app[key] || typeof app[key] !== 'string') throw new Error(`Application is missing ${key}`);
     }
@@ -171,17 +179,34 @@ function parseInventory(source, includeDisabled = false, allowLegacyIds = false)
     app.cpeName = mapping.cpeName;
     app.cpeMode = mapping.mode;
     app.cpeTitle ||= app.name;
+    app.criticality ||= 'unspecified';
+    app.environment ||= 'unspecified';
+    app.exposure ||= 'unknown';
+    app.ownerIds = [...new Set(Array.isArray(app.ownerIds) ? app.ownerIds.map(String) : [])];
+    app.tags = [...new Set(Array.isArray(app.tags) ? app.tags.map(String) : [])];
+    if (app.ownerIds.some(id => !uuidPattern.test(id))) throw new Error(`Invalid owner reference for ${app.name}`);
+    if (app.tags.length > 25 || app.tags.some(tag => tag.length > 40 || !/^[a-z0-9][a-z0-9._-]*$/.test(tag))) throw new Error(`Invalid tags for ${app.name}`);
+    if (!['unspecified', 'low', 'medium', 'high', 'critical'].includes(app.criticality)) throw new Error(`Invalid criticality for ${app.name}`);
+    if (!['unspecified', 'production', 'staging', 'development', 'test', 'disaster-recovery'].includes(app.environment)) throw new Error(`Invalid environment for ${app.name}`);
+    if (!['unknown', 'internal', 'external', 'internet'].includes(app.exposure)) throw new Error(`Invalid exposure for ${app.name}`);
     Object.defineProperty(app, '_needsCpeMigration', { value: !hadCanonicalCpe, enumerable: false });
+    Object.defineProperty(app, '_needsContextMigration', { value: !hadContext, enumerable: false });
   }
   if (new Set(apps.map(a => a.id)).size !== apps.length) throw new Error('Application IDs must be unique');
   return includeDisabled ? apps : apps.filter(a => a.enabled !== false);
 }
 
-const appFields = ['id', 'legacyId', 'name', 'vendor', 'version', 'cpeName', 'cpeMode', 'cpeTitle', 'cpeDeprecated', 'cpeLastTestedAt', 'cpeTestCandidateCount', 'cpeTestApplicableCount', 'cpeVendor', 'cpeProduct', 'cpeEdition', 'lifecycleProduct', 'eolDate', 'lifecycleUrl', 'vendorBulletinUrl', 'releaseUrl', 'latestVersion', 'latestBranchVersion', 'latestLtsVersion'];
+const appFields = ['id', 'legacyId', 'name', 'vendor', 'version', 'cpeName', 'cpeMode', 'cpeTitle', 'cpeDeprecated', 'cpeLastTestedAt', 'cpeTestCandidateCount', 'cpeTestApplicableCount', 'cpeVendor', 'cpeProduct', 'cpeEdition', 'lifecycleProduct', 'eolDate', 'lifecycleUrl', 'vendorBulletinUrl', 'releaseUrl', 'latestVersion', 'latestBranchVersion', 'latestLtsVersion', 'criticality', 'environment', 'exposure', 'ownerIds', 'tags'];
+const scalarAppFields = appFields.filter(key => !['ownerIds', 'tags'].includes(key));
 const idPattern = /^[A-Za-z0-9._-]+$/;
 function cleanApp(input, existingId = '') {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Application details are required');
-  const app = Object.fromEntries(appFields.map(key => [key, String(key === 'id' && existingId ? existingId : input[key] ?? '').trim()]));
+  const app = Object.fromEntries(scalarAppFields.map(key => [key, String(key === 'id' && existingId ? existingId : input[key] ?? '').trim()]));
+  app.criticality ||= 'unspecified';
+  app.environment ||= 'unspecified';
+  app.exposure ||= 'unknown';
+  app.ownerIds = [...new Set((Array.isArray(input.ownerIds) ? input.ownerIds : []).map(value => String(value).trim()).filter(Boolean))];
+  app.tags = [...new Set((Array.isArray(input.tags) ? input.tags : String(input.tags || '').split(',')).map(value => String(value).trim().toLowerCase()).filter(Boolean))];
   if (!app.cpeName && app.cpeVendor && app.cpeProduct) {
     app.cpeName = legacyCpe(app);
     app.cpeMode = app.cpeEdition ? 'exact' : 'product';
@@ -201,11 +226,15 @@ function cleanApp(input, existingId = '') {
   if (app.eolDate && (!/^\d{4}-\d{2}-\d{2}$/.test(app.eolDate) || !Number.isFinite(Date.parse(`${app.eolDate}T00:00:00Z`)))) throw new Error('End-of-life date must be YYYY-MM-DD');
   for (const key of ['lifecycleUrl', 'vendorBulletinUrl', 'releaseUrl']) if (app[key]) { try { if (new URL(app[key]).protocol !== 'https:') throw new Error(); } catch { throw new Error(`${key} must be an HTTPS URL`); } }
   for (const key of ['name', 'vendor']) if (/[\r\n]/.test(app[key])) throw new Error(`${key} must be one line`);
+  if (!['unspecified', 'low', 'medium', 'high', 'critical'].includes(app.criticality)) throw new Error('Select a valid criticality');
+  if (!['unspecified', 'production', 'staging', 'development', 'test', 'disaster-recovery'].includes(app.environment)) throw new Error('Select a valid environment');
+  if (!['unknown', 'internal', 'external', 'internet'].includes(app.exposure)) throw new Error('Select a valid exposure');
+  if (app.tags.length > 25 || app.tags.some(tag => tag.length > 40 || !/^[a-z0-9][a-z0-9._-]*$/.test(tag))) throw new Error('Tags must be comma-separated lowercase words using letters, numbers, dots, underscores, or hyphens');
   return app;
 }
 function yamlValue(value) { return JSON.stringify(String(value)); }
 function serializeApp(app) {
-  return `  - id: ${app.id}\n${Object.entries(app).filter(([key, value]) => key !== 'id' && value !== '' && value != null).map(([key, value]) => `    ${key}: ${typeof value === 'boolean' ? value : yamlValue(value)}\n`).join('')}`;
+  return `  - id: ${app.id}\n${Object.entries(app).filter(([key, value]) => key !== 'id' && value !== '' && value != null && !Array.isArray(value)).map(([key, value]) => `    ${key}: ${typeof value === 'boolean' ? value : yamlValue(value)}\n`).join('')}    ownerIds:\n${(app.ownerIds || []).map(id => `      - ${id}\n`).join('')}    tags:\n${(app.tags || []).map(tag => `      - ${yamlValue(tag)}\n`).join('')}`;
 }
 function serializeWorkspaces(groups) {
   return `# Workspace names are free text. The same application may appear in multiple workspaces.\nworkspaces:\n${groups.map(group => `  - id: ${group.id}\n${group.legacyId ? `    legacyId: ${yamlValue(group.legacyId)}\n` : ''}    name: ${yamlValue(group.name)}\n${group.notificationEmails ? `    notificationEmails: ${yamlValue(group.notificationEmails)}\n` : ''}    applications:\n${group.applications.map(id => `      - ${id}\n`).join('')}`).join('')}`;
@@ -215,7 +244,7 @@ function auditActor(req) {
   return { issuer: req.authUser.issuer, username: req.authUser.username || req.authUser.subject, name: req.authUser.name };
 }
 function changedFields(before, after, fields) {
-  return Object.fromEntries(fields.filter(field => (before[field] ?? '') !== (after[field] ?? '')).map(field => [field, { from: before[field] ?? '', to: after[field] ?? '' }]));
+  return Object.fromEntries(fields.filter(field => JSON.stringify(before[field] ?? '') !== JSON.stringify(after[field] ?? '')).map(field => [field, { from: before[field] ?? '', to: after[field] ?? '' }]));
 }
 function describeFields(changes) {
   return Object.entries(changes).map(([field, value]) => `${field}: ${JSON.stringify(value.from)} → ${JSON.stringify(value.to)}`).join('; ') || 'No values changed';
@@ -299,21 +328,24 @@ async function authorizationResources(includeDisabled = true) {
   const apps = parseInventory(await readFile(path.join(configDirectory, 'applications.yaml'), 'utf8'), includeDisabled);
   const workspaces = parseWorkspaces(await readFile(path.join(configDirectory, 'workspaces.yaml'), 'utf8'), apps.filter(app => app.enabled !== false));
   const feeds = await readFeeds(feedFile);
-  return { apps, workspaces, feeds };
+  const owners = await readOwners(ownerFile);
+  const ownerIds = new Set(owners.map(owner => owner.id));
+  for (const app of apps) for (const ownerId of app.ownerIds) if (!ownerIds.has(ownerId)) throw new Error(`Application ${app.name} references an unavailable owner: ${ownerId}`);
+  return { apps, workspaces, feeds, owners };
 }
 
 async function authorization(req, includeDisabled = true) {
-  const { apps, workspaces, feeds } = await authorizationResources(includeDisabled);
+  const { apps, workspaces, feeds, owners } = await authorizationResources(includeDisabled);
   const config = req.permissionPreview?.config || await readRbac(rbacFile);
   const user = req.permissionPreview ? { issuer: 'permission-preview', claims: req.permissionPreview.claims } : req.authUser || { issuer: 'local', isAdmin: true };
   const access = calculateAccess(user, config, apps, workspaces, feeds);
-  return { apps, workspaces, feeds, access };
+  return { apps, workspaces, feeds, owners, access };
 }
 
 async function realAuthorization(req, includeDisabled = true) {
-  const { apps, workspaces, feeds } = await authorizationResources(includeDisabled);
+  const { apps, workspaces, feeds, owners } = await authorizationResources(includeDisabled);
   const access = calculateAccess(req.authUser || { issuer: 'local', isAdmin: true }, await readRbac(rbacFile), apps, workspaces, feeds);
-  return { apps, workspaces, feeds, access };
+  return { apps, workspaces, feeds, owners, access };
 }
 
 function forbidden(res, message = 'You do not have permission to perform this action') {
@@ -336,6 +368,9 @@ async function migrateResourceIds() {
   const workspaceSource = await readFile(workspaceFile, 'utf8');
   const applications = parseInventory(applicationSource, true, true);
   const workspaces = parseWorkspaces(workspaceSource, applications.filter(app => app.enabled !== false), true);
+  const owners = await readOwners(ownerFile);
+  const knownOwnerIds = new Set(owners.map(owner => owner.id));
+  for (const app of applications) for (const ownerId of app.ownerIds) if (!knownOwnerIds.has(ownerId)) throw new Error(`Application ${app.name} references an unavailable owner: ${ownerId}`);
   const applicationIds = new Map();
   const workspaceIds = new Map();
   for (const app of applications) if (!uuidPattern.test(app.id)) { const previous = app.id; app.id = randomUUID(); app.legacyId ||= previous; applicationIds.set(previous, app.id); }
@@ -344,9 +379,10 @@ async function migrateResourceIds() {
     if (!uuidPattern.test(workspace.id)) { const previous = workspace.id; workspace.id = randomUUID(); workspace.legacyId ||= previous; workspaceIds.set(previous, workspace.id); }
   }
   const cpeMappingsMigrated = applications.some(app => app._needsCpeMigration);
-  if (applicationIds.size || cpeMappingsMigrated) await saveAtomic(applicationFile, `# Application IDs and canonical CPE mappings are managed by WatchTower.\napplications:\n${applications.map(serializeApp).join('')}`);
+  const applicationContextMigrated = applications.some(app => app._needsContextMigration);
+  if (applicationIds.size || cpeMappingsMigrated || applicationContextMigrated) await saveAtomic(applicationFile, `# Application IDs, canonical CPE mappings, ownership, and risk context are managed by WatchTower.\napplications:\n${applications.map(serializeApp).join('')}`);
   if (applicationIds.size || workspaceIds.size) await saveAtomic(workspaceFile, serializeWorkspaces(workspaces));
-  if (applicationIds.size || workspaceIds.size || cpeMappingsMigrated) await rm(path.join(dataDirectory, 'status.json'), { force: true });
+  if (applicationIds.size || workspaceIds.size || cpeMappingsMigrated || applicationContextMigrated) await rm(path.join(dataDirectory, 'status.json'), { force: true });
   return { applications: applicationIds, workspaces: workspaceIds };
 }
 
@@ -722,11 +758,58 @@ const requestHandler = async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ sent: true, accepted: result.accepted })); return;
     }
     if (url.pathname === '/api/config' && req.method === 'GET') {
-      const { apps, workspaces, feeds, access } = await authorization(req);
+      const { apps, workspaces, feeds, owners, access } = await authorization(req);
       const visibleApps = apps.filter(app => access.appView.has(app.id) || access.appEdit.has(app.id));
       const visibleWorkspaces = workspaces.filter(group => access.workspaceView.has(group.id) || access.workspaceEdit.has(group.id) || access.workspaceMembership.has(group.id) || access.workspaceNotifications.has(group.id));
       const visibleFeeds = feeds.filter(feed => access.feedView.has(feed.id));
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ applications: visibleApps, workspaces: visibleWorkspaces, feeds: visibleFeeds, access: accessJson(access) })); return;
+      const assignedOwnerIds = new Set(visibleApps.flatMap(app => app.ownerIds));
+      const visibleOwners = owners.filter(owner => assignedOwnerIds.has(owner.id) || access.isAdmin || access.appEdit.size);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ applications: visibleApps, workspaces: visibleWorkspaces, feeds: visibleFeeds, owners: visibleOwners, access: accessJson(access) })); return;
+    }
+    if (url.pathname === '/api/owners' && req.method === 'GET') {
+      if (!req.authUser?.isAdmin && auth) { forbidden(res, 'Administrator role required to manage owners'); return; }
+      const owners = await readOwners(ownerFile);
+      const apps = parseInventory(await readFile(path.join(configDirectory, 'applications.yaml'), 'utf8'), true);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ owners: owners.map(owner => ({ ...owner, applicationCount: apps.filter(app => app.ownerIds.includes(owner.id)).length })) })); return;
+    }
+    if (url.pathname === '/api/owners' && req.method === 'POST') {
+      if (!req.authUser?.isAdmin && auth) { forbidden(res, 'Administrator role required to add owners'); return; }
+      const owners = await readOwners(ownerFile);
+      const owner = validateOwner(await readBody(req));
+      if (owners.some(item => item.name.toLowerCase() === owner.name.toLowerCase())) throw new Error('Owner name already exists');
+      await yamlMonitor.webWrite(ownerFile, () => writeOwners(ownerFile, [...owners, owner]));
+      await logger.audit('Owner added', auditActor(req), { type: 'owner', id: owner.id, name: owner.name }, { name: owner.name, primaryContactConfigured: true, escalationContactConfigured: Boolean(owner.escalationContact) }, `${owner.name} (${owner.id})`);
+      res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(owner)); return;
+    }
+    const ownerRoute = url.pathname.match(/^\/api\/owners\/([0-9a-f-]+)$/i);
+    if (ownerRoute && req.method === 'PUT') {
+      if (!req.authUser?.isAdmin && auth) { forbidden(res, 'Administrator role required to update owners'); return; }
+      const owners = await readOwners(ownerFile);
+      const index = owners.findIndex(owner => owner.id === ownerRoute[1]);
+      if (index < 0) throw new Error('Owner not found');
+      const previous = owners[index];
+      const owner = validateOwner(await readBody(req), previous.id);
+      if (owners.some((item, ownerIndex) => ownerIndex !== index && item.name.toLowerCase() === owner.name.toLowerCase())) throw new Error('Owner name already exists');
+      owners[index] = owner;
+      await yamlMonitor.webWrite(ownerFile, () => writeOwners(ownerFile, owners));
+      const changes = changedFields(previous, owner, ['name']);
+      if (previous.primaryContact !== owner.primaryContact) changes.primaryContactChanged = true;
+      if (previous.escalationContact !== owner.escalationContact) changes.escalationContactChanged = true;
+      if (Object.keys(changes).length) await logger.audit('Owner updated', auditActor(req), { type: 'owner', id: owner.id, name: owner.name }, changes, `${owner.name} (${owner.id}); ${describeFields(changes)}`);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(owner)); return;
+    }
+    if (ownerRoute && req.method === 'DELETE') {
+      if (!req.authUser?.isAdmin && auth) { forbidden(res, 'Administrator role required to remove owners'); return; }
+      const owners = await readOwners(ownerFile);
+      const owner = owners.find(item => item.id === ownerRoute[1]);
+      if (!owner) throw new Error('Owner not found');
+      const apps = parseInventory(await readFile(path.join(configDirectory, 'applications.yaml'), 'utf8'), true);
+      const assigned = apps.filter(app => app.ownerIds.includes(owner.id));
+      if (assigned.length) throw new Error(`Owner is assigned to ${assigned.length} application${assigned.length === 1 ? '' : 's'} and cannot be removed`);
+      await yamlMonitor.webWrite(ownerFile, () => writeOwners(ownerFile, owners.filter(item => item.id !== owner.id)));
+      await logger.audit('Owner removed', auditActor(req), { type: 'owner', id: owner.id, name: owner.name }, { name: owner.name }, `${owner.name} (${owner.id})`);
+      res.writeHead(204); res.end(); return;
     }
     if (url.pathname === '/api/rbac' && req.method === 'GET') {
       const { apps, workspaces, feeds, access } = await authorization(req);
@@ -946,6 +1029,8 @@ const requestHandler = async (req, res) => {
     if (url.pathname === '/api/applications' && req.method === 'POST') {
       if (auth && !req.authUser?.isAdmin) { forbidden(res, 'Administrator role required to add applications'); return; }
       const app = cleanApp({ ...await readBody(req), id: randomUUID() });
+      const owners = await readOwners(ownerFile);
+      if (app.ownerIds.some(id => !owners.some(owner => owner.id === id))) throw new Error('Application references an unknown owner');
       if (refreshPromise) await refreshPromise;
       const file = path.join(configDirectory, 'applications.yaml');
       const current = await readFile(file, 'utf8');
@@ -961,6 +1046,8 @@ const requestHandler = async (req, res) => {
       const { access } = await authorization(req);
       if (!access.appEdit.has(previousId)) { forbidden(res); return; }
       const app = cleanApp(await readBody(req), previousId);
+      const owners = await readOwners(ownerFile);
+      if (app.ownerIds.some(id => !owners.some(owner => owner.id === id))) throw new Error('Application references an unknown owner');
       if (refreshPromise) await refreshPromise;
       const file = path.join(configDirectory, 'applications.yaml');
       const current = await readFile(file, 'utf8');
@@ -1036,12 +1123,14 @@ const requestHandler = async (req, res) => {
     }
     if (url.pathname === '/api/status') {
       await snapshotReady;
-      const { access } = await authorization(req);
+      const { owners, access } = await authorization(req);
       if (url.searchParams.has('refresh') && !access.scan) { forbidden(res, 'Scan Operator role required'); return; }
       const data = !snapshot || Date.now() - new Date(snapshot.checkedAt).getTime() > refreshMs || url.searchParams.has('refresh') ? await refresh() : snapshot;
       const results = (data.results || []).filter(app => access.appView.has(app.id));
       const workspaces = (data.workspaces || []).filter(group => access.workspaceView.has(group.id)).map(group => ({ ...group, applications: group.applications.filter(id => access.appView.has(id)) }));
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ ...data, results, workspaces, access: accessJson(access), groupOverage: req.permissionPreview ? false : Boolean(req.authUser?.groupOverage) })); return;
+      const assignedOwnerIds = new Set(results.flatMap(app => app.ownerIds || []));
+      const visibleOwners = owners.filter(owner => assignedOwnerIds.has(owner.id));
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ ...data, results, workspaces, owners: visibleOwners, access: accessJson(access), groupOverage: req.permissionPreview ? false : Boolean(req.authUser?.groupOverage) })); return;
     }
     const files = { '/': 'index.html', '/styles.css': 'styles.css', '/theme-init.js': 'theme-init.js', '/app.js': 'app.js', '/favicon.svg': 'favicon.svg' };
     const file = files[url.pathname];
