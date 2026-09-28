@@ -217,3 +217,37 @@ test('startup gives existing applications safe ownership and risk-context defaul
     await rm(home, { recursive: true, force: true });
   }
 });
+
+test('startup maps legacy workspace notification emails to unique owners', async () => {
+  const port = await freePort();
+  const home = await mkdtemp(path.join(tmpdir(), 'watchtower-workspace-owner-migration-'));
+  const config = path.join(home, 'config');
+  const data = path.join(home, 'data');
+  await mkdir(config);
+  await writeFile(path.join(config, 'applications.yaml'), 'applications:\n');
+  await writeFile(path.join(config, 'owners.yaml'), 'owners:\n  - id: 11111111-1111-4111-8111-111111111111\n    name: "Existing owner"\n    email: "existing@example.com"\n');
+  await writeFile(path.join(config, 'workspaces.yaml'), 'workspaces:\n  - id: 22222222-2222-4222-8222-222222222222\n    name: "Operations"\n    notificationEmails: "EXISTING@example.com, new@example.com"\n    applications:\n');
+  const child = spawn(process.execPath, ['server.mjs'], {
+    cwd: path.resolve(import.meta.dirname, '..'),
+    env: { ...process.env, HOST: '127.0.0.1', SERVER_PORT: String(port), CONFIG_DIR: config, DATA_DIR: data, AUTO_SCAN: 'false', AUTH_DISABLED: 'true', OIDC_ISSUER: '', OIDC_CLIENT_ID: '', OIDC_CLIENT_SECRET: '', OIDC_CLIENT_SECRET_FILE: '', OIDC_BASE_URL: '' },
+    stdio: 'ignore',
+  });
+  try {
+    let ready = false;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      try { ready = (await fetch(`http://127.0.0.1:${port}/api/session`)).ok; if (ready) break; }
+      catch { await new Promise(resolve => setTimeout(resolve, 100)); }
+    }
+    assert.equal(ready, true);
+    const configured = await (await fetch(`http://127.0.0.1:${port}/api/config`)).json();
+    assert.equal(configured.owners.length, 2);
+    assert.deepEqual(new Set(configured.owners.map(owner => owner.email.toLowerCase())), new Set(['existing@example.com', 'new@example.com']));
+    assert.equal(configured.workspaces[0].ownerIds.length, 2);
+    const migrated = await readFile(path.join(config, 'workspaces.yaml'), 'utf8');
+    assert.doesNotMatch(migrated, /notificationEmails/);
+    assert.match(migrated, /ownerIds:/);
+  } finally {
+    child.kill();
+    await rm(home, { recursive: true, force: true });
+  }
+});

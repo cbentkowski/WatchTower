@@ -72,7 +72,7 @@ Review the CPE and lifecycle mappings whenever the product name, edition, releas
 
 ## Owners and application context
 
-Administrators manage reusable contacts from **Owners**. Each owner requires a name and primary contact and may include an escalation contact. Editing an owner updates its contact information everywhere that owner is assigned. An owner cannot be removed while any application still references it.
+Administrators manage reusable contacts from **Owners**. Each owner requires a name and unique email address and may include an escalation email. Editing an owner updates its contact information everywhere that owner is assigned. An owner cannot be removed while any application or workspace still references it.
 
 Application Editors can assign configured owners and maintain the application context fields on applications they may edit:
 
@@ -122,8 +122,8 @@ Workspaces group applications for navigation, delegated access, and notification
 
 1. Select **Add / edit workspace**, or open a workspace and select **Edit workspace**.
 2. Enter a recognizable workspace name.
-3. Select the applications that belong to it.
-4. Add notification recipients when that workspace should send email.
+3. Use the searchable selection dialogs to choose the applications that belong to it.
+4. Choose the workspace owners who should receive its notifications.
 5. Save the workspace.
 
 Use workspaces for meaningful operational boundaries such as teams, environments, business services, or customer groups. Because applications are shared records, use separate application entries when two environments run different installed versions.
@@ -147,7 +147,7 @@ Feed data is treated as untrusted. WatchTower blocks private and metadata-servic
 
 ## Email notifications
 
-Email delivery has two parts: global delivery settings and recipients assigned to each workspace.
+Email delivery has two parts: global delivery settings and owners assigned to each workspace.
 
 ### Configure delivery
 
@@ -161,7 +161,7 @@ Email delivery has two parts: global delivery settings and recipients assigned t
 
 ### Add recipients
 
-Edit a workspace and enter comma-separated notification addresses. Leaving the field blank disables email for that workspace.
+Edit a workspace and choose one or more owners. WatchTower sends workspace notifications to those owners' primary email addresses; a workspace with no owners does not send email. Email addresses are unique in the owner directory, so changing an owner's address updates notification delivery everywhere.
 
 Each workspace receives its own message containing alerts due for its applications. An application in several workspaces can generate a message for each workspace. Initial Critical and known-exploited findings can send immediately; scheduled High, lifecycle, and reminder messages wait for the configured local delivery window.
 

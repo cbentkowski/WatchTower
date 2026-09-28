@@ -107,7 +107,7 @@ const yamlMonitor = createYamlMonitor({
   onChange: async changes => {
     const actor = { issuer: 'filesystem', subject: 'unknown', name: 'Filesystem change (unattributed)' };
     for (const change of changes) await logger.audit('YAML file changed outside web interface', actor, { type: 'yaml', id: change.name }, { kind: change.kind }, `${change.name} ${change.kind}`);
-    if (changes.some(change => ['applications.yaml', 'workspaces.yaml', 'feeds.yaml'].includes(change.name))) {
+    if (changes.some(change => ['applications.yaml', 'workspaces.yaml', 'feeds.yaml', 'owners.yaml'].includes(change.name))) {
       await invalidateSnapshot();
       if (process.env.AUTO_SCAN !== 'false') {
         if (refreshPromise) await refreshPromise.catch(() => {});
@@ -237,7 +237,7 @@ function serializeApp(app) {
   return `  - id: ${app.id}\n${Object.entries(app).filter(([key, value]) => key !== 'id' && value !== '' && value != null && !Array.isArray(value)).map(([key, value]) => `    ${key}: ${typeof value === 'boolean' ? value : yamlValue(value)}\n`).join('')}    ownerIds:\n${(app.ownerIds || []).map(id => `      - ${id}\n`).join('')}    tags:\n${(app.tags || []).map(tag => `      - ${yamlValue(tag)}\n`).join('')}`;
 }
 function serializeWorkspaces(groups) {
-  return `# Workspace names are free text. The same application may appear in multiple workspaces.\nworkspaces:\n${groups.map(group => `  - id: ${group.id}\n${group.legacyId ? `    legacyId: ${yamlValue(group.legacyId)}\n` : ''}    name: ${yamlValue(group.name)}\n${group.notificationEmails ? `    notificationEmails: ${yamlValue(group.notificationEmails)}\n` : ''}    applications:\n${group.applications.map(id => `      - ${id}\n`).join('')}`).join('')}`;
+  return `# Workspace names are free text. Applications and owners are referenced by immutable ID.\nworkspaces:\n${groups.map(group => `  - id: ${group.id}\n${group.legacyId ? `    legacyId: ${yamlValue(group.legacyId)}\n` : ''}    name: ${yamlValue(group.name)}\n    ownerIds:\n${(group.ownerIds || []).map(id => `      - ${id}\n`).join('')}    applications:\n${group.applications.map(id => `      - ${id}\n`).join('')}`).join('')}`;
 }
 function auditActor(req) {
   if (!req.authUser) return { issuer: 'local', username: 'local', name: 'Local development session' };
@@ -294,29 +294,33 @@ async function readFeedCache() {
   catch (error) { if (error.code === 'ENOENT') return { checkedAt: null, feeds: {} }; throw error; }
 }
 
-function parseWorkspaces(source, apps, allowLegacyIds = false) {
+function parseWorkspaces(source, apps, owners = [], allowLegacyIds = false) {
   const groups = [];
   let current = null;
-  let inApplications = false;
+  let listField = '';
   for (const line of source.split(/\r?\n/)) {
     if (!line.trim() || line.trimStart().startsWith('#') || line.trim() === 'workspaces:') continue;
     const entry = line.match(/^  - id:\s*(.*)$/);
     const name = line.match(/^    name:\s*(.*)$/);
     const legacyId = line.match(/^    legacyId:\s*(.*)$/);
     const notificationEmails = line.match(/^    notificationEmails:\s*(.*)$/);
-    const app = line.match(/^      - ([A-Za-z0-9._-]+)\s*$/);
-    if (entry) { current = { id: scalar(entry[1]), applications: [] }; groups.push(current); inApplications = false; }
+    const item = line.match(/^      - ([A-Za-z0-9._-]+)\s*$/);
+    if (entry) { current = { id: scalar(entry[1]), ownerIds: [], applications: [] }; groups.push(current); listField = ''; }
     else if (legacyId && current) current.legacyId = scalar(legacyId[1]);
     else if (name && current) current.name = scalar(name[1]);
     else if (notificationEmails && current) current.notificationEmails = scalar(notificationEmails[1]);
-    else if (line === '    applications:' && current) inApplications = true;
-    else if (app && current && inApplications) current.applications.push(app[1]);
+    else if (line === '    ownerIds:' && current) listField = 'ownerIds';
+    else if (line === '    applications:' && current) listField = 'applications';
+    else if (item && current && listField) current[listField].push(item[1]);
     else throw new Error(`Unsupported workspace YAML line: ${line}`);
   }
   const known = new Set(apps.map(app => app.id));
+  const knownOwners = new Set(owners.map(owner => owner.id));
   for (const group of groups) {
     if ((!allowLegacyIds && !uuidPattern.test(group.id || '')) || !group.name) throw new Error('Workspace needs an immutable UUID and name');
     group.notificationEmails ||= '';
+    group.ownerIds = [...new Set(group.ownerIds || [])];
+    if (!allowLegacyIds) for (const id of group.ownerIds) if (!knownOwners.has(id)) throw new Error(`Workspace ${group.name} references an unavailable owner: ${id}`);
     for (const id of group.applications) if (!known.has(id)) throw new Error(`Workspace ${group.name} references an unavailable application: ${id}`);
     group.applications = [...new Set(group.applications)];
   }
@@ -326,9 +330,9 @@ function parseWorkspaces(source, apps, allowLegacyIds = false) {
 
 async function authorizationResources(includeDisabled = true) {
   const apps = parseInventory(await readFile(path.join(configDirectory, 'applications.yaml'), 'utf8'), includeDisabled);
-  const workspaces = parseWorkspaces(await readFile(path.join(configDirectory, 'workspaces.yaml'), 'utf8'), apps.filter(app => app.enabled !== false));
-  const feeds = await readFeeds(feedFile);
   const owners = await readOwners(ownerFile);
+  const workspaces = parseWorkspaces(await readFile(path.join(configDirectory, 'workspaces.yaml'), 'utf8'), apps.filter(app => app.enabled !== false), owners);
+  const feeds = await readFeeds(feedFile);
   const ownerIds = new Set(owners.map(owner => owner.id));
   for (const app of apps) for (const ownerId of app.ownerIds) if (!ownerIds.has(ownerId)) throw new Error(`Application ${app.name} references an unavailable owner: ${ownerId}`);
   return { apps, workspaces, feeds, owners };
@@ -367,8 +371,8 @@ async function migrateResourceIds() {
   const applicationSource = await readFile(applicationFile, 'utf8');
   const workspaceSource = await readFile(workspaceFile, 'utf8');
   const applications = parseInventory(applicationSource, true, true);
-  const workspaces = parseWorkspaces(workspaceSource, applications.filter(app => app.enabled !== false), true);
   const owners = await readOwners(ownerFile);
+  const workspaces = parseWorkspaces(workspaceSource, applications.filter(app => app.enabled !== false), owners, true);
   const knownOwnerIds = new Set(owners.map(owner => owner.id));
   for (const app of applications) for (const ownerId of app.ownerIds) if (!knownOwnerIds.has(ownerId)) throw new Error(`Application ${app.name} references an unavailable owner: ${ownerId}`);
   const applicationIds = new Map();
@@ -378,11 +382,29 @@ async function migrateResourceIds() {
     workspace.applications = workspace.applications.map(id => applicationIds.get(id) || id);
     if (!uuidPattern.test(workspace.id)) { const previous = workspace.id; workspace.id = randomUUID(); workspace.legacyId ||= previous; workspaceIds.set(previous, workspace.id); }
   }
+  let workspaceOwnersMigrated = false;
+  for (const workspace of workspaces) {
+    const recipients = [...new Set(String(workspace.notificationEmails || '').split(/[;,]/).map(value => value.trim()).filter(Boolean))];
+    for (const email of recipients) {
+      let owner = owners.find(item => item.email.toLowerCase() === email.toLowerCase());
+      if (!owner) {
+        const baseName = `Notification recipient ${email}`;
+        let name = baseName;
+        for (let suffix = 2; owners.some(item => item.name.toLowerCase() === name.toLowerCase()); suffix += 1) name = `${baseName} ${suffix}`;
+        owner = validateOwner({ name, email });
+        owners.push(owner);
+      }
+      if (!workspace.ownerIds.includes(owner.id)) workspace.ownerIds.push(owner.id);
+    }
+    if (recipients.length) workspaceOwnersMigrated = true;
+    delete workspace.notificationEmails;
+  }
   const cpeMappingsMigrated = applications.some(app => app._needsCpeMigration);
   const applicationContextMigrated = applications.some(app => app._needsContextMigration);
   if (applicationIds.size || cpeMappingsMigrated || applicationContextMigrated) await saveAtomic(applicationFile, `# Application IDs, canonical CPE mappings, ownership, and risk context are managed by WatchTower.\napplications:\n${applications.map(serializeApp).join('')}`);
-  if (applicationIds.size || workspaceIds.size) await saveAtomic(workspaceFile, serializeWorkspaces(workspaces));
-  if (applicationIds.size || workspaceIds.size || cpeMappingsMigrated || applicationContextMigrated) await rm(path.join(dataDirectory, 'status.json'), { force: true });
+  if (workspaceOwnersMigrated) await writeOwners(ownerFile, owners);
+  if (applicationIds.size || workspaceIds.size || workspaceOwnersMigrated) await saveAtomic(workspaceFile, serializeWorkspaces(workspaces));
+  if (applicationIds.size || workspaceIds.size || workspaceOwnersMigrated || cpeMappingsMigrated || applicationContextMigrated) await rm(path.join(dataDirectory, 'status.json'), { force: true });
   return { applications: applicationIds, workspaces: workspaceIds };
 }
 
@@ -609,13 +631,14 @@ async function refresh() {
   refreshPromise = (async () => {
     logger.log('info', 'Scan started');
     const apps = parseInventory(await readFile(path.join(configDirectory, 'applications.yaml'), 'utf8'));
-    const workspaces = parseWorkspaces(await readFile(path.join(configDirectory, 'workspaces.yaml'), 'utf8'), apps);
+    const owners = await readOwners(ownerFile);
+    const workspaces = parseWorkspaces(await readFile(path.join(configDirectory, 'workspaces.yaml'), 'utf8'), apps, owners);
     const feeds = await readFeeds(feedFile);
     const feedCache = await collectFeeds(feeds, feedCacheFile, { onEvent: logger.feed });
     let kev = new Set();
     let kevError = null;
     try {
-      if (!apps.length) return storeSnapshot({ checkedAt: new Date().toISOString(), results: [], workspaces, warning: null, inventoryCount: 0 });
+      if (!apps.length) return storeSnapshot({ checkedAt: new Date().toISOString(), results: [], workspaces, owners, warning: null, inventoryCount: 0 });
       const data = await fetchJson('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json');
       kev = new Set(data.vulnerabilities.map(v => v.cveID));
     } catch (error) { logger.feed('error', 'CISA KEV unavailable', error.message); kevError = `CISA KEV unavailable: ${error.message}`; }
@@ -630,7 +653,7 @@ async function refresh() {
       if (kevError) { app.reasons.push(kevError); if (app.status !== 'red') app.status = 'unknown'; }
       else app.sources.push({ name: 'CISA Known Exploited Vulnerabilities', url: 'https://www.cisa.gov/known-exploited-vulnerabilities-catalog' });
     }
-    const saved = await storeSnapshot({ checkedAt: new Date().toISOString(), results, workspaces, feedSummary: { total: feeds.length, errors: Object.values(feedCache.feeds).filter(item => item.status === 'error').length }, warning: kevError, inventoryCount: apps.length });
+    const saved = await storeSnapshot({ checkedAt: new Date().toISOString(), results, workspaces, owners, feedSummary: { total: feeds.length, errors: Object.values(feedCache.feeds).filter(item => item.status === 'error').length }, warning: kevError, inventoryCount: apps.length });
     logger.log('info', 'Scan completed', `${results.length} applications; ${results.filter(app => app.status === 'unknown').length} unknown`);
     return saved;
   })().catch(error => { logger.log('error', 'Scan failed', error.message); throw error; }).finally(() => { refreshPromise = null; });
@@ -642,10 +665,11 @@ async function refreshApplication(appId) {
   if (!snapshot) return refresh();
   refreshPromise = (async () => {
     const apps = parseInventory(await readFile(path.join(configDirectory, 'applications.yaml'), 'utf8'));
-    const workspaces = parseWorkspaces(await readFile(path.join(configDirectory, 'workspaces.yaml'), 'utf8'), apps);
+    const owners = await readOwners(ownerFile);
+    const workspaces = parseWorkspaces(await readFile(path.join(configDirectory, 'workspaces.yaml'), 'utf8'), apps, owners);
     const app = apps.find(item => item.id === appId);
     if (!app) {
-      const saved = await storeSnapshot({ ...snapshot, checkedAt: new Date().toISOString(), results: (snapshot.results || []).filter(item => item.id !== appId), workspaces, inventoryCount: apps.length });
+      const saved = await storeSnapshot({ ...snapshot, checkedAt: new Date().toISOString(), results: (snapshot.results || []).filter(item => item.id !== appId), workspaces, owners, inventoryCount: apps.length });
       return saved;
     }
     logger.log('info', 'Application scan started', app.name);
@@ -665,7 +689,7 @@ async function refreshApplication(appId) {
     else result.sources.push({ name: 'CISA Known Exploited Vulnerabilities', url: 'https://www.cisa.gov/known-exploited-vulnerabilities-catalog' });
     const previousResults = snapshot.results || [];
     const results = previousResults.some(item => item.id === app.id) ? previousResults.map(item => item.id === app.id ? result : item) : [...previousResults, result];
-    const saved = await storeSnapshot({ ...snapshot, checkedAt: new Date().toISOString(), results, workspaces, inventoryCount: apps.length, feedSummary: { total: feeds.length, errors: Object.values(feedCache.feeds || {}).filter(item => item.status === 'error').length } });
+    const saved = await storeSnapshot({ ...snapshot, checkedAt: new Date().toISOString(), results, workspaces, owners, inventoryCount: apps.length, feedSummary: { total: feeds.length, errors: Object.values(feedCache.feeds || {}).filter(item => item.status === 'error').length } });
     logger.log('info', 'Application scan completed', app.name);
     return saved;
   })().catch(error => { logger.log('error', 'Application scan failed', `${appId}: ${error.message}`); throw error; }).finally(() => { refreshPromise = null; });
@@ -770,16 +794,18 @@ const requestHandler = async (req, res) => {
       if (!req.authUser?.isAdmin && auth) { forbidden(res, 'Administrator role required to manage owners'); return; }
       const owners = await readOwners(ownerFile);
       const apps = parseInventory(await readFile(path.join(configDirectory, 'applications.yaml'), 'utf8'), true);
+      const workspaces = parseWorkspaces(await readFile(path.join(configDirectory, 'workspaces.yaml'), 'utf8'), apps.filter(app => app.enabled !== false), owners);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({ owners: owners.map(owner => ({ ...owner, applicationCount: apps.filter(app => app.ownerIds.includes(owner.id)).length })) })); return;
+      res.end(JSON.stringify({ owners: owners.map(owner => ({ ...owner, applicationCount: apps.filter(app => app.ownerIds.includes(owner.id)).length, workspaceCount: workspaces.filter(group => group.ownerIds.includes(owner.id)).length })) })); return;
     }
     if (url.pathname === '/api/owners' && req.method === 'POST') {
       if (!req.authUser?.isAdmin && auth) { forbidden(res, 'Administrator role required to add owners'); return; }
       const owners = await readOwners(ownerFile);
       const owner = validateOwner(await readBody(req));
       if (owners.some(item => item.name.toLowerCase() === owner.name.toLowerCase())) throw new Error('Owner name already exists');
+      if (owners.some(item => item.email.toLowerCase() === owner.email.toLowerCase())) throw new Error('Owner email address already exists');
       await yamlMonitor.webWrite(ownerFile, () => writeOwners(ownerFile, [...owners, owner]));
-      await logger.audit('Owner added', auditActor(req), { type: 'owner', id: owner.id, name: owner.name }, { name: owner.name, primaryContactConfigured: true, escalationContactConfigured: Boolean(owner.escalationContact) }, `${owner.name} (${owner.id})`);
+      await logger.audit('Owner added', auditActor(req), { type: 'owner', id: owner.id, name: owner.name }, { name: owner.name, emailConfigured: true, escalationEmailConfigured: Boolean(owner.escalationEmail) }, `${owner.name} (${owner.id})`);
       res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(owner)); return;
     }
     const ownerRoute = url.pathname.match(/^\/api\/owners\/([0-9a-f-]+)$/i);
@@ -791,11 +817,12 @@ const requestHandler = async (req, res) => {
       const previous = owners[index];
       const owner = validateOwner(await readBody(req), previous.id);
       if (owners.some((item, ownerIndex) => ownerIndex !== index && item.name.toLowerCase() === owner.name.toLowerCase())) throw new Error('Owner name already exists');
+      if (owners.some((item, ownerIndex) => ownerIndex !== index && item.email.toLowerCase() === owner.email.toLowerCase())) throw new Error('Owner email address already exists');
       owners[index] = owner;
       await yamlMonitor.webWrite(ownerFile, () => writeOwners(ownerFile, owners));
       const changes = changedFields(previous, owner, ['name']);
-      if (previous.primaryContact !== owner.primaryContact) changes.primaryContactChanged = true;
-      if (previous.escalationContact !== owner.escalationContact) changes.escalationContactChanged = true;
+      if (previous.email !== owner.email) changes.emailChanged = true;
+      if (previous.escalationEmail !== owner.escalationEmail) changes.escalationEmailChanged = true;
       if (Object.keys(changes).length) await logger.audit('Owner updated', auditActor(req), { type: 'owner', id: owner.id, name: owner.name }, changes, `${owner.name} (${owner.id}); ${describeFields(changes)}`);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(owner)); return;
     }
@@ -805,8 +832,10 @@ const requestHandler = async (req, res) => {
       const owner = owners.find(item => item.id === ownerRoute[1]);
       if (!owner) throw new Error('Owner not found');
       const apps = parseInventory(await readFile(path.join(configDirectory, 'applications.yaml'), 'utf8'), true);
+      const workspaces = parseWorkspaces(await readFile(path.join(configDirectory, 'workspaces.yaml'), 'utf8'), apps, owners);
       const assigned = apps.filter(app => app.ownerIds.includes(owner.id));
-      if (assigned.length) throw new Error(`Owner is assigned to ${assigned.length} application${assigned.length === 1 ? '' : 's'} and cannot be removed`);
+      const assignedWorkspaces = workspaces.filter(group => group.ownerIds.includes(owner.id));
+      if (assigned.length || assignedWorkspaces.length) throw new Error(`Owner is assigned to ${assigned.length} application${assigned.length === 1 ? '' : 's'} and ${assignedWorkspaces.length} workspace${assignedWorkspaces.length === 1 ? '' : 's'} and cannot be removed`);
       await yamlMonitor.webWrite(ownerFile, () => writeOwners(ownerFile, owners.filter(item => item.id !== owner.id)));
       await logger.audit('Owner removed', auditActor(req), { type: 'owner', id: owner.id, name: owner.name }, { name: owner.name }, `${owner.name} (${owner.id})`);
       res.writeHead(204); res.end(); return;
@@ -1078,46 +1107,46 @@ const requestHandler = async (req, res) => {
       const body = await readBody(req);
       const previousId = workspaceEdit?.[1] || null;
       if (!previousId && auth && !req.authUser?.isAdmin) { forbidden(res, 'Administrator role required to add workspaces'); return; }
-      const { access } = await authorization(req);
+      const { access, owners } = await authorization(req);
       const id = previousId || randomUUID();
       const name = String(body.name ?? '').trim();
-      const notificationEmails = String(body.notificationEmails ?? '').trim();
       if (!uuidPattern.test(id)) throw new Error('Workspace ID must be an immutable UUID');
       if (!name || /[\r\n]/.test(name)) throw new Error('Workspace name is required on one line');
-      const recipients = [...new Set(notificationEmails.split(/[;,]/).map(value => value.trim()).filter(Boolean))];
-      if (recipients.some(value => !/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(value))) throw new Error('Enter valid notification email addresses separated by commas');
+      if (!Array.isArray(body.ownerIds)) throw new Error('Select owners for the workspace');
+      const ownerIds = [...new Set(body.ownerIds.map(value => String(value)))];
+      if (ownerIds.some(ownerId => !owners.some(owner => owner.id === ownerId))) throw new Error('Workspace contains an unknown owner');
       if (!Array.isArray(body.applications)) throw new Error('Select applications for the workspace');
       const membership = [...new Set(body.applications.map(value => String(value)))];
       const apps = parseInventory(await readFile(path.join(configDirectory, 'applications.yaml'), 'utf8'));
       if (membership.some(appId => !apps.some(app => app.id === appId))) throw new Error('Workspace contains an unknown application');
       if (refreshPromise) await refreshPromise;
       const file = path.join(configDirectory, 'workspaces.yaml');
-      const groups = parseWorkspaces(await readFile(file, 'utf8'), apps);
+      const groups = parseWorkspaces(await readFile(file, 'utf8'), apps, owners);
       const index = previousId ? groups.findIndex(group => group.id === previousId) : groups.findIndex(group => group.id === id);
       if (previousId && index < 0) throw new Error('Workspace not found');
       const previous = index < 0 ? null : groups[index];
       if (previous) {
         if (name !== previous.name && !access.workspaceEdit.has(id)) { forbidden(res, 'Workspace Manager role required to rename this workspace'); return; }
         if (JSON.stringify(membership) !== JSON.stringify(previous.applications) && !access.workspaceMembership.has(id)) { forbidden(res, 'Workspace Membership Manager role required'); return; }
-        if (recipients.join(', ') !== previous.notificationEmails && !access.workspaceNotifications.has(id)) { forbidden(res, 'Notification Manager role required'); return; }
+        if (JSON.stringify(ownerIds) !== JSON.stringify(previous.ownerIds) && !access.workspaceNotifications.has(id)) { forbidden(res, 'Notification Manager role required'); return; }
       }
-      const group = { id, legacyId: previous?.legacyId || '', name, notificationEmails: recipients.join(', '), applications: membership };
+      const group = { id, legacyId: previous?.legacyId || '', name, ownerIds, applications: membership };
       if (index < 0) groups.push(group); else groups[index] = group;
       await yamlMonitor.webWrite(file, () => saveAtomic(file, serializeWorkspaces(groups)));
       if (snapshot) {
-        snapshot = { ...snapshot, workspaces: groups };
+        snapshot = { ...snapshot, workspaces: groups, owners };
         await saveAtomic(snapshotFile, `${JSON.stringify(snapshot)}\n`);
       }
       if (previous) {
         const addedApplications = membership.filter(appId => !previous.applications.includes(appId));
         const removedApplications = previous.applications.filter(appId => !membership.includes(appId));
-        const changes = { ...changedFields(previous, group, ['id', 'name']), addedApplications, removedApplications, notificationRecipientsChanged: previous.notificationEmails !== group.notificationEmails };
-        if (changes.name || addedApplications.length || removedApplications.length || changes.notificationRecipientsChanged) {
-          const detail = [changes.id || changes.name ? describeFields(Object.fromEntries(Object.entries({ id: changes.id, name: changes.name }).filter(([, value]) => value))) : '', addedApplications.length ? `Applications added: ${addedApplications.join(', ')}` : '', removedApplications.length ? `Applications removed: ${removedApplications.join(', ')}` : '', changes.notificationRecipientsChanged ? 'Notification recipients changed' : ''].filter(Boolean).join('; ');
+        const changes = { ...changedFields(previous, group, ['id', 'name']), addedApplications, removedApplications, ownerAssignmentsChanged: JSON.stringify(previous.ownerIds) !== JSON.stringify(group.ownerIds) };
+        if (changes.name || addedApplications.length || removedApplications.length || changes.ownerAssignmentsChanged) {
+          const detail = [changes.id || changes.name ? describeFields(Object.fromEntries(Object.entries({ id: changes.id, name: changes.name }).filter(([, value]) => value))) : '', addedApplications.length ? `Applications added: ${addedApplications.join(', ')}` : '', removedApplications.length ? `Applications removed: ${removedApplications.join(', ')}` : '', changes.ownerAssignmentsChanged ? 'Workspace owners changed' : ''].filter(Boolean).join('; ');
           await logger.audit('Workspace updated', auditActor(req), { type: 'workspace', id, name }, changes, `${name} (${id}); ${detail}`);
         }
       } else {
-        await logger.audit('Workspace added', auditActor(req), { type: 'workspace', id, name }, { name, applications: membership, notificationRecipientCount: recipients.length }, `${name} (${id}); applications: ${membership.join(', ') || 'none'}; notification recipients: ${recipients.length}`);
+        await logger.audit('Workspace added', auditActor(req), { type: 'workspace', id, name }, { name, applications: membership, ownerIds }, `${name} (${id}); applications: ${membership.join(', ') || 'none'}; owners: ${ownerIds.length}`);
       }
       res.writeHead(index < 0 ? 201 : 200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ ...group, previousId: previousId || id })); return;
     }
