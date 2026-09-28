@@ -58,3 +58,9 @@ WatchTower is a triage tool. Its results depend on correct product mappings and 
 Versioned images are published as `devynn76/watchtower:<version>`. Pin a specific version in production so upgrades are deliberate and reversible. The `latest` tag follows the newest successful release.
 
 See [Initial setup](docs/SETUP.md#initial-setup) for a complete Docker deployment example.
+
+## License
+
+Copyright 2026 Christopher Bentkowski.
+
+WatchTower is licensed under the [Apache License 2.0](LICENSE).
