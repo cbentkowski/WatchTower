@@ -8,7 +8,7 @@ import { smtpPasswordState, validateSmtpSettings } from '../settings.mjs';
 
 const settings = { enabled: true, host: 'smtp.example.com', port: 587, secure: false, requireTls: true, unauthenticated: true, from: 'alerts@example.com', baseUrl: 'https://watchtower.example.com', timeZone: 'UTC', sendHour: 9, usernameEnv: '' };
 const app = (version = '1.0') => ({ id: 'app', name: 'Test App', version, status: 'red', vulnerabilities: [{ id: 'CVE-2026-1234', score: 9 }], lifecycle: { state: 'supported' }, reasons: ['High risk finding'] });
-const snapshot = current => ({ workspaces: [{ id: 'team', name: 'Team', notificationEmails: 'team@example.com', applications: ['app'] }], results: [current] });
+const snapshot = current => ({ owners: [{ id: 'owner', name: 'Team owner', email: 'team@example.com' }], workspaces: [{ id: 'team', name: 'Team', ownerIds: ['owner'], applications: ['app'] }], results: [current] });
 
 test('needs-action alert is immediate, weekly thereafter, and stops after acknowledgment', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-'));
@@ -128,7 +128,7 @@ test('identifier renames preserve notification tokens and acknowledgements', asy
   await notifier.renameIdentifiers({ appFrom: 'app', appTo: 'renamed-app', workspaceFrom: 'team', workspaceTo: 'renamed-team' });
   assert.ok((await notifier.lookup(token)).acknowledgedAt);
   const renamedApp = { ...app(), id: 'renamed-app' };
-  await notifier.onScan({ workspaces: [{ id: 'renamed-team', name: 'Team', notificationEmails: 'team@example.com', applications: ['renamed-app'] }], results: [renamedApp] });
+  await notifier.onScan({ owners: [{ id: 'owner', name: 'Team owner', email: 'team@example.com' }], workspaces: [{ id: 'renamed-team', name: 'Team', ownerIds: ['owner'], applications: ['renamed-app'] }], results: [renamedApp] });
   assert.equal(sent.length, 1);
 });
 

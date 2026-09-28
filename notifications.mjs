@@ -115,8 +115,9 @@ export function createNotifier({ dataDirectory, settingsLoader, env = process.en
     let changed = false;
     const groups = snapshot.workspaces || [];
     const apps = snapshot.results || [];
+    const ownerById = new Map((snapshot.owners || []).map(owner => [owner.id, owner]));
     for (const group of groups) {
-      const recipients = String(group.notificationEmails || '').split(',').map(value => value.trim()).filter(Boolean);
+      const recipients = [...new Set((group.ownerIds || []).map(id => ownerById.get(id)?.email).filter(Boolean))];
       if (!recipients.length) continue;
       const alerts = [];
       for (const app of apps.filter(item => group.applications.includes(item.id))) {

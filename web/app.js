@@ -22,6 +22,9 @@ let ownersLoaded = false;
 let feedData = { feeds: [], applications: [], canManage: false };
 let currentFeedId = null;
 let currentOwnerId = null;
+let editorSelections = { ownerIds: new Set(), workspaceIds: new Set(), feedIds: new Set(), applicationIds: new Set() };
+let associationState = null;
+let resumeOwnerAssociation = null;
 let accessData = null;
 let isAdmin = false;
 let canManageAccess = false;
@@ -170,7 +173,7 @@ async function loadOwners() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not load owners');
     owners = data.owners || [];
-    list.innerHTML = owners.length ? owners.map(owner => `<article class="owner-row"><div><h3>${escape(owner.name)}</h3><p>Primary: ${escape(owner.primaryContact)}</p>${owner.escalationContact ? `<p>Escalation: ${escape(owner.escalationContact)}</p>` : ''}</div><span>${owner.applicationCount} application${owner.applicationCount === 1 ? '' : 's'}</span><button type="button" data-owner="${escape(owner.id)}">Edit</button></article>`).join('') : '<p class="empty"><strong>No owners configured</strong><span>Add a reusable owner before assigning responsibility to applications.</span></p>';
+    list.innerHTML = owners.length ? owners.map(owner => `<article class="owner-row"><div><h3>${escape(owner.name)}</h3><p>Email: ${escape(owner.email)}</p>${owner.escalationEmail ? `<p>Escalation: ${escape(owner.escalationEmail)}</p>` : ''}</div><span>${owner.applicationCount} application${owner.applicationCount === 1 ? '' : 's'} · ${owner.workspaceCount} workspace${owner.workspaceCount === 1 ? '' : 's'}</span><button type="button" data-owner="${escape(owner.id)}">Edit</button></article>`).join('') : '<p class="empty"><strong>No owners configured</strong><span>Add a reusable owner before assigning responsibility to applications or workspaces.</span></p>';
   } catch (error) { list.innerHTML = `<p class="form-error">${escape(error.message)}</p>`; }
 }
 
@@ -180,11 +183,11 @@ function openOwnerEditor(id = '') {
   $('owner-editor-title').textContent = owner ? 'Edit owner' : 'Add owner';
   $('owner-form').reset();
   $('owner-form').elements.name.value = owner?.name || '';
-  $('owner-form').elements.primaryContact.value = owner?.primaryContact || '';
-  $('owner-form').elements.escalationContact.value = owner?.escalationContact || '';
-  $('owner-editor-id').innerHTML = owner ? `Owner ID: <code>${escape(owner.id)}</code> (immutable) · assigned to ${owner.applicationCount} application${owner.applicationCount === 1 ? '' : 's'}` : 'A permanent owner ID will be generated when saved.';
+  $('owner-form').elements.email.value = owner?.email || '';
+  $('owner-form').elements.escalationEmail.value = owner?.escalationEmail || '';
+  $('owner-editor-id').innerHTML = owner ? `Owner ID: <code>${escape(owner.id)}</code> (immutable) · assigned to ${owner.applicationCount} application${owner.applicationCount === 1 ? '' : 's'} and ${owner.workspaceCount} workspace${owner.workspaceCount === 1 ? '' : 's'}` : 'A permanent owner ID will be generated when saved.';
   $('owner-delete').hidden = !owner;
-  $('owner-delete').disabled = Boolean(owner?.applicationCount);
+  $('owner-delete').disabled = Boolean(owner?.applicationCount || owner?.workspaceCount);
   $('owner-error').hidden = true;
   $('owner-editor').showModal();
 }
@@ -197,6 +200,18 @@ async function saveOwner(event) {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not save owner');
     $('owner-editor').close();
+    if (resumeOwnerAssociation && !currentOwnerId) {
+      editorConfig.owners = [...(editorConfig.owners || []), data];
+      owners = [...owners.filter(owner => owner.id !== data.id), data];
+      ownersLoaded = false;
+      editorSelections.ownerIds.add(data.id);
+      const resume = resumeOwnerAssociation;
+      resumeOwnerAssociation = null;
+      openAssociation('ownerIds', resume.title);
+      associationState.draft.add(data.id);
+      renderAssociationList();
+      return;
+    }
     ownersLoaded = false;
     await loadOwners();
   } catch (error) { $('owner-error').textContent = error.message; $('owner-error').hidden = false; }
@@ -211,6 +226,14 @@ async function deleteOwner() {
     ownersLoaded = false;
     await loadOwners();
   } catch (error) { $('owner-error').textContent = error.message; $('owner-error').hidden = false; }
+}
+
+function closeOwnerEditor() {
+  $('owner-editor').close();
+  if (!resumeOwnerAssociation) return;
+  const resume = resumeOwnerAssociation;
+  resumeOwnerAssociation = null;
+  openAssociation('ownerIds', resume.title);
 }
 
 async function loadLogs() {
@@ -551,11 +574,48 @@ function showDetails(a) {
   const containing = workspaces.filter(group => group.applications.includes(a.id));
   const sharedWarning = containing.length > 1 && (isAdmin || permissions.applications.edit.includes(a.id)) ? `<p class="form-error">This application is shared by ${containing.length} workspaces. Editing it changes the application everywhere it appears.</p>` : '';
   const assignedOwners = (a.ownerIds || []).map(id => owners.find(owner => owner.id === id)).filter(Boolean);
-  const ownership = assignedOwners.length ? assignedOwners.map(owner => `<article class="owner-contact"><strong>${escape(owner.name)}</strong><span>Primary: ${escape(owner.primaryContact)}</span>${owner.escalationContact ? `<span>Escalation: ${escape(owner.escalationContact)}</span>` : ''}</article>`).join('') : '<p class="muted">No owner assigned.</p>';
+  const ownership = assignedOwners.length ? assignedOwners.map(owner => `<article class="owner-contact"><strong>${escape(owner.name)}</strong><span>Email: ${escape(owner.email)}</span>${owner.escalationEmail ? `<span>Escalation: ${escape(owner.escalationEmail)}</span>` : ''}</article>`).join('') : '<p class="muted">No owner assigned.</p>';
   const context = `<div class="detail-grid context-grid"><div><span>CRITICALITY</span><strong>${escape(a.criticality || 'unspecified')}</strong></div><div><span>ENVIRONMENT</span><strong>${escape(a.environment || 'unspecified')}</strong></div><div><span>EXPOSURE</span><strong>${escape(a.exposure || 'unknown')}</strong></div><div><span>TAGS</span><strong>${escape((a.tags || []).join(', ') || 'None')}</strong></div></div><h3>Ownership</h3><div class="owner-contacts">${ownership}</div>`;
   const feedEvidence = (a.feedEvents || []).length ? `<h3>Feed evidence</h3>${a.feedEvents.map(event => `<div class="feed-evidence"><a href="${safeUrl(event.url)}" target="_blank" rel="noopener noreferrer">${escape(event.title)} ↗</a><span class="vendor">${escape(event.type)} · ${escape(event.confidence)} confidence${event.severity && event.severity !== 'UNKNOWN' ? ` · ${escape(event.severity)}` : ''}</span></div>`).join('')}` : '';
   $('detail-body').innerHTML = `${sharedWarning}<div class="detail-grid"><div><span>INSTALLED VERSION</span><strong>${escape(a.version)}</strong></div><div><span>LATEST AVAILABLE</span><strong>${escape(upgrade.latest || 'Unavailable')}</strong>${releaseLink}</div><div><span>LATEST ON INSTALLED LINE</span><strong>${escape(upgrade.currentLine || 'Unavailable')}</strong></div><div><span>LATEST LTS VERSION</span><strong>${escape(upgrade.latestLts || 'No designated LTS')}</strong></div><div><span>SUPPORT</span><strong>${escape(a.lifecycle?.note || 'Unknown')}</strong></div></div><h3>Application context</h3>${context}<h3>Assessment</h3><ul class="reasons">${a.reasons.map(r => `<li>${escape(r)}</li>`).join('')}</ul><h3>Vulnerability findings</h3>${findings}${feedEvidence}<h3>Sources</h3><div class="sources">${a.sources.map(s => `<a href="${safeUrl(s.url)}" target="_blank" rel="noopener noreferrer">${escape(s.name)} ↗</a>`).join('') || '<span class="muted">No source links available</span>'}</div><p class="detail-note">CPE: <code>${escape(a.cpe)}</code>. Confirm product identity and affected version ranges in the linked advisories before remediation decisions.</p>`;
   $('details').showModal();
+}
+
+function associationRow(key, title, emptyText) {
+  const count = editorSelections[key].size;
+  return `<section class="association-summary"><div><strong>${escape(title)}</strong><span id="${key}-summary">${count ? `${count} selected` : escape(emptyText)}</span></div><button type="button" data-association="${key}">Choose</button></section>`;
+}
+
+function associationItems(key) {
+  if (key === 'ownerIds') return (editorConfig.owners || []).map(item => ({ ...item, detail: item.email }));
+  if (key === 'workspaceIds') return editorConfig.workspaces || [];
+  if (key === 'feedIds') return editorConfig.feeds || [];
+  return (editorConfig.applications || []).filter(item => item.enabled !== false);
+}
+
+function renderAssociationList() {
+  if (!associationState) return;
+  const query = $('association-search').value.trim().toLowerCase();
+  const items = associationState.items.filter(item => `${item.name} ${item.detail || ''}`.toLowerCase().includes(query));
+  $('association-list').innerHTML = items.length ? items.map(item => `<label><input type="checkbox" value="${escape(item.id)}" ${associationState.draft.has(item.id) ? 'checked' : ''}> <span><strong>${escape(item.name)}</strong>${item.detail ? `<small>${escape(item.detail)}</small>` : ''}</span></label>`).join('') : '<p class="muted">No matching items.</p>';
+}
+
+function openAssociation(key, title) {
+  associationState = { key, items: associationItems(key), draft: new Set(editorSelections[key]) };
+  $('association-title').textContent = title;
+  $('association-add-owner').hidden = key !== 'ownerIds' || !isAdmin;
+  $('association-search').value = '';
+  renderAssociationList();
+  $('association-dialog').showModal();
+  $('association-search').focus();
+}
+
+function applyAssociation() {
+  if (!associationState) return;
+  editorSelections[associationState.key] = new Set(associationState.draft);
+  const summary = $(`${associationState.key}-summary`);
+  if (summary) summary.textContent = editorSelections[associationState.key].size ? `${editorSelections[associationState.key].size} selected` : 'None selected';
+  $('association-dialog').close();
 }
 
 async function openEditor(mode, targetId = null) {
@@ -569,6 +629,7 @@ async function openEditor(mode, targetId = null) {
     const response = await fetch('/api/config', { cache: 'no-store' });
     editorConfig = await response.json();
     if (!response.ok) throw new Error(editorConfig.error || 'Could not load inventory');
+    editorSelections = { ownerIds: new Set(), workspaceIds: new Set(), feedIds: new Set(), applicationIds: new Set() };
     if (mode === 'app') {
       $('editor-fields').innerHTML = `<div class="form-grid">
         <label>Display name <input name="name" required placeholder="Application name"></label>
@@ -589,7 +650,7 @@ async function openEditor(mode, targetId = null) {
         <label>Latest version override <input name="latestVersion" placeholder="Optional"></label>
         <label>Latest installed-line override <input name="latestBranchVersion" placeholder="Optional"></label>
         <label>Latest LTS override <input name="latestLtsVersion" placeholder="Optional"></label>
-      </div>${targetId ? `<p class="form-hint">Application ID: <code>${escape(targetId)}</code> (immutable)</p>` : ''}<p class="form-hint">Provide a lifecycle product or a manual end-of-life date. Vulnerability mappings use the canonical NVD CPE Dictionary.</p>${editorConfig.owners?.length ? `<fieldset><legend>Owners</legend><div class="check-grid">${editorConfig.owners.map(owner => `<label><input type="checkbox" name="ownerIds" value="${escape(owner.id)}"> ${escape(owner.name)}<small>${escape(owner.primaryContact)}</small></label>`).join('')}</div></fieldset>` : '<p class="form-hint">No owners are configured. Administrators can add reusable contacts from Owners.</p>'}${editorConfig.workspaces.length ? `<fieldset><legend>Add to workspaces</legend><div class="check-grid">${editorConfig.workspaces.map(group => `<label><input type="checkbox" name="workspace" value="${escape(group.id)}"> ${escape(group.name)}</label>`).join('')}</div></fieldset>` : ''}${editorConfig.feeds?.length ? `<fieldset><legend>Associated feeds</legend><div class="check-grid">${editorConfig.feeds.map(feed => `<label><input type="checkbox" name="feed" value="${escape(feed.id)}"> ${escape(feed.name)}</label>`).join('')}</div></fieldset>` : ''}`;
+      </div>${targetId ? `<p class="form-hint">Application ID: <code>${escape(targetId)}</code> (immutable)</p>` : ''}<p class="form-hint">Provide a lifecycle product or a manual end-of-life date. Vulnerability mappings use the canonical NVD CPE Dictionary.</p><div class="association-summaries">${associationRow('ownerIds', 'Owners', 'None selected')}${associationRow('workspaceIds', 'Workspaces', 'None selected')}${associationRow('feedIds', 'Feeds', 'None selected')}</div>`;
       $('change-cpe').addEventListener('click', openCpeDialog);
       $('change-lifecycle').addEventListener('click', openLifecycleDialog);
       cpeMapping = null;
@@ -601,9 +662,10 @@ async function openEditor(mode, targetId = null) {
           const input = $('editor-form').querySelector(`[name="${key}"]`);
           if (input && input.type !== 'checkbox') input.value = value ?? '';
         }
-        for (const input of $('editor-form').querySelectorAll('[name="workspace"]')) input.checked = Boolean(editorConfig.workspaces.find(group => group.id === input.value)?.applications.includes(targetId));
-        for (const input of $('editor-form').querySelectorAll('[name="feed"]')) input.checked = Boolean(editorConfig.feeds.find(feed => feed.id === input.value)?.applicationIds.includes(targetId));
-        for (const input of $('editor-form').querySelectorAll('[name="ownerIds"]')) input.checked = app.ownerIds?.includes(input.value);
+        editorSelections.workspaceIds = new Set(editorConfig.workspaces.filter(group => group.applications.includes(targetId)).map(group => group.id));
+        editorSelections.feedIds = new Set(editorConfig.feeds.filter(feed => feed.applicationIds.includes(targetId)).map(feed => feed.id));
+        editorSelections.ownerIds = new Set(app.ownerIds || []);
+        for (const key of ['ownerIds', 'workspaceIds', 'feedIds']) $(`${key}-summary`).textContent = editorSelections[key].size ? `${editorSelections[key].size} selected` : 'None selected';
         $('editor-form').elements.tags.value = (app.tags || []).join(', ');
         cpeMapping = { cpeName: app.cpeName || `cpe:2.3:a:${app.cpeVendor}:${app.cpeProduct}:*:*:*:*:${app.cpeEdition || '*'}:*:*:*`, mode: app.cpeMode || 'product', title: app.cpeTitle || app.name, deprecated: app.cpeDeprecated === true || app.cpeDeprecated === 'true', testedAt: app.cpeLastTestedAt || '', candidateCount: app.cpeTestCandidateCount || '', applicableCount: app.cpeTestApplicableCount || '' };
         if (app.lifecycleProduct) lifecycleMapping = { name: app.lifecycleProduct, label: app.lifecycleProduct, sourceUrl: app.lifecycleUrl || `https://endoflife.date/${app.lifecycleProduct}` };
@@ -611,7 +673,7 @@ async function openEditor(mode, targetId = null) {
       renderMappingSummary();
       renderLifecycleSummary();
     } else {
-      $('editor-fields').innerHTML = `<label class="form-full">Workspace to edit <select id="workspace-choice"><option value="">New workspace</option>${editorConfig.workspaces.map(group => `<option value="${escape(group.id)}">${escape(group.name)}</option>`).join('')}</select></label><div class="form-grid"><label>Workspace name <input name="name" required placeholder="Customer, system, or group name"></label></div><p id="workspace-id-label" class="form-hint"></p><label class="form-full notification-emails">Notification emails <input name="notificationEmails" type="text" placeholder="alex@example.com, team@example.com"></label><p class="form-hint">Separate recipients with commas. Leave blank to turn off email for this workspace.</p><fieldset><legend>Applications in this workspace</legend><div class="check-grid">${editorConfig.applications.filter(app => app.enabled !== false).map(app => `<label><input type="checkbox" name="application" value="${escape(app.id)}"> ${escape(app.name)}</label>`).join('') || '<p class="muted">Add an application first.</p>'}</div></fieldset>`;
+      $('editor-fields').innerHTML = `<label class="form-full">Workspace to edit <select id="workspace-choice"><option value="">New workspace</option>${editorConfig.workspaces.map(group => `<option value="${escape(group.id)}">${escape(group.name)}</option>`).join('')}</select></label><div class="form-grid"><label>Workspace name <input name="name" required placeholder="Customer, system, or group name"></label></div><p id="workspace-id-label" class="form-hint"></p><p class="form-hint">Workspace owners receive notifications for the applications assigned here.</p><div class="association-summaries">${associationRow('ownerIds', 'Workspace owners', 'None selected')}${associationRow('applicationIds', 'Applications', 'None selected')}</div>`;
       $('workspace-choice').addEventListener('change', populateWorkspaceEditor);
       if (targetId) { $('workspace-choice').value = targetId; populateWorkspaceEditor(); $('workspace-choice').hidden = true; $('workspace-choice').closest('label').hidden = true; }
     }
@@ -815,12 +877,14 @@ function populateWorkspaceEditor() {
   const form = $('editor-form');
   $('workspace-id-label').innerHTML = group ? `Workspace ID: <code>${escape(group.id)}</code> (immutable)` : 'A permanent workspace ID will be generated when saved.';
   form.querySelector('[name="name"]').value = group?.name || '';
-  form.querySelector('[name="notificationEmails"]').value = group?.notificationEmails || '';
-  for (const input of form.querySelectorAll('[name="application"]')) input.checked = Boolean(group?.applications.includes(input.value));
+  editorSelections.ownerIds = new Set(group?.ownerIds || []);
+  editorSelections.applicationIds = new Set(group?.applications || []);
+  $('ownerIds-summary').textContent = editorSelections.ownerIds.size ? `${editorSelections.ownerIds.size} selected` : 'None selected';
+  $('applicationIds-summary').textContent = editorSelections.applicationIds.size ? `${editorSelections.applicationIds.size} selected` : 'None selected';
   if (group && !isAdmin) {
     form.querySelector('[name="name"]').readOnly = !permissions.workspaces.edit.includes(group.id);
-    form.querySelector('[name="notificationEmails"]').readOnly = !permissions.workspaces.notifications.includes(group.id);
-    for (const input of form.querySelectorAll('[name="application"]')) input.disabled = !permissions.workspaces.membership.includes(group.id);
+    form.querySelector('[data-association="ownerIds"]').disabled = !permissions.workspaces.notifications.includes(group.id);
+    form.querySelector('[data-association="applicationIds"]').disabled = !permissions.workspaces.membership.includes(group.id);
   }
 }
 
@@ -831,7 +895,7 @@ function applySavedEditorState(saved, payload, fields) {
     else workspaces = workspaces.map(group => group.id === saved.previousId ? saved : group);
   } else {
     allResults = allResults.map(app => app.id === saved.previousId ? { ...app, id: saved.id, name: payload.name } : app);
-    const selectedWorkspaces = new Set(fields.getAll('workspace'));
+    const selectedWorkspaces = editorSelections.workspaceIds;
     workspaces = workspaces.map(group => {
       const applicationsAfterRename = group.applications.map(id => id === saved.previousId ? saved.id : id);
       const containsApp = applicationsAfterRename.includes(saved.id);
@@ -849,7 +913,7 @@ async function saveEditor(event) {
   const form = $('editor-form');
   const fields = new FormData(form);
   const currentWorkspace = editorMode === 'workspace' && editorTargetId ? editorConfig.workspaces.find(group => group.id === editorTargetId) : null;
-  const payload = editorMode === 'app' ? { ...Object.fromEntries([...fields].filter(([key]) => !['workspace', 'feed', 'ownerIds'].includes(key))), ownerIds: fields.getAll('ownerIds') } : { name: fields.get('name'), notificationEmails: fields.get('notificationEmails'), applications: currentWorkspace && !isAdmin && !permissions.workspaces.membership.includes(currentWorkspace.id) ? currentWorkspace.applications : fields.getAll('application') };
+  const payload = editorMode === 'app' ? { ...Object.fromEntries(fields), ownerIds: [...editorSelections.ownerIds] } : { name: fields.get('name'), ownerIds: currentWorkspace && !isAdmin && !permissions.workspaces.notifications.includes(currentWorkspace.id) ? currentWorkspace.ownerIds : [...editorSelections.ownerIds], applications: currentWorkspace && !isAdmin && !permissions.workspaces.membership.includes(currentWorkspace.id) ? currentWorkspace.applications : [...editorSelections.applicationIds] };
   if (editorMode === 'app' && !payload.cpeName) { $('editor-error').textContent = 'Choose a vulnerability mapping before saving.'; $('editor-error').hidden = false; return; }
   if (editorMode === 'app' && !payload.lifecycleProduct && !payload.eolDate) { $('editor-error').textContent = 'Enter a lifecycle product or manual end-of-life date.'; $('editor-error').hidden = false; return; }
   $('editor-save').disabled = true;
@@ -861,10 +925,10 @@ async function saveEditor(event) {
     const saved = await response.json();
     if (!response.ok) throw new Error(saved.error || 'Could not save');
     if (editorMode === 'app') {
-      const feedUpdate = await fetch(`/api/applications/${encodeURIComponent(saved.id)}/feeds`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ feedIds: fields.getAll('feed') }) });
+      const feedUpdate = await fetch(`/api/applications/${encodeURIComponent(saved.id)}/feeds`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ feedIds: [...editorSelections.feedIds] }) });
       if (!feedUpdate.ok) throw new Error((await feedUpdate.json()).error || 'Could not update feed associations');
       for (const group of editorConfig.workspaces) {
-        const selected = fields.getAll('workspace').includes(group.id);
+        const selected = editorSelections.workspaceIds.has(group.id);
         const applicationsAfterRename = group.applications.map(id => id === saved.previousId ? saved.id : id);
         const membership = applicationsAfterRename.includes(saved.id);
         if (selected === membership) continue;
@@ -916,8 +980,26 @@ $('manage-workspaces').addEventListener('click', () => openEditor('workspace'));
 $('edit-workspace').addEventListener('click', () => { const group = activeWorkspace(); if (group && group.id !== 'all') openEditor('workspace', group.id); });
 $('edit-app').addEventListener('click', () => { const id = detailAppId; $('details').close(); if (id) openEditor('app', id); });
 $('editor-form').addEventListener('submit', saveEditor);
+$('editor-fields').addEventListener('click', event => {
+  const button = event.target.closest('[data-association]');
+  if (!button || button.disabled) return;
+  const titles = { ownerIds: editorMode === 'workspace' ? 'Choose workspace owners' : 'Choose application owners', workspaceIds: 'Choose workspaces', feedIds: 'Choose feeds', applicationIds: 'Choose applications' };
+  openAssociation(button.dataset.association, titles[button.dataset.association]);
+});
 $('editor-close').addEventListener('click', () => $('editor').close());
 $('editor-cancel').addEventListener('click', () => $('editor').close());
+$('association-search').addEventListener('input', renderAssociationList);
+$('association-list').addEventListener('change', event => { if (!associationState || event.target.type !== 'checkbox') return; if (event.target.checked) associationState.draft.add(event.target.value); else associationState.draft.delete(event.target.value); });
+$('association-apply').addEventListener('click', applyAssociation);
+$('association-add-owner').addEventListener('click', () => {
+  if (!associationState || associationState.key !== 'ownerIds') return;
+  editorSelections.ownerIds = new Set(associationState.draft);
+  resumeOwnerAssociation = { title: $('association-title').textContent };
+  $('association-dialog').close();
+  openOwnerEditor();
+});
+$('association-close').addEventListener('click', () => $('association-dialog').close());
+$('association-cancel').addEventListener('click', () => $('association-dialog').close());
 $('cpe-close').addEventListener('click', () => $('cpe-dialog').close());
 $('cpe-search-form').addEventListener('submit', event => { event.preventDefault(); searchCpes(0); });
 $('cpe-search-reset').addEventListener('click', () => { $('cpe-search-form').reset(); $('cpe-results').innerHTML = '<p class="muted">Search the NVD CPE Dictionary or paste a complete CPE below.</p>'; $('cpe-pagination').hidden = true; });
@@ -956,8 +1038,8 @@ $('add-owner').addEventListener('click', () => openOwnerEditor());
 $('owners-list').addEventListener('click', event => { const button = event.target.closest('[data-owner]'); if (button) openOwnerEditor(button.dataset.owner); });
 $('owner-form').addEventListener('submit', saveOwner);
 $('owner-delete').addEventListener('click', deleteOwner);
-$('owner-editor-close').addEventListener('click', () => $('owner-editor').close());
-$('owner-cancel').addEventListener('click', () => $('owner-editor').close());
+$('owner-editor-close').addEventListener('click', closeOwnerEditor);
+$('owner-cancel').addEventListener('click', closeOwnerEditor);
 $('logs-refresh').addEventListener('click', loadLogs);
 for (const button of document.querySelectorAll('[data-log-type]')) button.addEventListener('click', () => { activeLogType = button.dataset.logType; loadLogs(); });
 $('settings-form').addEventListener('submit', saveSettings);
