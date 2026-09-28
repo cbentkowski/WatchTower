@@ -22,7 +22,7 @@ This guide explains how to configure and operate WatchTower through its web inte
 
 Open the public WatchTower address and sign in through the configured identity provider. An administrator sees every application, workspace, feed, setting, and access-control option. Delegated users see only the resources and actions allowed by their grants.
 
-When the container administrator enables OIDC account selection, the identity provider asks you to choose a remembered account or use another account whenever you begin a WatchTower sign-in. This account chooser does not necessarily require you to enter credentials again. Without that setting, the identity provider may silently reuse your existing browser session.
+When the container administrator enables OIDC account selection, the identity provider asks you to choose a remembered account or use another account whenever you begin a WatchTower sign-in. This account chooser does not necessarily require you to enter credentials again. An administrator can instead require credential entry for every sign-in. Without either setting, the identity provider may silently reuse your existing browser session.
 
 For a new installation:
 

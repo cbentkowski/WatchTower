@@ -36,7 +36,7 @@ export function oidcSettings(env = process.env) {
   if (base.username || base.password || base.pathname !== '/' || base.search || base.hash) throw new Error('OIDC_BASE_URL must be an origin without a path or credentials');
   if (issuer.username || issuer.password || issuer.search || issuer.hash) throw new Error('OIDC_ISSUER must be an issuer URL without credentials, query, or fragment');
   const prompt = env.OIDC_PROMPT || '';
-  if (prompt && prompt !== 'select_account') throw new Error('OIDC_PROMPT must be select_account when configured');
+  if (prompt && !['select_account', 'login'].includes(prompt)) throw new Error('OIDC_PROMPT must be select_account or login when configured');
   if (env.OIDC_ADMIN_GROUP_ID_FILE) readProtectedFile(env.OIDC_ADMIN_GROUP_ID_FILE, 'OIDC_ADMIN_GROUP_ID_FILE');
   return { issuer, base, clientId: env.OIDC_CLIENT_ID, clientSecret, clientSecretFile: env.OIDC_CLIENT_SECRET_FILE || '', adminGroupIdFile: env.OIDC_ADMIN_GROUP_ID_FILE || '', requiredRole: env.OIDC_REQUIRED_ROLE || '', prompt };
 }
