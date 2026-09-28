@@ -125,7 +125,9 @@ Feature work is assigned to a minor or major milestone rather than being added t
 
 ## Release process
 
-Each version PR is assigned to its release milestone and must pass the required checks before it is merged into `main`. After the merge commit passes the same test, security, and container publishing workflow, WatchTower creates an annotated `vX.Y.Z` tag and a GitHub release from the matching curated file in `release-notes/`.
+Each issue is implemented in a focused pull request assigned to its release milestone. Completed issue PRs may merge independently into `main` after review and required checks pass; these merges do not modify released container tags. Pull requests publish only their `pr-<number>` preview image.
+
+After every issue in a milestone is complete, a final release PR updates the package version, changelog, and matching curated file in `release-notes/`. Only a change to the `version` value in `package.json` publishes the immutable version tag and updates `latest`; dependency, script, and other package-metadata changes do not trigger a release. After the tested image is published, WatchTower creates an annotated `vX.Y.Z` Git tag and a GitHub release from the curated notes. Manual workflow runs validate the source without publishing stable image tags.
 
 Release notes summarize user-visible changes without issue or pull-request links. Each release also links to its immutable version tag in the `devynn76/watchtower` Docker Hub repository. The `latest` container tag continues to identify the newest successfully published version.
 

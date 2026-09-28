@@ -1,1 +1,45 @@
-{"name":"vulnerability-dashboard","version":"0.7.1","private":true,"license":"Apache-2.0","type":"module","engines":{"node":">=22"},"scripts":{"start":"node server.mjs","test":"node --test"},"dependencies":{"nodemailer":"^10.0.10","openid-client":"6.8.8"}}
+{
+  "name": "watchtower-vi",
+  "version": "0.7.1",
+  "description": "Self-hosted vulnerability intelligence and lifecycle monitoring for application inventories.",
+  "private": true,
+  "license": "Apache-2.0",
+  "author": {
+    "name": "Christopher Bentkowski",
+    "email": "96180348+cbentkowski@users.noreply.github.com",
+    "url": "https://github.com/cbentkowski"
+  },
+  "contributors": [],
+  "keywords": [
+    "vulnerability-management",
+    "vulnerability-intelligence",
+    "cve",
+    "cpe",
+    "nvd",
+    "cisa-kev",
+    "end-of-life",
+    "oidc",
+    "docker",
+    "security"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cbentkowski/WatchTower.git"
+  },
+  "homepage": "https://github.com/cbentkowski/WatchTower#readme",
+  "bugs": {
+    "url": "https://github.com/cbentkowski/WatchTower/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "nodemailer": "^10.0.10",
+    "openid-client": "6.8.8"
+  }
+}
