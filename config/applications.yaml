@@ -1,4 +1,4 @@
-# Application IDs are immutable UUIDs managed by WatchTower.
+# Application IDs, canonical CPE mappings, ownership, and risk context are managed by WatchTower.
 applications:
   - id: 3e39c2c8-d7b7-4a4d-8c6a-e72c7a49726e
     name: "Google Chrome (example)"
@@ -12,6 +12,11 @@ applications:
     lifecycleProduct: "google-chrome"
     enabled: false
     legacyId: "example-chrome"
+    criticality: "unspecified"
+    environment: "unspecified"
+    exposure: "unknown"
+    ownerIds:
+    tags:
   - id: 2cdb918b-0d9e-4eb7-90f3-b4cf11b068d2
     name: "PostgreSQL (example)"
     vendor: "PostgreSQL"
@@ -24,6 +29,11 @@ applications:
     lifecycleProduct: "postgresql"
     enabled: false
     legacyId: "example-postgresql"
+    criticality: "unspecified"
+    environment: "unspecified"
+    exposure: "unknown"
+    ownerIds:
+    tags:
   - id: 18aa8473-c803-42a2-aa1f-5f1fe64d0a62
     name: "Azure PostgreSQL Flexible Server 16"
     vendor: "PostgreSQL"
@@ -38,6 +48,11 @@ applications:
     releaseUrl: "https://learn.microsoft.com/en-us/azure/postgresql/release-notes/release-notes"
     enabled: true
     legacyId: "azure-postgresql-flexible-16"
+    criticality: "unspecified"
+    environment: "unspecified"
+    exposure: "unknown"
+    ownerIds:
+    tags:
   - id: b5b9bd56-29cf-4014-9c5e-222d3c1f9bdf
     name: "Atlassian Jira Software Data Center"
     vendor: "Atlassian"
@@ -52,6 +67,11 @@ applications:
     releaseUrl: "https://confluence.atlassian.com/jirasoftware/jira-software-release-notes-776821069.html"
     enabled: true
     legacyId: "atlassian-jira-10-7-4"
+    criticality: "unspecified"
+    environment: "unspecified"
+    exposure: "unknown"
+    ownerIds:
+    tags:
   - id: c8718c8e-6c4a-4db8-8d9b-dabf8d1425ae
     name: "Atlassian Confluence Data Center"
     vendor: "Atlassian"
@@ -66,6 +86,11 @@ applications:
     releaseUrl: "https://confluence.atlassian.com/doc/confluence-release-notes-327.html"
     enabled: true
     legacyId: "atlassian-confluence-9-5-4"
+    criticality: "unspecified"
+    environment: "unspecified"
+    exposure: "unknown"
+    ownerIds:
+    tags:
   - id: 661303b7-3f16-4b90-ade5-1db3b6e611d5
     name: "GitLab Enterprise Edition"
     vendor: "GitLab"
@@ -81,3 +106,8 @@ applications:
     releaseUrl: "https://docs.gitlab.com/releases/"
     enabled: true
     legacyId: "gitlab-19-2-6"
+    criticality: "unspecified"
+    environment: "unspecified"
+    exposure: "unknown"
+    ownerIds:
+    tags:

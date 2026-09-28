@@ -4,6 +4,7 @@
 
 ### Added
 
+- Add reusable application owners with primary and escalation contacts, plus application criticality, environment, exposure, and tags.
 - Add optional OIDC account-selection or forced-login prompting while preserving seamless SSO by default.
 - Separate system, feed, audit, and authentication activity into independently rotating logs and dedicated interface views.
 - Show concise identity-group matching details for sign-ins, including WatchTower mapping and role names, unmatched provider values, and group-overage status.

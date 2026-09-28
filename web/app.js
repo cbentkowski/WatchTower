@@ -2,6 +2,7 @@ const $ = (id) => document.getElementById(id);
 let results = [];
 let allResults = [];
 let workspaces = [];
+let owners = [];
 let activeFilters = null;
 let editorMode = null;
 let editorTargetId = null;
@@ -17,8 +18,10 @@ let logsLoaded = false;
 let activeLogType = 'system';
 let accessLoaded = false;
 let feedsLoaded = false;
+let ownersLoaded = false;
 let feedData = { feeds: [], applications: [], canManage: false };
 let currentFeedId = null;
+let currentOwnerId = null;
 let accessData = null;
 let isAdmin = false;
 let canManageAccess = false;
@@ -82,11 +85,13 @@ function renderView() {
   const logsPage = location.hash === '#logs';
   const accessPage = location.hash === '#access';
   const feedsPage = location.hash === '#feeds';
-  $('dashboard-content').hidden = settingsPage || logsPage || accessPage || feedsPage;
+  const ownersPage = location.hash === '#owners';
+  $('dashboard-content').hidden = settingsPage || logsPage || accessPage || feedsPage || ownersPage;
   $('settings-content').hidden = !settingsPage;
   $('logs-content').hidden = !logsPage;
   $('access-content').hidden = !accessPage;
   $('feeds-content').hidden = !feedsPage;
+  $('owners-content').hidden = !ownersPage;
   $('settings-nav').classList.toggle('active', settingsPage);
   $('settings-nav').setAttribute('aria-current', settingsPage ? 'page' : 'false');
   $('logs-nav').classList.toggle('active', logsPage);
@@ -95,14 +100,17 @@ function renderView() {
   $('access-nav').setAttribute('aria-current', accessPage ? 'page' : 'false');
   $('feeds-nav').classList.toggle('active', feedsPage);
   $('feeds-nav').setAttribute('aria-current', feedsPage ? 'page' : 'false');
-  if (settingsPage || logsPage || accessPage || feedsPage) {
+  $('owners-nav').classList.toggle('active', ownersPage);
+  $('owners-nav').setAttribute('aria-current', ownersPage ? 'page' : 'false');
+  if (settingsPage || logsPage || accessPage || feedsPage || ownersPage) {
     $('overview-nav').classList.remove('active');
     for (const button of $('workspace-list').querySelectorAll('.workspace-link')) button.classList.remove('active');
-    $('crumb-current').textContent = settingsPage ? 'Settings' : logsPage ? 'Logs' : accessPage ? 'Access Control' : 'Feeds';
+    $('crumb-current').textContent = settingsPage ? 'Settings' : logsPage ? 'Logs' : accessPage ? 'Access Control' : feedsPage ? 'Feeds' : 'Owners';
     if (settingsPage && !settingsLoaded) loadSettings();
     if (logsPage && !logsLoaded) loadLogs();
     if (accessPage && !accessLoaded) loadAccess();
     if (feedsPage && !feedsLoaded) loadFeeds();
+    if (ownersPage && !ownersLoaded) loadOwners();
     return;
   }
   const group = activeWorkspace();
@@ -150,6 +158,57 @@ function showEnvironmentStatus(data) {
   if (smtp.unauthenticated) { $('settings-env-status').textContent = 'Unauthenticated relay selected. SMTP credentials are not used.'; return; }
   const passwordStatus = data.envStatus.passwordPresent ? 'password secret present' : data.envStatus.passwordFileConfigured ? 'password secret file missing or empty' : 'SMTP_PASSWORD_FILE not configured';
   $('settings-env-status').textContent = `Credential status: ${smtp.usernameEnv || 'username not configured'} ${smtp.usernameEnv ? data.envStatus.usernamePresent ? '(present)' : '(missing)' : ''}; ${passwordStatus}. Secret values are never shown or saved here.`;
+}
+
+async function loadOwners() {
+  ownersLoaded = true;
+  const list = $('owners-list');
+  try {
+    const response = await fetch('/api/owners', { cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not load owners');
+    owners = data.owners || [];
+    list.innerHTML = owners.length ? owners.map(owner => `<article class="owner-row"><div><h3>${escape(owner.name)}</h3><p>Primary: ${escape(owner.primaryContact)}</p>${owner.escalationContact ? `<p>Escalation: ${escape(owner.escalationContact)}</p>` : ''}</div><span>${owner.applicationCount} application${owner.applicationCount === 1 ? '' : 's'}</span><button type="button" data-owner="${escape(owner.id)}">Edit</button></article>`).join('') : '<p class="empty"><strong>No owners configured</strong><span>Add a reusable owner before assigning responsibility to applications.</span></p>';
+  } catch (error) { list.innerHTML = `<p class="form-error">${escape(error.message)}</p>`; }
+}
+
+function openOwnerEditor(id = '') {
+  currentOwnerId = id;
+  const owner = owners.find(item => item.id === id);
+  $('owner-editor-title').textContent = owner ? 'Edit owner' : 'Add owner';
+  $('owner-form').reset();
+  $('owner-form').elements.name.value = owner?.name || '';
+  $('owner-form').elements.primaryContact.value = owner?.primaryContact || '';
+  $('owner-form').elements.escalationContact.value = owner?.escalationContact || '';
+  $('owner-editor-id').innerHTML = owner ? `Owner ID: <code>${escape(owner.id)}</code> (immutable) · assigned to ${owner.applicationCount} application${owner.applicationCount === 1 ? '' : 's'}` : 'A permanent owner ID will be generated when saved.';
+  $('owner-delete').hidden = !owner;
+  $('owner-delete').disabled = Boolean(owner?.applicationCount);
+  $('owner-error').hidden = true;
+  $('owner-editor').showModal();
+}
+
+async function saveOwner(event) {
+  event.preventDefault();
+  try {
+    const payload = Object.fromEntries(new FormData($('owner-form')));
+    const response = await fetch(currentOwnerId ? `/api/owners/${encodeURIComponent(currentOwnerId)}` : '/api/owners', { method: currentOwnerId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not save owner');
+    $('owner-editor').close();
+    ownersLoaded = false;
+    await loadOwners();
+  } catch (error) { $('owner-error').textContent = error.message; $('owner-error').hidden = false; }
+}
+
+async function deleteOwner() {
+  if (!currentOwnerId) return;
+  try {
+    const response = await fetch(`/api/owners/${encodeURIComponent(currentOwnerId)}`, { method: 'DELETE' });
+    if (!response.ok) { const data = await response.json(); throw new Error(data.error || 'Could not remove owner'); }
+    $('owner-editor').close();
+    ownersLoaded = false;
+    await loadOwners();
+  } catch (error) { $('owner-error').textContent = error.message; $('owner-error').hidden = false; }
 }
 
 async function loadLogs() {
@@ -463,12 +522,14 @@ async function verifyAccess(startPreview = false) {
 function render(data) {
   allResults = data.results || [];
   workspaces = data.workspaces || [];
+  if (!ownersLoaded) owners = data.owners || [];
   permissions = data.access || permissions;
   isAdmin = Boolean(permissions.isAdmin);
   canManageAccess = Boolean(permissions.accessManage);
   $('admin-actions').hidden = !isAdmin;
   $('logs-nav').hidden = !isAdmin;
   $('settings-nav').hidden = !isAdmin;
+  $('owners-nav').hidden = !isAdmin;
   $('access-nav').hidden = !canManageAccess;
   $('refresh').hidden = !(isAdmin || permissions.scan);
   $('feeds-nav').hidden = !(isAdmin || permissions.feeds?.view?.length || permissions.feeds?.manage);
@@ -487,8 +548,11 @@ function showDetails(a) {
   const releaseLink = upgrade.sourceUrl ? `<a href="${safeUrl(upgrade.sourceUrl)}" target="_blank" rel="noopener noreferrer">Release source ↗</a>` : '';
   const containing = workspaces.filter(group => group.applications.includes(a.id));
   const sharedWarning = containing.length > 1 && (isAdmin || permissions.applications.edit.includes(a.id)) ? `<p class="form-error">This application is shared by ${containing.length} workspaces. Editing it changes the application everywhere it appears.</p>` : '';
+  const assignedOwners = (a.ownerIds || []).map(id => owners.find(owner => owner.id === id)).filter(Boolean);
+  const ownership = assignedOwners.length ? assignedOwners.map(owner => `<article class="owner-contact"><strong>${escape(owner.name)}</strong><span>Primary: ${escape(owner.primaryContact)}</span>${owner.escalationContact ? `<span>Escalation: ${escape(owner.escalationContact)}</span>` : ''}</article>`).join('') : '<p class="muted">No owner assigned.</p>';
+  const context = `<div class="detail-grid context-grid"><div><span>CRITICALITY</span><strong>${escape(a.criticality || 'unspecified')}</strong></div><div><span>ENVIRONMENT</span><strong>${escape(a.environment || 'unspecified')}</strong></div><div><span>EXPOSURE</span><strong>${escape(a.exposure || 'unknown')}</strong></div><div><span>TAGS</span><strong>${escape((a.tags || []).join(', ') || 'None')}</strong></div></div><h3>Ownership</h3><div class="owner-contacts">${ownership}</div>`;
   const feedEvidence = (a.feedEvents || []).length ? `<h3>Feed evidence</h3>${a.feedEvents.map(event => `<div class="feed-evidence"><a href="${safeUrl(event.url)}" target="_blank" rel="noopener noreferrer">${escape(event.title)} ↗</a><span class="vendor">${escape(event.type)} · ${escape(event.confidence)} confidence${event.severity && event.severity !== 'UNKNOWN' ? ` · ${escape(event.severity)}` : ''}</span></div>`).join('')}` : '';
-  $('detail-body').innerHTML = `${sharedWarning}<div class="detail-grid"><div><span>INSTALLED VERSION</span><strong>${escape(a.version)}</strong></div><div><span>LATEST AVAILABLE</span><strong>${escape(upgrade.latest || 'Unavailable')}</strong>${releaseLink}</div><div><span>LATEST ON INSTALLED LINE</span><strong>${escape(upgrade.currentLine || 'Unavailable')}</strong></div><div><span>LATEST LTS VERSION</span><strong>${escape(upgrade.latestLts || 'No designated LTS')}</strong></div><div><span>SUPPORT</span><strong>${escape(a.lifecycle?.note || 'Unknown')}</strong></div></div><h3>Assessment</h3><ul class="reasons">${a.reasons.map(r => `<li>${escape(r)}</li>`).join('')}</ul><h3>Vulnerability findings</h3>${findings}${feedEvidence}<h3>Sources</h3><div class="sources">${a.sources.map(s => `<a href="${safeUrl(s.url)}" target="_blank" rel="noopener noreferrer">${escape(s.name)} ↗</a>`).join('') || '<span class="muted">No source links available</span>'}</div><p class="detail-note">CPE: <code>${escape(a.cpe)}</code>. Confirm product identity and affected version ranges in the linked advisories before remediation decisions.</p>`;
+  $('detail-body').innerHTML = `${sharedWarning}<div class="detail-grid"><div><span>INSTALLED VERSION</span><strong>${escape(a.version)}</strong></div><div><span>LATEST AVAILABLE</span><strong>${escape(upgrade.latest || 'Unavailable')}</strong>${releaseLink}</div><div><span>LATEST ON INSTALLED LINE</span><strong>${escape(upgrade.currentLine || 'Unavailable')}</strong></div><div><span>LATEST LTS VERSION</span><strong>${escape(upgrade.latestLts || 'No designated LTS')}</strong></div><div><span>SUPPORT</span><strong>${escape(a.lifecycle?.note || 'Unknown')}</strong></div></div><h3>Application context</h3>${context}<h3>Assessment</h3><ul class="reasons">${a.reasons.map(r => `<li>${escape(r)}</li>`).join('')}</ul><h3>Vulnerability findings</h3>${findings}${feedEvidence}<h3>Sources</h3><div class="sources">${a.sources.map(s => `<a href="${safeUrl(s.url)}" target="_blank" rel="noopener noreferrer">${escape(s.name)} ↗</a>`).join('') || '<span class="muted">No source links available</span>'}</div><p class="detail-note">CPE: <code>${escape(a.cpe)}</code>. Confirm product identity and affected version ranges in the linked advisories before remediation decisions.</p>`;
   $('details').showModal();
 }
 
@@ -508,6 +572,10 @@ async function openEditor(mode, targetId = null) {
         <label>Display name <input name="name" required placeholder="Application name"></label>
         <label>Vendor <input name="vendor" placeholder="Vendor name"></label>
         <label>Installed version <input name="version" required pattern="[A-Za-z0-9._-]+" placeholder="1.2.3"></label>
+        <label>Criticality <select name="criticality"><option value="unspecified">Unspecified</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="critical">Critical</option></select></label>
+        <label>Environment <select name="environment"><option value="unspecified">Unspecified</option><option value="production">Production</option><option value="staging">Staging</option><option value="development">Development</option><option value="test">Test</option><option value="disaster-recovery">Disaster recovery</option></select></label>
+        <label>Exposure <select name="exposure"><option value="unknown">Unknown</option><option value="internal">Internal</option><option value="external">Externally accessible</option><option value="internet">Internet-facing</option></select></label>
+        <label class="form-full">Tags <input name="tags" placeholder="payments, customer-facing, pci"></label>
         <section class="form-full mapping-summary"><div><span>VULNERABILITY MAPPING</span><strong id="mapping-title">No CPE selected</strong><code id="mapping-cpe"></code><small id="mapping-mode"></small></div><button id="change-cpe" type="button">Choose CPE</button></section>
         <input name="cpeName" type="hidden"><input name="cpeMode" type="hidden"><input name="cpeTitle" type="hidden"><input name="cpeDeprecated" type="hidden"><input name="cpeLastTestedAt" type="hidden"><input name="cpeTestCandidateCount" type="hidden"><input name="cpeTestApplicableCount" type="hidden">
         <section class="form-full mapping-summary"><div><span>LIFECYCLE MAPPING</span><strong id="lifecycle-title">No lifecycle product selected</strong><code id="lifecycle-product"></code><small id="lifecycle-mode"></small></div><button id="change-lifecycle" type="button">Choose source</button></section>
@@ -519,7 +587,7 @@ async function openEditor(mode, targetId = null) {
         <label>Latest version override <input name="latestVersion" placeholder="Optional"></label>
         <label>Latest installed-line override <input name="latestBranchVersion" placeholder="Optional"></label>
         <label>Latest LTS override <input name="latestLtsVersion" placeholder="Optional"></label>
-      </div>${targetId ? `<p class="form-hint">Application ID: <code>${escape(targetId)}</code> (immutable)</p>` : ''}<p class="form-hint">Provide a lifecycle product or a manual end-of-life date. Vulnerability mappings use the canonical NVD CPE Dictionary.</p>${editorConfig.workspaces.length ? `<fieldset><legend>Add to workspaces</legend><div class="check-grid">${editorConfig.workspaces.map(group => `<label><input type="checkbox" name="workspace" value="${escape(group.id)}"> ${escape(group.name)}</label>`).join('')}</div></fieldset>` : ''}${editorConfig.feeds?.length ? `<fieldset><legend>Associated feeds</legend><div class="check-grid">${editorConfig.feeds.map(feed => `<label><input type="checkbox" name="feed" value="${escape(feed.id)}"> ${escape(feed.name)}</label>`).join('')}</div></fieldset>` : ''}`;
+      </div>${targetId ? `<p class="form-hint">Application ID: <code>${escape(targetId)}</code> (immutable)</p>` : ''}<p class="form-hint">Provide a lifecycle product or a manual end-of-life date. Vulnerability mappings use the canonical NVD CPE Dictionary.</p>${editorConfig.owners?.length ? `<fieldset><legend>Owners</legend><div class="check-grid">${editorConfig.owners.map(owner => `<label><input type="checkbox" name="ownerIds" value="${escape(owner.id)}"> ${escape(owner.name)}<small>${escape(owner.primaryContact)}</small></label>`).join('')}</div></fieldset>` : '<p class="form-hint">No owners are configured. Administrators can add reusable contacts from Owners.</p>'}${editorConfig.workspaces.length ? `<fieldset><legend>Add to workspaces</legend><div class="check-grid">${editorConfig.workspaces.map(group => `<label><input type="checkbox" name="workspace" value="${escape(group.id)}"> ${escape(group.name)}</label>`).join('')}</div></fieldset>` : ''}${editorConfig.feeds?.length ? `<fieldset><legend>Associated feeds</legend><div class="check-grid">${editorConfig.feeds.map(feed => `<label><input type="checkbox" name="feed" value="${escape(feed.id)}"> ${escape(feed.name)}</label>`).join('')}</div></fieldset>` : ''}`;
       $('change-cpe').addEventListener('click', openCpeDialog);
       $('change-lifecycle').addEventListener('click', openLifecycleDialog);
       cpeMapping = null;
@@ -533,6 +601,8 @@ async function openEditor(mode, targetId = null) {
         }
         for (const input of $('editor-form').querySelectorAll('[name="workspace"]')) input.checked = Boolean(editorConfig.workspaces.find(group => group.id === input.value)?.applications.includes(targetId));
         for (const input of $('editor-form').querySelectorAll('[name="feed"]')) input.checked = Boolean(editorConfig.feeds.find(feed => feed.id === input.value)?.applicationIds.includes(targetId));
+        for (const input of $('editor-form').querySelectorAll('[name="ownerIds"]')) input.checked = app.ownerIds?.includes(input.value);
+        $('editor-form').elements.tags.value = (app.tags || []).join(', ');
         cpeMapping = { cpeName: app.cpeName || `cpe:2.3:a:${app.cpeVendor}:${app.cpeProduct}:*:*:*:*:${app.cpeEdition || '*'}:*:*:*`, mode: app.cpeMode || 'product', title: app.cpeTitle || app.name, deprecated: app.cpeDeprecated === true || app.cpeDeprecated === 'true', testedAt: app.cpeLastTestedAt || '', candidateCount: app.cpeTestCandidateCount || '', applicableCount: app.cpeTestApplicableCount || '' };
         if (app.lifecycleProduct) lifecycleMapping = { name: app.lifecycleProduct, label: app.lifecycleProduct, sourceUrl: app.lifecycleUrl || `https://endoflife.date/${app.lifecycleProduct}` };
       }
@@ -777,7 +847,7 @@ async function saveEditor(event) {
   const form = $('editor-form');
   const fields = new FormData(form);
   const currentWorkspace = editorMode === 'workspace' && editorTargetId ? editorConfig.workspaces.find(group => group.id === editorTargetId) : null;
-  const payload = editorMode === 'app' ? Object.fromEntries([...fields].filter(([key]) => !['workspace', 'feed'].includes(key))) : { name: fields.get('name'), notificationEmails: fields.get('notificationEmails'), applications: currentWorkspace && !isAdmin && !permissions.workspaces.membership.includes(currentWorkspace.id) ? currentWorkspace.applications : fields.getAll('application') };
+  const payload = editorMode === 'app' ? { ...Object.fromEntries([...fields].filter(([key]) => !['workspace', 'feed', 'ownerIds'].includes(key))), ownerIds: fields.getAll('ownerIds') } : { name: fields.get('name'), notificationEmails: fields.get('notificationEmails'), applications: currentWorkspace && !isAdmin && !permissions.workspaces.membership.includes(currentWorkspace.id) ? currentWorkspace.applications : fields.getAll('application') };
   if (editorMode === 'app' && !payload.cpeName) { $('editor-error').textContent = 'Choose a vulnerability mapping before saving.'; $('editor-error').hidden = false; return; }
   if (editorMode === 'app' && !payload.lifecycleProduct && !payload.eolDate) { $('editor-error').textContent = 'Enter a lifecycle product or manual end-of-life date.'; $('editor-error').hidden = false; return; }
   $('editor-save').disabled = true;
@@ -869,6 +939,7 @@ $('settings-nav').addEventListener('click', () => { location.hash = 'settings'; 
 $('logs-nav').addEventListener('click', () => { location.hash = 'logs'; renderView(); });
 $('access-nav').addEventListener('click', () => { location.hash = 'access'; renderView(); });
 $('feeds-nav').addEventListener('click', () => { location.hash = 'feeds'; renderView(); });
+$('owners-nav').addEventListener('click', () => { location.hash = 'owners'; renderView(); });
 $('feeds-refresh').addEventListener('click', () => { feedsLoaded = false; loadFeeds(); });
 $('add-feed').addEventListener('click', () => openFeedEditor());
 $('feeds-list').addEventListener('click', event => { const button = event.target.closest('[data-feed]'); if (button) openFeedEditor(button.dataset.feed); });
@@ -878,6 +949,13 @@ $('feed-refresh').addEventListener('click', refreshFeed);
 $('feed-delete').addEventListener('click', deleteFeed);
 $('feed-editor-close').addEventListener('click', () => $('feed-editor').close());
 $('feed-cancel').addEventListener('click', () => $('feed-editor').close());
+$('owners-refresh').addEventListener('click', () => { ownersLoaded = false; loadOwners(); });
+$('add-owner').addEventListener('click', () => openOwnerEditor());
+$('owners-list').addEventListener('click', event => { const button = event.target.closest('[data-owner]'); if (button) openOwnerEditor(button.dataset.owner); });
+$('owner-form').addEventListener('submit', saveOwner);
+$('owner-delete').addEventListener('click', deleteOwner);
+$('owner-editor-close').addEventListener('click', () => $('owner-editor').close());
+$('owner-cancel').addEventListener('click', () => $('owner-editor').close());
 $('logs-refresh').addEventListener('click', loadLogs);
 for (const button of document.querySelectorAll('[data-log-type]')) button.addEventListener('click', () => { activeLogType = button.dataset.logType; loadLogs(); });
 $('settings-form').addEventListener('submit', saveSettings);
@@ -927,6 +1005,7 @@ fetch('/api/session', { cache: 'no-store' }).then(response => response.json()).t
   $('refresh').hidden = !isAdmin;
   $('logs-nav').hidden = !isAdmin;
   $('settings-nav').hidden = !isAdmin;
+  $('owners-nav').hidden = !isAdmin;
   $('access-nav').hidden = !canManageAccess;
   $('preview-banner').hidden = !activePreview;
   if (activePreview) $('preview-name').textContent = activePreview.name;
