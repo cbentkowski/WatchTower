@@ -36,7 +36,7 @@ test('browser styles use local system fonts without external requests', async ()
 
 test('server refuses to start without OIDC or an explicit private-development override', async () => {
   const env = { ...process.env, AUTO_SCAN: 'false' };
-  for (const name of ['OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_CLIENT_SECRET_FILE', 'OIDC_BASE_URL', 'OIDC_REQUIRED_ROLE', 'AUTH_DISABLED']) delete env[name];
+  for (const name of ['OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_CLIENT_SECRET_FILE', 'OIDC_BASE_URL', 'OIDC_REQUIRED_ROLE', 'OIDC_PROMPT', 'AUTH_DISABLED']) delete env[name];
   const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve(import.meta.dirname, '..'), env, stdio: ['ignore', 'ignore', 'pipe'] });
   let errors = '';
   child.stderr.on('data', chunk => { errors += chunk; });

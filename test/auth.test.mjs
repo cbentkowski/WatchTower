@@ -25,6 +25,13 @@ test('OIDC configuration requires all fields and an HTTPS public address', () =>
   assert.throws(() => oidcSettings({ ...values, OIDC_BASE_URL: 'http://home.example.com' }), /HTTPS/);
   assert.throws(() => oidcSettings({ ...values, OIDC_BASE_URL: 'https://home.example.com/path' }), /origin/);
   assert.throws(() => oidcSettings({ ...values, OIDC_ISSUER: 'http://login.example.com' }), /HTTPS/);
+  assert.throws(() => oidcSettings({ ...values, OIDC_PROMPT: 'consent' }), /OIDC_PROMPT must be select_account or login/);
+});
+
+test('OIDC account selection is optional and validated', () => {
+  assert.equal(oidcSettings(values).prompt, '');
+  assert.equal(oidcSettings({ ...values, OIDC_PROMPT: 'select_account' }).prompt, 'select_account');
+  assert.equal(oidcSettings({ ...values, OIDC_PROMPT: 'login' }).prompt, 'login');
 });
 
 test('OIDC client secret can be loaded from a mounted file', () => {
@@ -70,7 +77,12 @@ test('login binds the callback to a browser flow and creates a protected session
     randomNonce: () => 'expected-nonce',
     randomPKCECodeVerifier: () => 'verifier',
     calculatePKCECodeChallenge: async () => 'challenge',
-    buildAuthorizationUrl: (_config, input) => { parameters = input; return new URL('https://login.example.com/authorize'); },
+    buildAuthorizationUrl: (_config, input) => {
+      parameters = input;
+      const authorizationUrl = new URL('https://login.example.com/authorize');
+      if (input.prompt) authorizationUrl.searchParams.set('prompt', input.prompt);
+      return authorizationUrl;
+    },
     authorizationCodeGrant: async (_config, _url, checks) => {
       assert.equal(checks.expectedState, 'expected-state');
       assert.equal(checks.expectedNonce, 'expected-nonce');
@@ -84,6 +96,7 @@ test('login binds the callback to a browser flow and creates a protected session
   assert.equal(login.status, 302);
   assert.equal(parameters.redirect_uri, 'https://home.example.com/auth/callback');
   assert.equal(parameters.code_challenge_method, 'S256');
+  assert.equal(parameters.prompt, undefined);
   const flowCookie = login.headers['Set-Cookie'].split(';')[0];
   assert.match(login.headers['Set-Cookie'], /HttpOnly.*SameSite=Lax.*Secure/);
 
@@ -139,6 +152,31 @@ test('login binds the callback to a browser flow and creates a protected session
   assert.equal(proxiedLogout.headers.Location, '/signed-out');
   rmSync(directory, { recursive: true, force: true });
 });
+
+for (const prompt of ['select_account', 'login']) {
+  test(`login sends the ${prompt} prompt when configured`, async () => {
+    let parameters;
+    const provider = {
+      discovery: async () => ({}),
+      randomState: () => 'state',
+      randomNonce: () => 'nonce',
+      randomPKCECodeVerifier: () => 'verifier',
+      calculatePKCECodeChallenge: async () => 'challenge',
+      buildAuthorizationUrl: (_config, input) => {
+        parameters = input;
+        const authorizationUrl = new URL('https://login.example.com/authorize');
+        authorizationUrl.searchParams.set('prompt', input.prompt);
+        return authorizationUrl;
+      },
+    };
+    const auth = createAuth(oidcSettings({ ...values, OIDC_PROMPT: prompt }), provider);
+    const loginResponse = response();
+    await auth.handle({ method: 'GET', headers: {} }, loginResponse, new URL('https://home.example.com/auth/login'));
+    assert.equal(loginResponse.status, 302);
+    assert.equal(parameters.prompt, prompt);
+    assert.equal(new URL(loginResponse.headers.Location).searchParams.get('prompt'), prompt);
+  });
+}
 
 test('login redirects alternate hostnames to the configured OIDC origin', async () => {
   const auth = createAuth(oidcSettings(values), {});
