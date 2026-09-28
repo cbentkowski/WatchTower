@@ -7,7 +7,7 @@ const flowLifetime = 5 * 60 * 1000;
 export const administratorRole = 'WatchTower.Administrator';
 export function requiresAdministrator(url) {
   return url.pathname.startsWith('/api/settings') || url.pathname === '/api/logs' || url.pathname === '/api/config'
-    || url.pathname === '/api/applications' || url.pathname.startsWith('/api/applications/') || url.pathname === '/api/workspaces' || url.pathname.startsWith('/api/workspaces/')
+    || url.pathname === '/api/applications' || url.pathname.startsWith('/api/applications/') || url.pathname === '/api/workspaces' || url.pathname.startsWith('/api/workspaces/') || url.pathname === '/api/owners' || url.pathname.startsWith('/api/owners/')
     || (url.pathname === '/api/status' && url.searchParams.has('refresh'));
 }
 const randomToken = () => randomBytes(32).toString('base64url');
