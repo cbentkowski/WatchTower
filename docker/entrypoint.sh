@@ -4,7 +4,7 @@ set -eu
 config_dir="${CONFIG_DIR:-/home/container/config}"
 data_dir="${DATA_DIR:-/home/container/data}"
 mkdir -p "$config_dir" "$data_dir"
-for file in applications.yaml workspaces.yaml feeds.yaml smtp.yaml general.yaml; do
+for file in applications.yaml workspaces.yaml feeds.yaml owners.yaml smtp.yaml general.yaml; do
   if [ ! -f "$config_dir/$file" ]; then
     if [ -f "/home/container/$file" ]; then
       mv "/home/container/$file" "$config_dir/$file"
