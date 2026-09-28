@@ -30,6 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       application_changed: ${{ steps.changes.outputs.application_changed }}
+      version_changed: ${{ steps.changes.outputs.version_changed }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -45,6 +46,7 @@ jobs:
         run: |
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             echo "application_changed=true" >> "$GITHUB_OUTPUT"
+            echo "version_changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           base="$BEFORE_SHA"
@@ -57,11 +59,20 @@ jobs:
           while IFS= read -r file; do
             [[ "$file" == *.md ]] || documentation_only=false
           done < <(git diff --name-only "$base" "$GITHUB_SHA")
+          version_changed=false
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            previous_version="$(git show "$base:package.json" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")"
+            current_version="$(node -p "require('./package.json').version")"
+            if [[ "$previous_version" != "$current_version" ]]; then
+              version_changed=true
+            fi
+          fi
           if [[ "$documentation_only" == "true" ]]; then
             echo "application_changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "application_changed=true" >> "$GITHUB_OUTPUT"
           fi
+          echo "version_changed=$version_changed" >> "$GITHUB_OUTPUT"
 
   documentation:
     name: Documentation checks
@@ -303,7 +314,9 @@ jobs:
       needs.test.result == 'success' &&
       needs.source-security.result == 'success' &&
       needs.container-security.result == 'success' &&
-      github.actor != 'dependabot[bot]'
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && needs.classify.outputs.version_changed == 'true'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -376,7 +389,9 @@ jobs:
         id: version_change
         shell: bash
         run: |
-          if git diff --quiet "$GITHUB_SHA^" "$GITHUB_SHA" -- package.json; then
+          previous_version="$(git show "$GITHUB_SHA^:package.json" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")"
+          current_version="$(node -p "require('./package.json').version")"
+          if [[ "$previous_version" == "$current_version" ]]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
