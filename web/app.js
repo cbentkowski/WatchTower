@@ -73,6 +73,7 @@ function renderSidebar() {
 }
 
 function renderView() {
+  const enteringOwnersPage = location.hash === '#owners' && renderedHash !== '#owners';
   if (renderedHash === '#access' && location.hash !== '#access' && !activePreview && !previewNavigation) {
     clearAccessDraft();
     accessLoaded = false;
@@ -86,6 +87,7 @@ function renderView() {
   const accessPage = location.hash === '#access';
   const feedsPage = location.hash === '#feeds';
   const ownersPage = location.hash === '#owners';
+  if (enteringOwnersPage) ownersLoaded = false;
   $('dashboard-content').hidden = settingsPage || logsPage || accessPage || feedsPage || ownersPage;
   $('settings-content').hidden = !settingsPage;
   $('logs-content').hidden = !logsPage;
