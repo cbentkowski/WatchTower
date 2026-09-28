@@ -44,6 +44,9 @@ Focus: connect applications and findings to responsible teams and meaningful ope
 
 - Add reusable owners with primary and escalation contact information.
 - Add application context including criticality, environment, exposure, tags, and owner assignments.
+- Separate system, feed, audit, and authentication activity into independently rotating logs with dedicated interface views.
+- Make authentication logs useful without exposing secrets by showing concise sign-in outcomes, WatchTower identity-mapping and role names for matched claims, raw unmatched group values, and group-overage status.
+- Add optional OIDC account-selection prompting so administrators can require an identity-provider account chooser without disabling seamless SSO for other deployments.
 
 ## 0.9.0 - Resolve
 
