@@ -63,6 +63,7 @@ test('login binds the callback to a browser flow and creates a protected session
   const adminGroupFile = path.join(directory, 'admin-group-id');
   writeFileSync(adminGroupFile, 'entra-admin-group-id\n');
   let parameters;
+  const events = [];
   const provider = {
     discovery: async () => ({}),
     randomState: () => 'expected-state',
@@ -77,7 +78,7 @@ test('login binds the callback to a browser flow and creates a protected session
       return { claims: () => ({ sub: 'user-123', name: 'Test User', preferred_username: 'test.user@example.com', groups: ['entra-admin-group-id'], roles: ['WatchTower.User'] }) };
     },
   };
-  const auth = createAuth(oidcSettings({ ...values, OIDC_REQUIRED_ROLE: 'WatchTower.User', OIDC_ADMIN_GROUP_ID_FILE: adminGroupFile }), provider);
+  const auth = createAuth(oidcSettings({ ...values, OIDC_REQUIRED_ROLE: 'WatchTower.User', OIDC_ADMIN_GROUP_ID_FILE: adminGroupFile }), provider, (...event) => events.push(event));
   const login = response();
   await auth.handle({ method: 'GET', headers: {} }, login, new URL('https://home.example.com/auth/login'));
   assert.equal(login.status, 302);
@@ -102,6 +103,12 @@ test('login binds the callback to a browser flow and creates a protected session
   const authenticated = { method: 'GET', headers: { cookie: sessionCookie } };
   assert.equal(await auth.handle(authenticated, api, new URL('https://home.example.com/api/settings')), false);
   assert.deepEqual(authenticated.authUser, { issuer: values.OIDC_ISSUER, subject: 'user-123', username: 'test.user@example.com', name: 'Test User', isAdmin: true, claims: { groups: ['entra-admin-group-id'], roles: ['WatchTower.User'], 'realm_access.roles': [], 'resource_access.roles': [] }, groupOverage: false });
+  const signIn = events.find(([action]) => action === 'Sign-in succeeded');
+  assert.deepEqual(signIn[1], { subject: 'user-123', username: 'test.user@example.com', name: 'Test User' });
+  assert.deepEqual(signIn[2].claims.groups, ['entra-admin-group-id']);
+  assert.equal(signIn[2].protectedAdminClaim, 'entra-admin-group-id');
+  assert.ok(!JSON.stringify(events).includes('test-secret'));
+  assert.ok(!JSON.stringify(events).includes('code=abc'));
   const mutation = response();
   await auth.handle({ method: 'POST', headers: { cookie: sessionCookie, origin: 'https://evil.example' } }, mutation, new URL('https://home.example.com/api/settings'));
   assert.equal(mutation.status, 403);
@@ -118,6 +125,7 @@ test('login binds the callback to a browser flow and creates a protected session
   await auth.handle({ method: 'POST', headers: { cookie: sessionCookie, referer: 'https://home.example.com/settings' } }, logout, new URL('https://home.example.com/auth/logout'));
   assert.equal(logout.status, 303);
   assert.equal(logout.headers.Location, '/signed-out');
+  assert.ok(events.some(([action]) => action === 'Signed out'));
   assert.equal(logout.headers['Set-Cookie'].length, 2);
   assert.match(logout.headers['Set-Cookie'][0], /watchtower=.*Max-Age=0/);
   assert.match(logout.headers['Set-Cookie'][1], /watchtower_flow=.*Max-Age=0/);

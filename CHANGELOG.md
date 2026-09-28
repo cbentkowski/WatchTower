@@ -1,6 +1,14 @@
 # Changelog
 
-## [0.7.1] - Unreleased
+## [0.8.0] - Unreleased
+
+### Added
+
+- Separate system, feed, audit, and authentication activity into independently rotating logs and dedicated interface views.
+- Show concise identity-group matching details for sign-ins, including WatchTower mapping and role names, unmatched provider values, and group-overage status.
+- Route built-in NVD, CISA KEV, lifecycle, and vendor-source activity to the feed log alongside configured custom feeds.
+
+## [0.7.1] - 2026-09-27
 
 ### Fixed
 

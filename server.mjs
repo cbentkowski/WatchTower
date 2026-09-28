@@ -8,10 +8,10 @@ import path from 'node:path';
 import { createNotifier, sendTestEmail } from './notifications.mjs';
 import { readSmtpSettings, smtpPasswordState, writeSmtpSettings, validateSmtpSettings } from './settings.mjs';
 import { readGeneralSettings, writeGeneralSettings, validateGeneralSettings, generalUrl } from './general.mjs';
-import { createLogger } from './logger.mjs';
-import { createAuth } from './auth.mjs';
+import { createLogger, logTypes } from './logger.mjs';
+import { administratorRole, createAuth } from './auth.mjs';
 import { createYamlMonitor } from './yaml-monitor.mjs';
-import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, claimsForIdentityMappings, explainAccess, protectedRoleState, standardRoles } from './rbac.mjs';
+import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, claimsForIdentityMappings, describeIdentityClaims, explainAccess, protectedRoleState, standardRoles } from './rbac.mjs';
 import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, readFeeds, secureFetchText, validateFeedInput, writeFeeds } from './feeds.mjs';
 import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
 import { loadTlsConfiguration } from './tls.mjs';
@@ -48,12 +48,23 @@ const feedFile = path.join(configDirectory, 'feeds.yaml');
 if (!await exists(rbacFile)) await writeRbac(rbacFile, { groups: [], grants: [] });
 const resourceMigration = await migrateResourceIds();
 const logger = createLogger(dataDirectory);
-const auth = createAuth();
+const auth = createAuth(undefined, undefined, recordAuthenticationEvent);
 if (!auth && process.env.AUTH_DISABLED !== 'true') throw new Error('OIDC is required. Configure OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_BASE_URL, and either OIDC_CLIENT_SECRET or OIDC_CLIENT_SECRET_FILE, or set AUTH_DISABLED=true for a private development instance.');
 const snapshotFile = path.join(dataDirectory, 'status.json');
 const feedCacheFile = path.join(dataDirectory, 'feeds.json');
 const smtpFile = path.join(configDirectory, 'smtp.yaml');
 const generalFile = path.join(configDirectory, 'general.yaml');
+
+async function recordAuthenticationEvent(action, actor, context = {}) {
+  const { claims = {}, protectedAdminClaim = '', ...event } = context;
+  let config = { groups: [], grants: [] };
+  try { config = await readRbac(rbacFile); }
+  catch (error) { logger.log('error', 'Authentication claims could not be matched to access control', error.message); }
+  await logger.authentication(action, actor, {
+    ...event,
+    ...describeIdentityClaims(config, claims, { administratorRole, protectedAdminClaim }),
+  });
+}
 const notifier = createNotifier({ dataDirectory, settingsLoader: async () => ({ ...await readSmtpSettings(smtpFile), baseUrl: generalUrl(await readGeneralSettings(generalFile)) }) });
 for (const [from, to] of resourceMigration.applications) await notifier.renameIdentifiers({ appFrom: from, appTo: to });
 for (const [from, to] of resourceMigration.workspaces) await notifier.renameIdentifiers({ workspaceFrom: from, workspaceTo: to });
@@ -344,10 +355,10 @@ async function fetchJson(url, timeout = 15000, headers = {}) {
     const response = await fetch(url, { headers: { 'User-Agent': 'VulnerabilityDashboard/1.0', Accept: 'application/json', ...headers }, signal: AbortSignal.timeout(timeout) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    logger.log('info', 'Feed request succeeded', String(url));
+    logger.feed('info', 'Source request succeeded', String(url));
     return data;
   } catch (error) {
-    logger.log('error', 'Feed request failed', `${url}: ${error.cause?.code || error.name || 'Error'}: ${error.message}`);
+    logger.feed('error', 'Source request failed', `${url}: ${error.cause?.code || error.name || 'Error'}: ${error.message}`);
     throw error;
   }
 }
@@ -357,10 +368,10 @@ async function fetchText(url, timeout = 15000) {
     const response = await fetch(url, { headers: { 'User-Agent': 'VulnerabilityDashboard/1.0' }, signal: AbortSignal.timeout(timeout) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.text();
-    logger.log('info', 'Feed request succeeded', String(url));
+    logger.feed('info', 'Source request succeeded', String(url));
     return data;
   } catch (error) {
-    logger.log('error', 'Feed request failed', `${url}: ${error.cause?.code || error.name || 'Error'}: ${error.message}`);
+    logger.feed('error', 'Source request failed', `${url}: ${error.cause?.code || error.name || 'Error'}: ${error.message}`);
     throw error;
   }
 }
@@ -485,7 +496,7 @@ async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
       sourceLabel = vendor.source.name;
       result.vendorConfirmed = true;
     }
-  } catch (error) { logger.log('warn', 'Vendor assessment unavailable', `${app.name}: ${error.message}; using NVD fallback`); result.reasons.push(`Vendor check unavailable: ${error.message}; using NVD fallback`); }
+  } catch (error) { logger.feed('warn', 'Vendor assessment unavailable', `${app.name}: ${error.message}; using NVD fallback`); result.reasons.push(`Vendor check unavailable: ${error.message}; using NVD fallback`); }
   if (!sourceOk) try {
     const api = new URL('https://services.nvd.nist.gov/rest/json/cves/2.0');
     api.searchParams.set('virtualMatchString', wildcardApplicationCpe(app));
@@ -498,7 +509,7 @@ async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
     sourceOk = data.totalResults <= 2000;
     if (!sourceOk) result.reasons.push('NVD result limit reached; review required');
     result.sources.push({ name: 'NVD', url: api.toString() });
-  } catch (error) { logger.log('error', 'NVD assessment unavailable', `${app.name}: ${error.message}`); result.reasons.push(`NVD check unavailable: ${error.message}`); }
+  } catch (error) { logger.feed('error', 'NVD assessment unavailable', `${app.name}: ${error.message}`); result.reasons.push(`NVD check unavailable: ${error.message}`); }
   let life = { state: 'unknown', note: 'Lifecycle source not configured' };
   result.upgrades = { latest: app.latestVersion || null, currentLine: app.latestBranchVersion || null, latestLts: app.latestLtsVersion || null, sourceUrl: app.releaseUrl || app.lifecycleUrl || null };
   if (app.eolDate) {
@@ -515,7 +526,7 @@ async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
       if (app.latestBranchVersion) result.upgrades.currentLine = app.latestBranchVersion;
       if (app.latestLtsVersion) result.upgrades.latestLts = app.latestLtsVersion;
       result.sources.push({ name: 'endoflife.date', url });
-    } catch (error) { logger.log('error', 'Lifecycle assessment unavailable', `${app.name}: ${error.message}`); life = { state: 'unknown', note: `Lifecycle check unavailable: ${error.message}` }; }
+    } catch (error) { logger.feed('error', 'Lifecycle assessment unavailable', `${app.name}: ${error.message}`); life = { state: 'unknown', note: `Lifecycle check unavailable: ${error.message}` }; }
   }
   result.lifecycle = life;
   result.assessmentSource = sourceLabel;
@@ -564,14 +575,14 @@ async function refresh() {
     const apps = parseInventory(await readFile(path.join(configDirectory, 'applications.yaml'), 'utf8'));
     const workspaces = parseWorkspaces(await readFile(path.join(configDirectory, 'workspaces.yaml'), 'utf8'), apps);
     const feeds = await readFeeds(feedFile);
-    const feedCache = await collectFeeds(feeds, feedCacheFile);
+    const feedCache = await collectFeeds(feeds, feedCacheFile, { onEvent: logger.feed });
     let kev = new Set();
     let kevError = null;
     try {
       if (!apps.length) return storeSnapshot({ checkedAt: new Date().toISOString(), results: [], workspaces, warning: null, inventoryCount: 0 });
       const data = await fetchJson('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json');
       kev = new Set(data.vulnerabilities.map(v => v.cveID));
-    } catch (error) { logger.log('error', 'CISA KEV unavailable', error.message); kevError = `CISA KEV unavailable: ${error.message}`; }
+    } catch (error) { logger.feed('error', 'CISA KEV unavailable', error.message); kevError = `CISA KEV unavailable: ${error.message}`; }
     const results = [];
     for (const app of apps) {
       const associatedFeeds = feeds.filter(feed => feed.enabled && feed.applicationIds.includes(app.id));
@@ -604,7 +615,7 @@ async function refreshApplication(appId) {
     logger.log('info', 'Application scan started', app.name);
     const feeds = await readFeeds(feedFile);
     const associatedFeeds = feeds.filter(feed => feed.enabled && feed.applicationIds.includes(app.id));
-    const feedCache = associatedFeeds.length ? await collectFeeds(associatedFeeds, feedCacheFile, { preserveUnlisted: true }) : await readFeedCache();
+    const feedCache = associatedFeeds.length ? await collectFeeds(associatedFeeds, feedCacheFile, { preserveUnlisted: true, onEvent: logger.feed }) : await readFeedCache();
     const associated = associatedFeeds.flatMap(feed => feedCache.feeds?.[feed.id]?.entries || []);
     const feedErrors = associatedFeeds.filter(feed => feedCache.feeds?.[feed.id]?.status === 'error').map(feed => `${feed.name}: ${feedCache.feeds[feed.id].error}`);
     let kev = new Set();
@@ -612,7 +623,7 @@ async function refreshApplication(appId) {
     try {
       const data = await fetchJson('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json');
       kev = new Set(data.vulnerabilities.map(item => item.cveID));
-    } catch (error) { kevError = `CISA KEV unavailable: ${error.message}`; }
+    } catch (error) { logger.feed('error', 'CISA KEV unavailable', error.message); kevError = `CISA KEV unavailable: ${error.message}`; }
     const result = await scanApp(app, kev, associated, feedErrors);
     if (kevError) { result.reasons.push(kevError); if (result.status !== 'red') result.status = 'unknown'; }
     else result.sources.push({ name: 'CISA Known Exploited Vulnerabilities', url: 'https://www.cisa.gov/known-exploited-vulnerabilities-catalog' });
@@ -678,8 +689,10 @@ const requestHandler = async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ version: applicationVersion, smtp, general, generalConfigured: Boolean(configuredGeneral.host), envStatus })); return;
     }
     if (url.pathname === '/api/logs' && req.method === 'GET') {
+      const type = url.searchParams.get('type') || 'system';
+      if (!logTypes.includes(type)) { res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: 'Unknown log type' })); return; }
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({ entries: await logger.recent() })); return;
+      res.end(JSON.stringify({ type, entries: await logger.recent(type) })); return;
     }
     if (url.pathname === '/api/settings' && req.method === 'POST') {
       const body = await readBody(req);
@@ -857,10 +870,16 @@ const requestHandler = async (req, res) => {
       const feed = feeds.find(item => item.id === feedRoute[1]);
       if (!feed) throw new Error('Feed not found');
       if (!access.feedEdit.has(feed.id)) { forbidden(res, 'Feed Editor role required'); return; }
-      const response = await secureFetchText(feedRequestUrl(feed), { headers: feed.format === 'github' ? { Accept: 'application/vnd.github+json' } : {} });
-      const entries = normalizeEntries(feed, response);
-      await logger.audit('Feed tested', auditActor(req), { type: 'feed', id: feed.id, name: feed.name }, { entries: entries.length }, `${feed.name}; ${entries.length} normalized entries`);
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ sourceUrl: response.url, entries: entries.slice(0, 25) })); return;
+      try {
+        const response = await secureFetchText(feedRequestUrl(feed), { headers: feed.format === 'github' ? { Accept: 'application/vnd.github+json' } : {} });
+        const entries = normalizeEntries(feed, response);
+        await logger.feed('info', 'Feed test succeeded', `${feed.name}: ${entries.length} normalized entries`);
+        await logger.audit('Feed tested', auditActor(req), { type: 'feed', id: feed.id, name: feed.name }, { entries: entries.length }, `${feed.name}; ${entries.length} normalized entries`);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ sourceUrl: response.url, entries: entries.slice(0, 25) })); return;
+      } catch (error) {
+        await logger.feed('error', 'Feed test failed', `${feed.name}: ${error.message}`);
+        throw error;
+      }
     }
     if (feedRoute && req.method === 'POST' && feedRoute[2] === 'refresh') {
       const { feeds, access } = await authorization(req);
@@ -868,7 +887,7 @@ const requestHandler = async (req, res) => {
       if (!feed) throw new Error('Feed not found');
       if (!access.feedEdit.has(feed.id)) { forbidden(res, 'Feed Editor role required'); return; }
       if (refreshPromise) await refreshPromise;
-      const cache = await collectFeeds([feed], feedCacheFile, { preserveUnlisted: true });
+      const cache = await collectFeeds([feed], feedCacheFile, { preserveUnlisted: true, onEvent: logger.feed });
       const state = cache.feeds[feed.id];
       await invalidateSnapshot();
       await logger.audit('Feed collected', auditActor(req), { type: 'feed', id: feed.id, name: feed.name }, { status: state.status, entries: state.entries?.length || 0 }, `${feed.name}; ${state.status}; ${state.entries?.length || 0} cached entries`);

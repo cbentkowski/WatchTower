@@ -78,7 +78,7 @@ test('Permission Preview enforces selected access, blocks mutations, and preserv
     const restored = await (await fetch(`${origin}/api/session`)).json();
     assert.equal(restored.isAdmin, true);
     assert.equal(restored.preview, null);
-    const logs = await (await fetch(`${origin}/api/logs`)).json();
+    const logs = await (await fetch(`${origin}/api/logs?type=audit`)).json();
     assert.ok(logs.entries.some(entry => entry.message === 'Permission Preview started'));
     assert.ok(logs.entries.some(entry => entry.message === 'Permission Preview exited'));
   } finally {

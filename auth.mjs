@@ -71,7 +71,7 @@ function requestOrigin(req, url) {
   catch { return url.origin; }
 }
 
-export function createAuth(settings = oidcSettings(), provider = oidc) {
+export function createAuth(settings = oidcSettings(), provider = oidc, authEvent = () => {}) {
   if (!settings) return null;
   const secure = settings.base.protocol === 'https:';
   const sessionName = secure ? '__Host-watchtower' : 'watchtower_session';
@@ -82,6 +82,10 @@ export function createAuth(settings = oidcSettings(), provider = oidc) {
   const redirectUri = new URL('/auth/callback', settings.base).href;
   let configuration;
   let activeClientSecret = settings.clientSecret;
+  const record = async (action, actor = null, context = {}) => {
+    try { await authEvent(action, actor, context); }
+    catch (error) { console.error(`Could not record authentication event: ${error.message}`); }
+  };
   const client = () => {
     const currentClientSecret = settings.clientSecretFile ? readClientSecret(settings.clientSecretFile) : settings.clientSecret;
     if (currentClientSecret !== activeClientSecret) {
@@ -103,6 +107,7 @@ export function createAuth(settings = oidcSettings(), provider = oidc) {
       const session = sessions.get(values[sessionName]);
       if (req.method === 'GET' && ['/login', '/auth/login', '/auth/callback'].includes(url.pathname) && requestOrigin(req, url) !== settings.base.origin) {
         const canonical = new URL(`${url.pathname}${url.search}`, settings.base);
+        await record('Authentication request redirected', null, { outcome: 'info', issuer: settings.issuer.href, fromOrigin: requestOrigin(req, url), toOrigin: settings.base.origin, path: url.pathname });
         send(res, 308, '', { Location: canonical.href });
         return true;
       }
@@ -132,6 +137,7 @@ export function createAuth(settings = oidcSettings(), provider = oidc) {
         } catch (error) {
           flows.delete(flowId);
           console.error(`OIDC discovery failed: ${error.code || error.name}`);
+          await record('Sign-in provider unavailable', null, { outcome: 'error', issuer: settings.issuer.href, reason: error.code || error.name || 'Error' });
           send(res, 503, 'Identity provider unavailable. Try signing in again later.', { 'Content-Type': 'text/plain; charset=utf-8' });
           return true;
         }
@@ -142,6 +148,7 @@ export function createAuth(settings = oidcSettings(), provider = oidc) {
         const flow = flows.get(values[flowName]);
         flows.delete(values[flowName]);
         if (!flow || flow.expires <= Date.now() || url.searchParams.get('state') !== flow.state) {
+          await record('Sign-in callback rejected', null, { outcome: 'warn', issuer: settings.issuer.href, reason: !flow ? 'missing-flow' : flow.expires <= Date.now() ? 'expired-flow' : 'state-mismatch' });
           send(res, 400, 'Sign-in expired or invalid. Return to /auth/login to try again.', { 'Content-Type': 'text/plain; charset=utf-8', 'Set-Cookie': cookie(flowName, '', 0) });
           return true;
         }
@@ -156,11 +163,6 @@ export function createAuth(settings = oidcSettings(), provider = oidc) {
           const claims = tokens.claims();
           if (!claims?.sub) throw new Error('OIDC ID token has no subject');
           const roles = [...new Set([...(Array.isArray(claims.roles) ? claims.roles : []), ...(Array.isArray(claims.realm_access?.roles) ? claims.realm_access.roles : []), ...(Array.isArray(claims.resource_access?.[settings.clientId]?.roles) ? claims.resource_access[settings.clientId].roles : [])].map(String))];
-          if (settings.requiredRole && !roles.includes(settings.requiredRole)) {
-            send(res, 403, 'Your account does not have the required WatchTower role.', { 'Content-Type': 'text/plain; charset=utf-8', 'Set-Cookie': cookie(flowName, '', 0) });
-            return true;
-          }
-          const sessionId = randomToken();
           const claimValues = {
             groups: Array.isArray(claims.groups) ? claims.groups.map(String) : [],
             roles: Array.isArray(claims.roles) ? claims.roles.map(String) : [],
@@ -168,12 +170,22 @@ export function createAuth(settings = oidcSettings(), provider = oidc) {
             'resource_access.roles': Array.isArray(claims.resource_access?.[settings.clientId]?.roles) ? claims.resource_access[settings.clientId].roles.map(String) : [],
           };
           const username = claims.preferred_username || claims.upn || claims.email || claims.sub;
+          const actor = { subject: String(claims.sub), username: String(username), name: String(claims.name || username) };
+          const groupOverage = Boolean(claims._claim_names?.groups || claims.hasgroups);
+          if (settings.requiredRole && !roles.includes(settings.requiredRole)) {
+            await record('Sign-in denied', actor, { outcome: 'warn', issuer: settings.issuer.href, reason: 'required-role-missing', claims: claimValues, groupOverage });
+            send(res, 403, 'Your account does not have the required WatchTower role.', { 'Content-Type': 'text/plain; charset=utf-8', 'Set-Cookie': cookie(flowName, '', 0) });
+            return true;
+          }
+          const sessionId = randomToken();
           const protectedAdminGroup = settings.adminGroupIdFile ? readProtectedFile(settings.adminGroupIdFile, 'OIDC_ADMIN_GROUP_ID_FILE') : '';
           const isAdmin = Object.values(claimValues).some(values => values.includes(administratorRole)) || Boolean(protectedAdminGroup && claimValues.groups.includes(protectedAdminGroup));
-          sessions.set(sessionId, { subject: claims.sub, username, name: claims.name || username, isAdmin, claims: claimValues, groupOverage: Boolean(claims._claim_names?.groups), expires: Date.now() + sessionLifetime });
+          sessions.set(sessionId, { ...actor, isAdmin, claims: claimValues, groupOverage, expires: Date.now() + sessionLifetime });
+          await record('Sign-in succeeded', actor, { outcome: 'success', issuer: settings.issuer.href, claims: claimValues, groupOverage, administrator: isAdmin, protectedAdminClaim: protectedAdminGroup && claimValues.groups.includes(protectedAdminGroup) ? protectedAdminGroup : '' });
           send(res, 303, '', { Location: '/', 'Set-Cookie': [cookie(flowName, '', 0), cookie(sessionName, sessionId, sessionLifetime / 1000)] });
         } catch (error) {
           console.warn(`OIDC callback rejected: ${error.code || error.name}`);
+          await record('Sign-in callback rejected', null, { outcome: 'error', issuer: settings.issuer.href, reason: error.code || error.name || 'Error' });
           send(res, 401, 'Sign-in failed. Return to /auth/login to try again.', { 'Content-Type': 'text/plain; charset=utf-8', 'Set-Cookie': cookie(flowName, '', 0) });
         }
         return true;
@@ -182,10 +194,12 @@ export function createAuth(settings = oidcSettings(), provider = oidc) {
         if (!hasValidRequestOrigin(req, settings.base.origin)) { send(res, 403, 'Invalid request origin.'); return true; }
         sessions.delete(values[sessionName]);
         flows.delete(values[flowName]);
+        if (session) await record('Signed out', { subject: session.subject, username: session.username, name: session.name }, { outcome: 'success', issuer: settings.issuer.href });
         send(res, 303, '', { Location: '/signed-out', 'Set-Cookie': [cookie(sessionName, '', 0), cookie(flowName, '', 0)] });
         return true;
       }
       if (!session) {
+        if (values[sessionName]) await record('Session rejected', null, { outcome: 'warn', issuer: settings.issuer.href, path: url.pathname.startsWith('/api/') ? '/api/*' : url.pathname });
         if (url.pathname.startsWith('/api/')) send(res, 401, JSON.stringify({ error: 'Sign-in required' }), { 'Content-Type': 'application/json; charset=utf-8' });
         else send(res, 303, '', { Location: '/login' });
         return true;
