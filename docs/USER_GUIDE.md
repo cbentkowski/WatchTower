@@ -74,6 +74,8 @@ Review the CPE and lifecycle mappings whenever the product name, edition, releas
 
 Administrators manage reusable contacts from **Owners**. Each owner requires a name and unique email address and may include an escalation email. Editing an owner updates its contact information everywhere that owner is assigned. An owner cannot be removed while any application or workspace still references it.
 
+Application Editors and Workspace Notification Managers can create an owner from the owner-selection dialog and immediately assign it to the resource they are editing. They cannot edit or remove directory entries unless they are administrators. If the email already belongs to an owner, WatchTower prevents the duplicate and directs the user to select the existing owner.
+
 Application Editors can assign configured owners and maintain the application context fields on applications they may edit:
 
 - **Criticality** describes the business impact if the application is unavailable or compromised.
@@ -211,7 +213,7 @@ When previewing proposed changes, WatchTower keeps an expiring draft in the curr
 
 The global **Access Administrator** role can manage mappings, ordinary grants, verification, and Permission Preview without receiving access to applications, feeds, scans, logs, or settings. Only a protected administrator authenticated through the configured administrator group or `WatchTower.Administrator` role can add, remove, or change Access Administrator assignments.
 
-Permissions from matching grants are combined. Workspace Application Editor applies to every current and future application assigned to that workspace. Workspace Membership Manager is separate because changing membership can expand a user's access.
+Permissions from matching grants are combined. Workspace Application Editor applies to every current and future application assigned to that workspace. Workspace Membership Manager is separate because changing membership can expand a user's access. Application Editors and Workspace Notification Managers may create owners for assignment, but only administrators may edit or remove existing owners.
 
 Keep at least one tested protected-administrator path before narrowing access. Unmatched authenticated users receive no application access.
 

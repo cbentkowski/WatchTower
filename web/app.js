@@ -196,6 +196,8 @@ async function saveOwner(event) {
   event.preventDefault();
   try {
     const payload = Object.fromEntries(new FormData($('owner-form')));
+    const knownOwners = resumeOwnerAssociation ? editorConfig.owners || [] : owners;
+    if (!currentOwnerId && knownOwners.some(owner => owner.email.toLowerCase() === payload.email.trim().toLowerCase())) throw new Error('An owner with this email already exists. Select the existing owner instead.');
     const response = await fetch(currentOwnerId ? `/api/owners/${encodeURIComponent(currentOwnerId)}` : '/api/owners', { method: currentOwnerId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not save owner');
@@ -603,7 +605,8 @@ function renderAssociationList() {
 function openAssociation(key, title) {
   associationState = { key, items: associationItems(key), draft: new Set(editorSelections[key]) };
   $('association-title').textContent = title;
-  $('association-add-owner').hidden = key !== 'ownerIds' || !isAdmin;
+  const canCreateOwner = isAdmin || permissions.applications.edit.length > 0 || permissions.workspaces.notifications.length > 0;
+  $('association-add-owner').hidden = key !== 'ownerIds' || !canCreateOwner;
   $('association-search').value = '';
   renderAssociationList();
   $('association-dialog').showModal();
