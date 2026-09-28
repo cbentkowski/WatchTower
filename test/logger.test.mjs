@@ -11,14 +11,16 @@ test('system, feed, audit, and authentication events use independent files', asy
     const logger = createLogger(directory);
     await logger.log('info', 'Scan completed');
     await logger.feed('error', 'Feed collection failed', 'Vendor feed');
+    await logger.feed('warn', 'NVD assessment unavailable', 'Built-in source');
     await logger.audit('Settings updated', { subject: 'user-1', name: 'Admin' }, { type: 'settings', id: 'general' }, { host: true }, 'Host changed');
     await logger.authentication('Sign-in succeeded', { subject: 'user-1', name: 'Admin' }, { outcome: 'success', groupCount: 1, identities: [] });
 
     assert.equal((await logger.recent('system'))[0].message, 'Scan completed');
-    assert.equal((await logger.recent('feed'))[0].message, 'Feed collection failed');
+    assert.deepEqual((await logger.recent('feed')).map(entry => entry.message), ['NVD assessment unavailable', 'Feed collection failed']);
     assert.equal((await logger.recent('audit'))[0].message, 'Settings updated');
     assert.equal((await logger.recent('auth'))[0].message, 'Sign-in succeeded');
-    for (const name of ['system', 'feed', 'audit', 'auth']) assert.match(await readFile(path.join(directory, `${name}.jsonl`), 'utf8'), new RegExp(name === 'auth' ? 'Sign-in succeeded' : name === 'audit' ? 'Settings updated' : name === 'feed' ? 'Feed collection failed' : 'Scan completed'));
+    for (const name of ['system', 'feed', 'audit', 'auth']) assert.match(await readFile(path.join(directory, `${name}.jsonl`), 'utf8'), new RegExp(name === 'auth' ? 'Sign-in succeeded' : name === 'audit' ? 'Settings updated' : name === 'feed' ? 'NVD assessment unavailable' : 'Scan completed'));
+    assert.doesNotMatch(await readFile(path.join(directory, 'system.jsonl'), 'utf8'), /NVD assessment unavailable|Feed collection failed/);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

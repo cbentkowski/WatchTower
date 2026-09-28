@@ -496,7 +496,7 @@ async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
       sourceLabel = vendor.source.name;
       result.vendorConfirmed = true;
     }
-  } catch (error) { logger.log('warn', 'Vendor assessment unavailable', `${app.name}: ${error.message}; using NVD fallback`); result.reasons.push(`Vendor check unavailable: ${error.message}; using NVD fallback`); }
+  } catch (error) { logger.feed('warn', 'Vendor assessment unavailable', `${app.name}: ${error.message}; using NVD fallback`); result.reasons.push(`Vendor check unavailable: ${error.message}; using NVD fallback`); }
   if (!sourceOk) try {
     const api = new URL('https://services.nvd.nist.gov/rest/json/cves/2.0');
     api.searchParams.set('virtualMatchString', wildcardApplicationCpe(app));
@@ -509,7 +509,7 @@ async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
     sourceOk = data.totalResults <= 2000;
     if (!sourceOk) result.reasons.push('NVD result limit reached; review required');
     result.sources.push({ name: 'NVD', url: api.toString() });
-  } catch (error) { logger.log('error', 'NVD assessment unavailable', `${app.name}: ${error.message}`); result.reasons.push(`NVD check unavailable: ${error.message}`); }
+  } catch (error) { logger.feed('error', 'NVD assessment unavailable', `${app.name}: ${error.message}`); result.reasons.push(`NVD check unavailable: ${error.message}`); }
   let life = { state: 'unknown', note: 'Lifecycle source not configured' };
   result.upgrades = { latest: app.latestVersion || null, currentLine: app.latestBranchVersion || null, latestLts: app.latestLtsVersion || null, sourceUrl: app.releaseUrl || app.lifecycleUrl || null };
   if (app.eolDate) {
@@ -526,7 +526,7 @@ async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
       if (app.latestBranchVersion) result.upgrades.currentLine = app.latestBranchVersion;
       if (app.latestLtsVersion) result.upgrades.latestLts = app.latestLtsVersion;
       result.sources.push({ name: 'endoflife.date', url });
-    } catch (error) { logger.log('error', 'Lifecycle assessment unavailable', `${app.name}: ${error.message}`); life = { state: 'unknown', note: `Lifecycle check unavailable: ${error.message}` }; }
+    } catch (error) { logger.feed('error', 'Lifecycle assessment unavailable', `${app.name}: ${error.message}`); life = { state: 'unknown', note: `Lifecycle check unavailable: ${error.message}` }; }
   }
   result.lifecycle = life;
   result.assessmentSource = sourceLabel;
@@ -582,7 +582,7 @@ async function refresh() {
       if (!apps.length) return storeSnapshot({ checkedAt: new Date().toISOString(), results: [], workspaces, warning: null, inventoryCount: 0 });
       const data = await fetchJson('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json');
       kev = new Set(data.vulnerabilities.map(v => v.cveID));
-    } catch (error) { logger.log('error', 'CISA KEV unavailable', error.message); kevError = `CISA KEV unavailable: ${error.message}`; }
+    } catch (error) { logger.feed('error', 'CISA KEV unavailable', error.message); kevError = `CISA KEV unavailable: ${error.message}`; }
     const results = [];
     for (const app of apps) {
       const associatedFeeds = feeds.filter(feed => feed.enabled && feed.applicationIds.includes(app.id));
@@ -623,7 +623,7 @@ async function refreshApplication(appId) {
     try {
       const data = await fetchJson('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json');
       kev = new Set(data.vulnerabilities.map(item => item.cveID));
-    } catch (error) { kevError = `CISA KEV unavailable: ${error.message}`; }
+    } catch (error) { logger.feed('error', 'CISA KEV unavailable', error.message); kevError = `CISA KEV unavailable: ${error.message}`; }
     const result = await scanApp(app, kev, associated, feedErrors);
     if (kevError) { result.reasons.push(kevError); if (result.status !== 'red') result.status = 'unknown'; }
     else result.sources.push({ name: 'CISA Known Exploited Vulnerabilities', url: 'https://www.cisa.gov/known-exploited-vulnerabilities-catalog' });
