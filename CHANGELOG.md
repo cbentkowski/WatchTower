@@ -1,6 +1,12 @@
 # Changelog
 
-## [0.7.0] - Unreleased
+## [0.7.1] - Unreleased
+
+### Fixed
+
+- Remove the blocked Google Fonts request and use a same-origin-free system font stack without weakening the Content Security Policy.
+
+## [0.7.0] - 2026-09-27
 
 ### Added
 
