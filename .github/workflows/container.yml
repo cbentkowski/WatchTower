@@ -60,8 +60,12 @@ jobs:
             [[ "$file" == *.md ]] || documentation_only=false
           done < <(git diff --name-only "$base" "$GITHUB_SHA")
           version_changed=false
-          if [[ "$EVENT_NAME" == "push" ]] && ! git diff --quiet "$base" "$GITHUB_SHA" -- package.json; then
-            version_changed=true
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            previous_version="$(git show "$base:package.json" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")"
+            current_version="$(node -p "require('./package.json').version")"
+            if [[ "$previous_version" != "$current_version" ]]; then
+              version_changed=true
+            fi
           fi
           if [[ "$documentation_only" == "true" ]]; then
             echo "application_changed=false" >> "$GITHUB_OUTPUT"
@@ -385,7 +389,9 @@ jobs:
         id: version_change
         shell: bash
         run: |
-          if git diff --quiet "$GITHUB_SHA^" "$GITHUB_SHA" -- package.json; then
+          previous_version="$(git show "$GITHUB_SHA^:package.json" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")"
+          current_version="$(node -p "require('./package.json').version")"
+          if [[ "$previous_version" == "$current_version" ]]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
