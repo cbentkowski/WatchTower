@@ -206,9 +206,14 @@ The browser checks for updated results while open. Large inventories without an 
 
 ## Logs and troubleshooting
 
-Open **Logs** to inspect recent scans, feed requests, errors, and configuration changes. Newest entries appear first.
+Open **Logs** and select **System**, **Feeds**, **Audit**, or **Authentication** to inspect each activity stream. Newest entries appear first.
 
-Audit entries identify the time, action, resource, changed fields, and signed-in identity. Notification recipient changes do not record addresses, and credential values are never logged.
+- System entries cover scans, notifications, server activity, and general runtime errors.
+- Feed entries cover source requests, collection outcomes, failures, and recovery.
+- Audit entries identify configuration and access-control changes, including the time, action, resource, changed fields, and signed-in identity. Notification recipient changes do not record addresses.
+- Authentication entries cover sign-ins, sign-outs, rejected callbacks, and expired sessions. Successful sign-ins show the received group count, WatchTower identity-mapping names and roles for matched claims, and the provider values for unmatched claims. Group-overage responses are identified explicitly.
+
+Authentication logs never contain identity tokens, authorization codes, cookies, passkeys, credentials, or unrelated identity claims. Audit and authentication logs are restricted to administrators.
 
 When investigating a problem:
 

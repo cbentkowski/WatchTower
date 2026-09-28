@@ -1,33 +1,59 @@
-import { appendFile, mkdir, readFile, rename, stat } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+export const logTypes = Object.freeze(['system', 'feed', 'audit', 'auth']);
+const fileNames = Object.freeze({ system: 'system.jsonl', feed: 'feed.jsonl', audit: 'audit.jsonl', auth: 'auth.jsonl' });
+const maxSize = 5_000_000;
+
 export function createLogger(dataDirectory) {
-  const file = path.join(dataDirectory, 'logs.jsonl');
-  let pending = Promise.resolve();
-  function append(entry) {
-    pending = pending.then(async () => {
+  const pending = new Map(logTypes.map(type => [type, Promise.resolve()]));
+  const fileFor = type => path.join(dataDirectory, fileNames[type]);
+
+  function append(type, entry) {
+    const file = fileFor(type);
+    const write = pending.get(type).then(async () => {
       await mkdir(dataDirectory, { recursive: true });
-      if ((await stat(file).catch(() => ({ size: 0 }))).size > 5_000_000) await rename(file, path.join(dataDirectory, 'logs.previous.jsonl'));
+      if ((await stat(file).catch(() => ({ size: 0 }))).size > maxSize) {
+        const previous = path.join(dataDirectory, `${path.parse(file).name}.previous.jsonl`);
+        await rm(previous, { force: true });
+        await rename(file, previous);
+      }
       await appendFile(file, `${JSON.stringify(entry)}\n`);
-    }).catch(error => console.error(`Could not write log: ${error.message}`));
-    return pending;
+    }).catch(error => console.error(`Could not write ${type} log: ${error.message}`));
+    pending.set(type, write);
+    return write;
   }
+
   function log(level, message, detail = '') {
-    return append({ at: new Date().toISOString(), level, message, detail: String(detail || '') });
+    return append('system', { at: new Date().toISOString(), level, message, detail: String(detail || '') });
   }
+
+  function feed(level, message, detail = '') {
+    return append('feed', { at: new Date().toISOString(), level, message, detail: String(detail || '') });
+  }
+
   function audit(action, actor, target, changes, detail) {
-    return append({ at: new Date().toISOString(), level: 'audit', message: action, detail, actor, target, changes });
+    return append('audit', { at: new Date().toISOString(), level: 'audit', message: action, detail, actor, target, changes });
   }
-  async function recent(limit = 200) {
-    await pending;
-    const files = [path.join(dataDirectory, 'logs.previous.jsonl'), file];
+
+  function authentication(action, actor, context = {}) {
+    return append('auth', { at: new Date().toISOString(), level: context.outcome || 'info', message: action, actor, authentication: context });
+  }
+
+  async function recent(type = 'system', limit = 200) {
+    if (!logTypes.includes(type)) throw new Error('Unknown log type');
+    await pending.get(type);
+    const name = path.parse(fileNames[type]).name;
+    const files = [path.join(dataDirectory, `${name}.previous.jsonl`), fileFor(type)];
+    if (type === 'system') files.unshift(path.join(dataDirectory, 'logs.previous.jsonl'), path.join(dataDirectory, 'logs.jsonl'));
     const entries = [];
     for (const source of files) {
       let text;
       try { text = await readFile(source, 'utf8'); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
       for (const line of text.split('\n')) if (line) { try { entries.push(JSON.parse(line)); } catch {} }
     }
-    return entries.slice(-limit).reverse();
+    return entries.sort((a, b) => String(a.at).localeCompare(String(b.at))).slice(-limit).reverse();
   }
-  return { log, audit, recent };
+
+  return { log, feed, audit, authentication, recent };
 }

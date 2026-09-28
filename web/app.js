@@ -14,6 +14,7 @@ let lifecycleDraft = null;
 let cpeSearchPage = { previousIndex: null, nextIndex: null, startIndex: 0, totalResults: 0 };
 let settingsLoaded = false;
 let logsLoaded = false;
+let activeLogType = 'system';
 let accessLoaded = false;
 let feedsLoaded = false;
 let feedData = { feeds: [], applications: [], canManage: false };
@@ -154,11 +155,29 @@ function showEnvironmentStatus(data) {
 async function loadLogs() {
   logsLoaded = true;
   const list = $('logs-list');
+  const types = {
+    system: { title: 'System events', description: 'Newest first. Scans, notifications, server activity, and runtime errors.' },
+    feed: { title: 'Feed events', description: 'Newest first. Source requests, collection results, failures, and recovery.' },
+    audit: { title: 'Audit events', description: 'Newest first. Attributable changes to configuration and access control.' },
+    auth: { title: 'Authentication events', description: 'Newest first. Sign-ins, sign-outs, rejected sessions, and identity matching.' },
+  };
+  $('logs-title').textContent = types[activeLogType].title;
+  $('logs-description').textContent = types[activeLogType].description;
+  for (const button of document.querySelectorAll('[data-log-type]')) button.setAttribute('aria-selected', String(button.dataset.logType === activeLogType));
   try {
-    const response = await fetch('/api/logs', { cache: 'no-store' });
+    const response = await fetch(`/api/logs?type=${encodeURIComponent(activeLogType)}`, { cache: 'no-store' });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not load logs');
-    list.innerHTML = data.entries.length ? data.entries.map(entry => `<article class="log-entry"><time>${escape(new Date(entry.at).toLocaleString())}</time><span class="log-level ${escape(entry.level)}">${escape(entry.level)}</span><div><strong>${escape(entry.message)}</strong>${entry.actor ? `<p class="log-actor">By ${escape(entry.actor.name)} · ${escape(entry.actor.username || entry.actor.subject)}</p>` : ''}${entry.detail ? `<p>${escape(entry.detail)}</p>` : ''}</div></article>`).join('') : '<p class="muted">No log entries yet.</p>';
+    list.innerHTML = data.entries.length ? data.entries.map(entry => {
+      const authentication = entry.authentication;
+      const identityDetails = authentication?.identities?.map(identity => identity.mappings.length
+        ? identity.mappings.map(mapping => `${escape(mapping.name)} → ${escape(mapping.roles.join(', ') || 'No grants')}`).join('<br>')
+        : `${escape(identity.source)}: ${escape(identity.value)} <span class="muted">(unmatched)</span>`).join('<br>') || '';
+      const authContext = authentication ? [authentication.issuer ? `Provider: ${escape(authentication.issuer)}` : '', authentication.reason ? `Reason: ${escape(authentication.reason)}` : '', authentication.fromOrigin && authentication.toOrigin ? `${escape(authentication.fromOrigin)} → ${escape(authentication.toOrigin)}` : ''].filter(Boolean).join(' · ') : '';
+      const showClaims = Boolean(authentication && (authentication.identities?.length || authentication.groupOverage || ['Sign-in succeeded', 'Sign-in denied'].includes(entry.message)));
+      const authSummary = authentication ? `${authContext ? `<p>${authContext}</p>` : ''}${showClaims ? `<p>${authentication.groupCount} group value${authentication.groupCount === 1 ? '' : 's'} received · ${authentication.matchedCount} access value${authentication.matchedCount === 1 ? '' : 's'} matched · ${authentication.unmatchedCount} unmatched${authentication.groupOverage ? ' · group overage reported' : ''}</p>${identityDetails ? `<p class="log-identities">${identityDetails}</p>` : ''}` : ''}` : '';
+      return `<article class="log-entry"><time>${escape(new Date(entry.at).toLocaleString())}</time><span class="log-level ${escape(entry.level)}">${escape(entry.level)}</span><div><strong>${escape(entry.message)}</strong>${entry.actor ? `<p class="log-actor">${escape(entry.actor.name)} · ${escape(entry.actor.username || entry.actor.subject)}</p>` : ''}${entry.detail ? `<p>${escape(entry.detail)}</p>` : ''}${authSummary}</div></article>`;
+    }).join('') : '<p class="muted">No log entries yet.</p>';
   } catch (error) { logsLoaded = false; list.innerHTML = `<p class="form-error">${escape(error.message)}</p>`; }
 }
 
@@ -860,6 +879,7 @@ $('feed-delete').addEventListener('click', deleteFeed);
 $('feed-editor-close').addEventListener('click', () => $('feed-editor').close());
 $('feed-cancel').addEventListener('click', () => $('feed-editor').close());
 $('logs-refresh').addEventListener('click', loadLogs);
+for (const button of document.querySelectorAll('[data-log-type]')) button.addEventListener('click', () => { activeLogType = button.dataset.logType; loadLogs(); });
 $('settings-form').addEventListener('submit', saveSettings);
 $('settings-test-email').addEventListener('click', testEmailSettings);
 $('access-form').addEventListener('submit', saveAccess);

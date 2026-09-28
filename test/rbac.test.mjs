@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateAccess, explainAccess, protectedRoleState, validateRbacInput } from '../rbac.mjs';
+import { calculateAccess, describeIdentityClaims, explainAccess, protectedRoleState, validateRbacInput } from '../rbac.mjs';
 
 const appA = { id: '11111111-1111-4111-8111-111111111111', name: 'Jira' };
 const appB = { id: '22222222-2222-4222-8222-222222222222', name: 'GitLab' };
@@ -18,6 +18,19 @@ test('one workspace grant combines multiple roles and applies to every applicati
   assert.equal(access.workspaceEdit.has(workspace.id), true);
   assert.deepEqual([...access.appEdit].sort(), [appA.id, appB.id].sort());
   assert.equal(access.workspaceMembership.has(workspace.id), false);
+});
+
+test('authentication claims show WatchTower names for matches and provider values for unmatched groups', () => {
+  const config = validateRbacInput({
+    groups: [{ id: groupId, name: 'Infrastructure Admins', claimSource: 'groups', claimValue: 'entra-group-id', enabled: true }],
+    grants: [{ id: grantId, groupId, scopeType: 'workspace', roles: ['workspace-manager', 'workspace-application-editor'], resourceIds: [workspace.id] }],
+  }, [appA, appB], [workspace]);
+  const summary = describeIdentityClaims(config, { groups: ['entra-group-id', 'unknown-group'], roles: [] });
+  assert.equal(summary.groupCount, 2);
+  assert.equal(summary.matchedCount, 1);
+  assert.equal(summary.unmatchedCount, 1);
+  assert.deepEqual(summary.identities[0].mappings, [{ name: 'Infrastructure Admins', roles: ['Workspace Manager', 'Workspace Application Editor'] }]);
+  assert.deepEqual(summary.identities[1], { source: 'groups', value: 'unknown-group', mappings: [] });
 });
 
 test('unmatched authenticated users receive no access', () => {
