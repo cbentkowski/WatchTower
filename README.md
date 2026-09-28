@@ -2,7 +2,7 @@
 
 WatchTower is a self-hosted application vulnerability and lifecycle dashboard. It tracks the software you operate, maps installed versions to NVD CPE records, checks vendor and community security feeds, identifies CISA Known Exploited Vulnerabilities, and compares releases with endoflife.date lifecycle data.
 
-WatchTower is designed for a lightweight, single-container deployment. Configuration, scan results, notification state, and audit logs remain in persistent file storage. No database or external scheduler is required.
+WatchTower is designed for a lightweight, single-container deployment. Configuration, scan results, notification state, and operational logs remain in persistent file storage. No database or external scheduler is required.
 
 ## What WatchTower provides
 
@@ -13,7 +13,7 @@ WatchTower is designed for a lightweight, single-container deployment. Configura
 - Release, end-of-life, and vulnerability status in one dashboard.
 - Workspace email notifications, reminders, and acknowledgement links.
 - OpenID Connect sign-in and delegated access control.
-- Audit and troubleshooting logs available from the interface.
+- Separate system, feed, audit, and authentication logs available from the interface.
 - Versioned, signed container images published to Docker Hub.
 
 WatchTower is a triage tool. Its results depend on correct product mappings and the data available from external sources. Always confirm affected versions and remediation guidance with the software vendor.

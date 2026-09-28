@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { appendFile, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -54,14 +54,16 @@ test('application, workspace, and settings edits appear in audit logs', async ()
     assert.equal((await post(`/api/feeds/${feed.id}`, { ...feed, name: 'Vendor security advisories', enabled: false }, 'PUT')).status, 200);
     assert.equal((await post(`/api/applications/${appId}/feeds`, { feedIds: [feed.id] }, 'PUT')).status, 200);
 
-    const { entries } = await (await fetch(`${origin}/api/logs`)).json();
-    const audits = entries.filter(entry => entry.level === 'audit');
+    const { entries: audits } = await (await fetch(`${origin}/api/logs?type=audit`)).json();
     assert.deepEqual(audits.map(entry => entry.message).sort(), ['Application added', 'Application updated', 'Feed added', 'Feed updated', 'Settings updated', 'Workspace added', 'Workspace updated'].sort());
     assert.ok(audits.every(entry => entry.actor.username === 'local'));
     assert.deepEqual(audits.find(entry => entry.message === 'Application updated').changes.version, { from: '1.0', to: '1.1' });
     assert.deepEqual(audits.find(entry => entry.message === 'Workspace updated').changes.removedApplications, [appId]);
     assert.equal(audits.find(entry => entry.message === 'Workspace updated').changes.notificationRecipientsChanged, true);
     assert.ok(!JSON.stringify(audits).includes('team@example.com'));
+    assert.equal((await fetch(`${origin}/api/logs?type=unknown`)).status, 400);
+    assert.ok(!JSON.stringify((await (await fetch(`${origin}/api/logs?type=system`)).json()).entries).includes('Settings updated'));
+    assert.match(await readFile(path.join(data, 'audit.jsonl'), 'utf8'), /Settings updated/);
     const feedList = await (await fetch(`${origin}/api/feeds`)).json();
     assert.equal(feedList.feeds[0].name, 'Vendor security advisories');
     assert.equal(feedList.feeds[0].state.status, 'not-checked');
@@ -73,12 +75,12 @@ test('application, workspace, and settings edits appear in audit logs', async ()
     assert.equal(immutableConfig.workspaces.some(group => group.id === workspaceId), true);
 
     await new Promise(resolve => setTimeout(resolve, 250));
-    const afterWebEdits = (await (await fetch(`${origin}/api/logs`)).json()).entries;
+    const afterWebEdits = (await (await fetch(`${origin}/api/logs?type=audit`)).json()).entries;
     assert.equal(afterWebEdits.some(entry => entry.message === 'YAML file changed outside web interface'), false);
     await appendFile(path.join(directory, 'applications.yaml'), '# edited outside the dashboard\n');
     let filesystemEntry;
     for (let attempt = 0; attempt < 30; attempt++) {
-      const current = (await (await fetch(`${origin}/api/logs`)).json()).entries;
+      const current = (await (await fetch(`${origin}/api/logs?type=audit`)).json()).entries;
       filesystemEntry = current.find(entry => entry.message === 'YAML file changed outside web interface');
       if (filesystemEntry) break;
       await new Promise(resolve => setTimeout(resolve, 100));

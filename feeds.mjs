@@ -248,10 +248,10 @@ export function feedRequestUrl(feed) {
 export async function collectFeeds(feeds, cacheFile, options = {}) {
   let previous = { feeds: {} };
   try { previous = JSON.parse(await readFile(cacheFile, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const { preserveUnlisted = false, ...fetchOptions } = options;
+  const { preserveUnlisted = false, onEvent = async () => {}, ...fetchOptions } = options;
   const result = { checkedAt: new Date().toISOString(), feeds: preserveUnlisted ? { ...(previous.feeds || {}) } : {} };
   for (const feed of feeds) {
-    if (!feed.enabled) { result.feeds[feed.id] = { status: 'disabled', entries: [], checkedAt: result.checkedAt }; continue; }
+    if (!feed.enabled) { result.feeds[feed.id] = { status: 'disabled', entries: [], checkedAt: result.checkedAt }; await onEvent('info', 'Feed collection skipped', `${feed.name}: disabled`); continue; }
     try {
       const old = previous.feeds?.[feed.id] || {};
       const headers = {};
@@ -262,8 +262,10 @@ export async function collectFeeds(feeds, cacheFile, options = {}) {
       result.feeds[feed.id] = response.notModified
         ? { ...old, status: 'ok', checkedAt: result.checkedAt, sourceUrl: response.url, etag: response.etag || old.etag, modified: response.modified || old.modified }
         : { status: 'ok', checkedAt: result.checkedAt, sourceUrl: response.url, etag: response.etag, modified: response.modified, entries: normalizeEntries(feed, response).slice(0, MAX_ENTRIES) };
+      await onEvent('info', 'Feed collection succeeded', `${feed.name}: ${result.feeds[feed.id].entries?.length || 0} cached entries${response.notModified ? '; not modified' : ''}`);
     } catch (error) {
       result.feeds[feed.id] = { status: 'error', checkedAt: result.checkedAt, error: String(error.message || error).slice(0, 500), entries: previous.feeds?.[feed.id]?.entries || [] };
+      await onEvent('error', 'Feed collection failed', `${feed.name}: ${result.feeds[feed.id].error}`);
     }
   }
   await mkdir(path.dirname(cacheFile), { recursive: true });

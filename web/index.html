@@ -64,8 +64,9 @@
         <p class="footnote">Set recipients in each workspace's editor. Emails include a confirmation link for acknowledging an application alert.</p>
       </div>
       <div id="logs-content" class="content" hidden>
-        <div class="page-head"><div><div class="eyebrow">TROUBLESHOOTING</div><h1>Logs</h1><p>Recent scans, feed requests, and errors.</p></div><button id="logs-refresh" type="button">↻ Refresh logs</button></div>
-        <section class="panel"><div class="panel-head"><div><h2>Recent events</h2><p>Newest first. Logs are saved in <code>data/logs.jsonl</code>.</p></div></div><div id="logs-list" class="logs-list"><p class="muted">Loading logs…</p></div></section>
+        <div class="page-head"><div><div class="eyebrow">TROUBLESHOOTING</div><h1>Logs</h1><p>Operational, feed, configuration, and authentication activity.</p></div><button id="logs-refresh" type="button">↻ Refresh logs</button></div>
+        <div class="log-tabs" role="tablist" aria-label="Log type"><button type="button" role="tab" data-log-type="system" aria-selected="true">System</button><button type="button" role="tab" data-log-type="feed" aria-selected="false">Feeds</button><button type="button" role="tab" data-log-type="audit" aria-selected="false">Audit</button><button type="button" role="tab" data-log-type="auth" aria-selected="false">Authentication</button></div>
+        <section class="panel"><div class="panel-head"><div><h2 id="logs-title">System events</h2><p id="logs-description">Newest first. Scans, notifications, server activity, and runtime errors.</p></div></div><div id="logs-list" class="logs-list"><p class="muted">Loading logs…</p></div></section>
       </div>
       <div id="feeds-content" class="content" hidden>
         <div class="page-head"><div><div class="eyebrow">SOURCE INTELLIGENCE</div><h1>Feeds</h1><p>Collect vendor security, release, and lifecycle evidence as inert data.</p></div><button id="add-feed" type="button" hidden>＋ Add feed</button></div>

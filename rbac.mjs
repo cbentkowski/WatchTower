@@ -125,6 +125,21 @@ export function claimsForIdentityMappings(config, groupIds) {
   return claims;
 }
 
+export function describeIdentityClaims(config, claims = {}, { administratorRole = '', protectedAdminClaim = '' } = {}) {
+  const identities = [];
+  for (const [source, sourceValues] of Object.entries(claims)) for (const value of [...new Set(sourceValues || [])]) {
+    const mappings = config.groups.filter(group => group.enabled && group.claimSource === source && group.claimValue === value).map(group => ({
+      name: group.name,
+      roles: [...new Set(config.grants.filter(grant => grant.groupId === group.id).flatMap(grant => grant.roles).map(role => standardRoles[role]?.name || role))],
+    }));
+    if (administratorRole && value === administratorRole) mappings.push({ name: 'WatchTower Administrator', roles: ['Administrator'] });
+    if (protectedAdminClaim && source === 'groups' && value === protectedAdminClaim) mappings.push({ name: 'Protected administrators', roles: ['Administrator'] });
+    identities.push({ source, value, mappings });
+  }
+  const matchedCount = identities.filter(identity => identity.mappings.length).length;
+  return { groupCount: Array.isArray(claims.groups) ? claims.groups.length : 0, claimCount: identities.length, matchedCount, unmatchedCount: identities.length - matchedCount, identities };
+}
+
 export function protectedRoleState(config, roleId) {
   const grants = config.grants.filter(grant => grant.roles.includes(roleId)).map(grant => ({ ...grant, roles: [...grant.roles].sort(), resourceIds: [...grant.resourceIds].sort() })).sort((a, b) => a.id.localeCompare(b.id));
   const groupIds = new Set(grants.map(grant => grant.groupId));

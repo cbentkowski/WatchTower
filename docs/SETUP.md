@@ -38,7 +38,7 @@ WatchTower runs its own hourly scheduler. Do not create a host cron job or a sec
 Mount persistent storage at `/home/container`. WatchTower creates and maintains these directories inside it:
 
 - `/home/container/config` contains application, workspace, feed, access-control, general, and email configuration.
-- `/home/container/data` contains the latest scan, feed cache, notification state, and audit logs.
+- `/home/container/data` contains the latest scan, feed cache, notification state, and system, feed, audit, and authentication logs.
 
 Back up the entire mounted directory. Replacing a container without preserving this mount removes configuration, acknowledgement state, and locally retained results.
 
@@ -189,7 +189,7 @@ WatchTower performs compatible file migrations during startup. Do not interrupt 
 
 Stop the container for the most consistent file-level backup, then copy or snapshot the complete volume mounted at `/home/container`. Back up mounted secret files separately.
 
-At minimum, preserve the complete `config` directory and the notification, feed, scan, and log files under `data`.
+At minimum, preserve the complete `config` directory and the notification, feed, scan, and log files under `data`. WatchTower stores rotating system, feed, audit, and authentication streams in `system.jsonl`, `feed.jsonl`, `audit.jsonl`, and `auth.jsonl`; each may also have a `.previous.jsonl` rotation file. Legacy `logs.jsonl` files remain visible with the system stream after an upgrade.
 
 ### Roll back
 
