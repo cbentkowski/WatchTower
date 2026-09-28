@@ -41,6 +41,9 @@ test('application, workspace, and settings edits appear in audit logs', async ()
     const ownerResponse = await post('/api/owners', { name: 'Platform Engineering', email: 'platform@example.com', escalationEmail: 'on-call@example.com' });
     assert.equal(ownerResponse.status, 201);
     const owner = await ownerResponse.json();
+    const duplicateOwner = await post('/api/owners', { name: 'Platform Duplicate', email: 'PLATFORM@example.com' });
+    assert.equal(duplicateOwner.status, 400);
+    assert.equal((await duplicateOwner.json()).error, 'An owner with this email already exists. Select the existing owner instead.');
     assert.equal((await post(`/api/owners/${owner.id}`, { ...owner, email: 'platform-team@example.com' }, 'PUT')).status, 200);
     const app = { name: 'Test App', version: '1.0', cpeVendor: 'example', cpeProduct: 'testapp', eolDate: '2030-01-01', criticality: 'critical', environment: 'production', exposure: 'internet', tags: ['payments', 'pci'], ownerIds: [owner.id] };
     const appResponse = await post('/api/applications', app);

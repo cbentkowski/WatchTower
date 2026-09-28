@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateAccess, describeIdentityClaims, explainAccess, protectedRoleState, validateRbacInput } from '../rbac.mjs';
+import { calculateAccess, canCreateOwner, describeIdentityClaims, explainAccess, protectedRoleState, validateRbacInput } from '../rbac.mjs';
 
 const appA = { id: '11111111-1111-4111-8111-111111111111', name: 'Jira' };
 const appB = { id: '22222222-2222-4222-8222-222222222222', name: 'GitLab' };
@@ -38,6 +38,28 @@ test('unmatched authenticated users receive no access', () => {
   assert.equal(access.isAdmin, false);
   assert.equal(access.appView.size, 0);
   assert.equal(access.workspaceView.size, 0);
+});
+
+test('application editors and notification managers may create but do not administer owners', () => {
+  const editor = calculateAccess({ claims: { roles: ['editors'] } }, {
+    groups: [{ id: groupId, name: 'Editors', claimSource: 'roles', claimValue: 'editors', enabled: true }],
+    grants: [{ id: grantId, groupId, scopeType: 'application', roles: ['application-editor'], resourceIds: [appA.id] }],
+  }, [appA], [workspace]);
+  assert.equal(canCreateOwner(editor), true);
+  assert.equal(editor.isAdmin, false);
+
+  const notifications = calculateAccess({ claims: { groups: ['notifications'] } }, {
+    groups: [{ id: groupId, name: 'Notifications', claimSource: 'groups', claimValue: 'notifications', enabled: true }],
+    grants: [{ id: grantId, groupId, scopeType: 'workspace', roles: ['notification-manager'], resourceIds: [workspace.id] }],
+  }, [appA], [workspace]);
+  assert.equal(canCreateOwner(notifications), true);
+  assert.equal(notifications.workspaceNotifications.has(workspace.id), true);
+
+  const viewer = calculateAccess({ claims: { groups: ['viewers'] } }, {
+    groups: [{ id: groupId, name: 'Viewers', claimSource: 'groups', claimValue: 'viewers', enabled: true }],
+    grants: [{ id: grantId, groupId, scopeType: 'application', roles: ['application-viewer'], resourceIds: [appA.id] }],
+  }, [appA], [workspace]);
+  assert.equal(canCreateOwner(viewer), false);
 });
 
 test('feed roles separate scoped viewing and editing from global feed management', () => {

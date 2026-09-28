@@ -11,7 +11,7 @@ import { readGeneralSettings, writeGeneralSettings, validateGeneralSettings, gen
 import { createLogger, logTypes } from './logger.mjs';
 import { administratorRole, createAuth } from './auth.mjs';
 import { createYamlMonitor } from './yaml-monitor.mjs';
-import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, claimsForIdentityMappings, describeIdentityClaims, explainAccess, protectedRoleState, standardRoles } from './rbac.mjs';
+import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, canCreateOwner, claimsForIdentityMappings, describeIdentityClaims, explainAccess, protectedRoleState, standardRoles } from './rbac.mjs';
 import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, readFeeds, secureFetchText, validateFeedInput, writeFeeds } from './feeds.mjs';
 import { readOwners, validateOwner, writeOwners } from './owners.mjs';
 import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
@@ -787,7 +787,7 @@ const requestHandler = async (req, res) => {
       const visibleWorkspaces = workspaces.filter(group => access.workspaceView.has(group.id) || access.workspaceEdit.has(group.id) || access.workspaceMembership.has(group.id) || access.workspaceNotifications.has(group.id));
       const visibleFeeds = feeds.filter(feed => access.feedView.has(feed.id));
       const assignedOwnerIds = new Set(visibleApps.flatMap(app => app.ownerIds));
-      const visibleOwners = owners.filter(owner => assignedOwnerIds.has(owner.id) || access.isAdmin || access.appEdit.size);
+      const visibleOwners = owners.filter(owner => assignedOwnerIds.has(owner.id) || access.isAdmin || access.appEdit.size || access.workspaceNotifications.size);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ applications: visibleApps, workspaces: visibleWorkspaces, feeds: visibleFeeds, owners: visibleOwners, access: accessJson(access) })); return;
     }
     if (url.pathname === '/api/owners' && req.method === 'GET') {
@@ -799,11 +799,12 @@ const requestHandler = async (req, res) => {
       res.end(JSON.stringify({ owners: owners.map(owner => ({ ...owner, applicationCount: apps.filter(app => app.ownerIds.includes(owner.id)).length, workspaceCount: workspaces.filter(group => group.ownerIds.includes(owner.id)).length })) })); return;
     }
     if (url.pathname === '/api/owners' && req.method === 'POST') {
-      if (!req.authUser?.isAdmin && auth) { forbidden(res, 'Administrator role required to add owners'); return; }
+      const { access } = await authorization(req);
+      if (!canCreateOwner(access)) { forbidden(res, 'Application Editor or Notification Manager role required to add owners'); return; }
       const owners = await readOwners(ownerFile);
       const owner = validateOwner(await readBody(req));
       if (owners.some(item => item.name.toLowerCase() === owner.name.toLowerCase())) throw new Error('Owner name already exists');
-      if (owners.some(item => item.email.toLowerCase() === owner.email.toLowerCase())) throw new Error('Owner email address already exists');
+      if (owners.some(item => item.email.toLowerCase() === owner.email.toLowerCase())) throw new Error('An owner with this email already exists. Select the existing owner instead.');
       await yamlMonitor.webWrite(ownerFile, () => writeOwners(ownerFile, [...owners, owner]));
       await logger.audit('Owner added', auditActor(req), { type: 'owner', id: owner.id, name: owner.name }, { name: owner.name, emailConfigured: true, escalationEmailConfigured: Boolean(owner.escalationEmail) }, `${owner.name} (${owner.id})`);
       res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(owner)); return;
@@ -817,7 +818,7 @@ const requestHandler = async (req, res) => {
       const previous = owners[index];
       const owner = validateOwner(await readBody(req), previous.id);
       if (owners.some((item, ownerIndex) => ownerIndex !== index && item.name.toLowerCase() === owner.name.toLowerCase())) throw new Error('Owner name already exists');
-      if (owners.some((item, ownerIndex) => ownerIndex !== index && item.email.toLowerCase() === owner.email.toLowerCase())) throw new Error('Owner email address already exists');
+      if (owners.some((item, ownerIndex) => ownerIndex !== index && item.email.toLowerCase() === owner.email.toLowerCase())) throw new Error('An owner with this email already exists. Select the existing owner instead.');
       owners[index] = owner;
       await yamlMonitor.webWrite(ownerFile, () => writeOwners(ownerFile, owners));
       const changes = changedFields(previous, owner, ['name']);
