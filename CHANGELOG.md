@@ -4,6 +4,7 @@
 
 ### Added
 
+- Add optional OIDC account-selection prompting while preserving seamless SSO by default.
 - Separate system, feed, audit, and authentication activity into independently rotating logs and dedicated interface views.
 - Show concise identity-group matching details for sign-ins, including WatchTower mapping and role names, unmatched provider values, and group-overage status.
 - Route built-in NVD, CISA KEV, lifecycle, and vendor-source activity to the feed log alongside configured custom feeds.

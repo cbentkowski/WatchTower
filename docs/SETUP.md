@@ -58,12 +58,15 @@ WatchTower requires OpenID Connect unless `AUTH_DISABLED=true` is explicitly use
 | `OIDC_CLIENT_ID` | WatchTower's confidential client ID. |
 | `OIDC_CLIENT_SECRET_FILE` | Container path to the mounted client-secret file. |
 | `OIDC_BASE_URL` | Public WatchTower origin, without a path, query, or fragment. |
+| `OIDC_PROMPT` | Optional `select_account` value that asks the identity provider to show an account chooser at each WatchTower sign-in. |
 | `OIDC_ADMIN_GROUP_ID_FILE` | Container path to the exact administrator group or claim value. |
 | `OIDC_REQUIRED_ROLE` | Optional baseline role required before a user may sign in. |
 
 Register `<OIDC_BASE_URL>/auth/callback` as an allowed redirect URI. For example, an `OIDC_BASE_URL` of `https://watchtower.example.com` uses `https://watchtower.example.com/auth/callback`.
 
 `OIDC_ISSUER` must use HTTPS. `OIDC_BASE_URL` must also use HTTPS except for a loopback-only development address. Do not include credentials or a path in either value.
+
+Leave `OIDC_PROMPT` unset to preserve seamless SSO, including silent reuse of an existing identity-provider browser session. Set it to `select_account` when users need to choose among remembered accounts or use another account at each WatchTower sign-in. WatchTower rejects other values during startup. In Microsoft Entra ID, `select_account` shows the account chooser without necessarily asking the selected user for credentials. The distinct OIDC value `login` forces credential entry, is not supported by this setting, and is not recommended as the default for WatchTower. This option changes only WatchTower's authorization request; it does not require an Entra App Registration or Enterprise Application change.
 
 WatchTower recognizes the protected administrator group value from `OIDC_ADMIN_GROUP_ID_FILE`. It also recognizes the `WatchTower.Administrator` role value for compatibility. The administrator identity must appear in a supported `groups` or role claim.
 
@@ -98,6 +101,7 @@ services:
       OIDC_CLIENT_SECRET_FILE: /run/watchtower-secrets/oidc-client-secret
       OIDC_ADMIN_GROUP_ID_FILE: /run/watchtower-secrets/admin-group-id
       OIDC_BASE_URL: https://watchtower.example.com
+      # OIDC_PROMPT: select_account
     volumes:
       - watchtower-data:/home/container
       - ./secrets/oidc-client-secret:/run/watchtower-secrets/oidc-client-secret:ro
