@@ -28,6 +28,12 @@ function httpsGet(url) {
   });
 }
 
+test('browser styles use local system fonts without external requests', async () => {
+  const styles = await readFile(path.resolve(import.meta.dirname, '..', 'web', 'styles.css'), 'utf8');
+  assert.doesNotMatch(styles, /fonts\.googleapis\.com|@import\s+url\(https?:/i);
+  assert.match(styles, /font-family:system-ui/);
+});
+
 test('server refuses to start without OIDC or an explicit private-development override', async () => {
   const env = { ...process.env, AUTO_SCAN: 'false' };
   for (const name of ['OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_CLIENT_SECRET_FILE', 'OIDC_BASE_URL', 'OIDC_REQUIRED_ROLE', 'AUTH_DISABLED']) delete env[name];
