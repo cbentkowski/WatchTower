@@ -53,7 +53,6 @@ WatchTower is a triage tool. Its results depend on correct product mappings and 
 - [Code of conduct](CODE_OF_CONDUCT.md)
 - [Support](SUPPORT.md)
 - [Security policy](SECURITY.md)
-- [Security scan baseline](SECURITY-SCAN-0.3.0.md)
 - [License](LICENSE)
 
 ## Container image
