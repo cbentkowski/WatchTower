@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## [0.8.1] - 2026-09-29
+
+### Fixed
+
+- Limit a newly added application's refresh to its associated feeds and preserve existing application results instead of triggering a full feed collection and reassessment.
 
 ### Changed
 

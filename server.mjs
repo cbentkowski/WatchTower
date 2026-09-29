@@ -1066,7 +1066,7 @@ const requestHandler = async (req, res) => {
       const current = await readFile(file, 'utf8');
       if (parseInventory(current, true).some(existing => existing.id === app.id)) throw new Error('Application ID already exists');
       await yamlMonitor.webWrite(file, () => saveAtomic(file, `${current.trimEnd()}\n${serializeApp({ ...app, enabled: true })}`));
-      await invalidateSnapshot();
+      // Keep prior results available so the following application refresh can merge one scoped assessment.
       await logger.audit('Application added', auditActor(req), { type: 'application', id: app.id, name: app.name }, { name: app.name, version: app.version }, `${app.name} (${app.id}); installed version ${app.version}`);
       res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ id: app.id })); return;
     }
