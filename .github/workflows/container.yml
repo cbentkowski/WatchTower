@@ -15,6 +15,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  PREVIEW_IMAGE: devynn76/watchtower
+  RELEASE_IMAGE: devynn76/watchtowervi
+  DOCKER_BUILD_RECORD_UPLOAD: false
   GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1
   SEMGREP_IMAGE: semgrep/semgrep:1.177.0
   HADOLINT_IMAGE: hadolint/hadolint:v2.14.0-debian
@@ -156,14 +159,18 @@ jobs:
           docker run --rm --volume "$PWD:/src:ro" "$HADOLINT_IMAGE" \
           hadolint --failure-threshold error --format json /src/Dockerfile \
             > "$RUNNER_TEMP/source-security/hadolint.json"
-      - name: Upload source security reports
+      - name: Summarize failed source security checks
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: source-security-reports-${{ github.sha }}
-          path: ${{ runner.temp }}/source-security/
-          if-no-files-found: warn
-          retention-days: 30
+        env:
+          NPM_AUDIT: ${{ steps.npm_audit.outcome }}
+          GITLEAKS: ${{ steps.gitleaks.outcome }}
+          SEMGREP: ${{ steps.semgrep.outcome }}
+          HADOLINT: ${{ steps.hadolint.outcome }}
+        run: |
+          [[ "$NPM_AUDIT" == "success" ]] || node .github/scripts/summarize-security-report.mjs npm-audit "$RUNNER_TEMP/source-security/npm-audit.json"
+          [[ "$GITLEAKS" == "success" ]] || node .github/scripts/summarize-security-report.mjs gitleaks "$RUNNER_TEMP/source-security/gitleaks.json"
+          [[ "$SEMGREP" == "success" ]] || node .github/scripts/summarize-security-report.mjs semgrep "$RUNNER_TEMP/source-security/semgrep.json"
+          [[ "$HADOLINT" == "success" ]] || node .github/scripts/summarize-security-report.mjs hadolint "$RUNNER_TEMP/source-security/hadolint.json"
       - name: Enforce source security gates
         if: always()
         env:
@@ -174,7 +181,7 @@ jobs:
         run: |
           for result in "$NPM_AUDIT" "$GITLEAKS" "$SEMGREP" "$HADOLINT"; do
             if [[ "$result" != "success" ]]; then
-              echo "One or more source security gates failed. Review the uploaded reports."
+              echo "One or more source security gates failed. Review the sanitized summaries and scanner step logs above."
               exit 1
             fi
           done
@@ -263,17 +270,16 @@ jobs:
       - name: Stop isolated instance
         if: always()
         run: docker rm --force watchtower-zap || true
-      - name: Upload container security reports and SBOM
+      - name: Summarize failed container security checks
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: container-security-reports-${{ github.sha }}
-          path: |
-            ${{ runner.temp }}/container-security/
-            ${{ runner.temp }}/watchtower-security/watchtower.cdx.json
-            ${{ runner.temp }}/zap/
-          if-no-files-found: warn
-          retention-days: 30
+        env:
+          TRIVY: ${{ steps.trivy.outcome }}
+          GRYPE: ${{ steps.grype.outcome }}
+          DOCKLE: ${{ steps.dockle.outcome }}
+        run: |
+          [[ "$TRIVY" == "success" ]] || node .github/scripts/summarize-security-report.mjs trivy "$RUNNER_TEMP/container-security/trivy.json"
+          [[ "$GRYPE" == "success" ]] || node .github/scripts/summarize-security-report.mjs grype "$RUNNER_TEMP/container-security/grype.json"
+          [[ "$DOCKLE" == "success" ]] || node .github/scripts/summarize-security-report.mjs dockle "$RUNNER_TEMP/container-security/dockle.json"
       - name: Read application version
         if: github.event_name == 'push'
         id: scanned_package
@@ -300,7 +306,7 @@ jobs:
         run: |
           for result in "$TRIVY" "$GRYPE" "$DOCKLE" "$SYFT" "$ZAP_APP" "$ZAP" "$ZAP_POLICY"; do
             if [[ "$result" != "success" ]]; then
-              echo "One or more container security gates failed. Review the uploaded reports."
+              echo "One or more container security gates failed. Review the sanitized summaries and scanner step logs above."
               exit 1
             fi
           done
@@ -336,12 +342,12 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            echo "tags=devynn76/watchtower:pr-${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "tags=${PREVIEW_IMAGE}:pr-${PR_NUMBER}" >> "$GITHUB_OUTPUT"
           else
             {
               echo 'tags<<EOF'
-              echo "devynn76/watchtower:${{ steps.package.outputs.version }}"
-              echo 'devynn76/watchtower:latest'
+              echo "${RELEASE_IMAGE}:${{ steps.package.outputs.version }}"
+              echo "${RELEASE_IMAGE}:latest"
               echo 'EOF'
             } >> "$GITHUB_OUTPUT"
           fi
@@ -371,7 +377,7 @@ jobs:
         if: github.event_name == 'push'
         env:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "devynn76/watchtower@${IMAGE_DIGEST}"
+        run: cosign sign --yes "${RELEASE_IMAGE}@${IMAGE_DIGEST}"
 
   release:
     name: Tag and publish release
@@ -454,7 +460,7 @@ jobs:
             echo
             echo "## Container image"
             echo
-            echo "[devynn76/watchtower:${VERSION}](https://hub.docker.com/r/devynn76/watchtower/tags?name=${VERSION})"
+            echo "[devynn76/watchtowervi:${VERSION}](https://hub.docker.com/r/devynn76/watchtowervi/tags?name=${VERSION})"
           } >> "$RUNNER_TEMP/release-notes.md"
       - name: Publish GitHub release
         if: steps.tag.outputs.publish == 'true'

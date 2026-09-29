@@ -27,7 +27,7 @@ Before starting, prepare:
 - A host with Docker Engine and Docker Compose.
 - Persistent storage for `/home/container`.
 - Outbound HTTPS access to NVD, CISA, endoflife.date, configured feeds, and your OpenID Connect provider.
-- One inbound TCP port, normally exposed through an HTTPS reverse proxy.
+- One inbound TCP port for native HTTPS or a trusted reverse proxy.
 - An OpenID Connect client from Microsoft Entra ID, Keycloak, or another compatible provider.
 - A confidential client secret stored as a mounted file or protected container secret.
 
@@ -46,7 +46,7 @@ The image copies starter configuration into an empty mount during first startup.
 
 ### Choose a version
 
-Use an immutable release tag in production, such as `devynn76/watchtower:0.6.0`. Replace `0.6.0` with the version you intend to deploy. Avoid relying on `latest` for controlled environments because it can change during a future release.
+Use a versioned release tag in production, such as `devynn76/watchtowervi:0.8.0`. Replace `0.8.0` with the version you intend to deploy. Avoid relying on `latest` for controlled environments because it can change during a future release.
 
 ### Configure OpenID Connect
 
@@ -90,7 +90,7 @@ Create `compose.yaml`:
 ```yaml
 services:
   watchtower:
-    image: devynn76/watchtower:0.6.0
+    image: devynn76/watchtowervi:0.8.0
     container_name: watchtower
     restart: unless-stopped
     ports:
@@ -136,9 +136,7 @@ Continue with the [WatchTower user guide](USER_GUIDE.md#first-sign-in).
 
 ## TLS and reverse proxies
 
-The recommended arrangement is HTTPS at a reverse proxy with WatchTower listening on HTTP inside a trusted container network. Forward the original host and protocol information, and set `OIDC_BASE_URL` plus **Settings > General** to the public HTTPS address.
-
-WatchTower can terminate TLS directly when a reverse proxy is not appropriate. Mount a PEM certificate chain and matching private key read-only, then configure:
+WatchTower can terminate TLS directly. Mount a PEM certificate chain and matching private key read-only, then configure:
 
 ```yaml
 environment:
@@ -151,6 +149,8 @@ volumes:
 ```
 
 WatchTower validates that both files are readable, the key matches the certificate, and TLS 1.2 or newer can be used. It fails startup instead of silently falling back to HTTP. Restart the container after replacing a certificate or key.
+
+WatchTower may instead listen on HTTP inside a trusted container network behind an HTTPS reverse proxy. Forward the original host and protocol information, and set `OIDC_BASE_URL` plus **Settings > General** to the public HTTPS address.
 
 ## Optional runtime settings
 

@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a focused WatchTower enhancement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Explain the operational problem or limitation this would address.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the desired outcome rather than only a specific implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: considerations
+    attributes:
+      label: Security and operational considerations
+      description: Note authentication, authorization, storage, upgrade, compatibility, or deployment effects.
