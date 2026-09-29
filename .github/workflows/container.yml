@@ -17,6 +17,7 @@ concurrency:
 env:
   PREVIEW_IMAGE: devynn76/watchtower
   RELEASE_IMAGE: devynn76/watchtowervi
+  DOCKER_BUILD_RECORD_UPLOAD: false
   GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1
   SEMGREP_IMAGE: semgrep/semgrep:1.177.0
   HADOLINT_IMAGE: hadolint/hadolint:v2.14.0-debian
