@@ -15,6 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  PREVIEW_IMAGE: devynn76/watchtower
+  RELEASE_IMAGE: devynn76/watchtowervi
   GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1
   SEMGREP_IMAGE: semgrep/semgrep:1.177.0
   HADOLINT_IMAGE: hadolint/hadolint:v2.14.0-debian
@@ -336,12 +338,12 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            echo "tags=devynn76/watchtower:pr-${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "tags=${PREVIEW_IMAGE}:pr-${PR_NUMBER}" >> "$GITHUB_OUTPUT"
           else
             {
               echo 'tags<<EOF'
-              echo "devynn76/watchtower:${{ steps.package.outputs.version }}"
-              echo 'devynn76/watchtower:latest'
+              echo "${RELEASE_IMAGE}:${{ steps.package.outputs.version }}"
+              echo "${RELEASE_IMAGE}:latest"
               echo 'EOF'
             } >> "$GITHUB_OUTPUT"
           fi
@@ -371,7 +373,7 @@ jobs:
         if: github.event_name == 'push'
         env:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "devynn76/watchtower@${IMAGE_DIGEST}"
+        run: cosign sign --yes "${RELEASE_IMAGE}@${IMAGE_DIGEST}"
 
   release:
     name: Tag and publish release
@@ -454,7 +456,7 @@ jobs:
             echo
             echo "## Container image"
             echo
-            echo "[devynn76/watchtower:${VERSION}](https://hub.docker.com/r/devynn76/watchtower/tags?name=${VERSION})"
+            echo "[devynn76/watchtowervi:${VERSION}](https://hub.docker.com/r/devynn76/watchtowervi/tags?name=${VERSION})"
           } >> "$RUNNER_TEMP/release-notes.md"
       - name: Publish GitHub release
         if: steps.tag.outputs.publish == 'true'

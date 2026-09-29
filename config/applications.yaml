@@ -1,4 +1,4 @@
-# Application IDs, canonical CPE mappings, ownership, and risk context are managed by WatchTower.
+# Starter applications are disabled examples. Manage the inventory through WatchTower.
 applications:
   - id: 3e39c2c8-d7b7-4a4d-8c6a-e72c7a49726e
     name: "Google Chrome (example)"
@@ -29,83 +29,6 @@ applications:
     lifecycleProduct: "postgresql"
     enabled: false
     legacyId: "example-postgresql"
-    criticality: "unspecified"
-    environment: "unspecified"
-    exposure: "unknown"
-    ownerIds:
-    tags:
-  - id: 18aa8473-c803-42a2-aa1f-5f1fe64d0a62
-    name: "Azure PostgreSQL Flexible Server 16"
-    vendor: "PostgreSQL"
-    version: "16.14"
-    cpeVendor: "postgresql"
-    cpeProduct: "postgresql"
-    cpeName: "cpe:2.3:a:postgresql:postgresql:*:*:*:*:*:*:*:*"
-    cpeMode: "product"
-    cpeTitle: "PostgreSQL"
-    lifecycleProduct: "postgresql"
-    vendorBulletinUrl: "https://learn.microsoft.com/en-us/azure/postgresql/release-notes/release-notes"
-    releaseUrl: "https://learn.microsoft.com/en-us/azure/postgresql/release-notes/release-notes"
-    enabled: true
-    legacyId: "azure-postgresql-flexible-16"
-    criticality: "unspecified"
-    environment: "unspecified"
-    exposure: "unknown"
-    ownerIds:
-    tags:
-  - id: b5b9bd56-29cf-4014-9c5e-222d3c1f9bdf
-    name: "Atlassian Jira Software Data Center"
-    vendor: "Atlassian"
-    version: "10.7.4"
-    cpeVendor: "atlassian"
-    cpeProduct: "jira_software_data_center"
-    cpeName: "cpe:2.3:a:atlassian:jira_software_data_center:*:*:*:*:*:*:*:*"
-    cpeMode: "product"
-    cpeTitle: "Atlassian Jira Software Data Center"
-    lifecycleProduct: "jira-software"
-    vendorBulletinUrl: "https://www.atlassian.com/trust/security/advisories"
-    releaseUrl: "https://confluence.atlassian.com/jirasoftware/jira-software-release-notes-776821069.html"
-    enabled: true
-    legacyId: "atlassian-jira-10-7-4"
-    criticality: "unspecified"
-    environment: "unspecified"
-    exposure: "unknown"
-    ownerIds:
-    tags:
-  - id: c8718c8e-6c4a-4db8-8d9b-dabf8d1425ae
-    name: "Atlassian Confluence Data Center"
-    vendor: "Atlassian"
-    version: "9.5.4"
-    cpeVendor: "atlassian"
-    cpeProduct: "confluence_data_center"
-    cpeName: "cpe:2.3:a:atlassian:confluence_data_center:*:*:*:*:*:*:*:*"
-    cpeMode: "product"
-    cpeTitle: "Atlassian Confluence Data Center"
-    lifecycleProduct: "confluence"
-    vendorBulletinUrl: "https://www.atlassian.com/trust/security/advisories"
-    releaseUrl: "https://confluence.atlassian.com/doc/confluence-release-notes-327.html"
-    enabled: true
-    legacyId: "atlassian-confluence-9-5-4"
-    criticality: "unspecified"
-    environment: "unspecified"
-    exposure: "unknown"
-    ownerIds:
-    tags:
-  - id: 661303b7-3f16-4b90-ade5-1db3b6e611d5
-    name: "GitLab Enterprise Edition"
-    vendor: "GitLab"
-    version: "19.2.6"
-    cpeVendor: "gitlab"
-    cpeProduct: "gitlab"
-    cpeEdition: "enterprise"
-    cpeName: "cpe:2.3:a:gitlab:gitlab:*:*:enterprise:*:*:*:*:*"
-    cpeMode: "exact"
-    cpeTitle: "GitLab Enterprise Edition"
-    lifecycleProduct: "gitlab"
-    vendorBulletinUrl: "https://docs.gitlab.com/releases/patches/"
-    releaseUrl: "https://docs.gitlab.com/releases/"
-    enabled: true
-    legacyId: "gitlab-19-2-6"
     criticality: "unspecified"
     environment: "unspecified"
     exposure: "unknown"

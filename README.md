@@ -50,12 +50,15 @@ WatchTower is a triage tool. Its results depend on correct product mappings and 
 - [Roadmap](ROADMAP.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
+- [Support](SUPPORT.md)
+- [Security policy](SECURITY.md)
 - [Security scan baseline](SECURITY-SCAN-0.3.0.md)
 - [License](LICENSE)
 
 ## Container image
 
-Versioned images are published as `devynn76/watchtower:<version>`. Pin a specific version in production so upgrades are deliberate and reversible. The `latest` tag follows the newest successful release.
+Public release images are published as `devynn76/watchtowervi:<version>`. Pin a specific version in production so upgrades are deliberate and reversible. The `latest` tag follows the newest successful release.
 
 See [Initial setup](docs/SETUP.md#initial-setup) for a complete Docker deployment example.
 

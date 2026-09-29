@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Publish versioned and `latest` release images to the public `devynn76/watchtowervi` Docker Hub repository while retaining trusted pull-request previews in the private `devynn76/watchtower` repository.
+- Replace deployment-specific starter inventory with disabled examples and remove the obsolete Caddy configuration.
+- Add public support, contribution, issue, pull-request, and private vulnerability-reporting guidance.
+
 ## [0.8.0] - 2026-09-28
 
 ### Added
