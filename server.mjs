@@ -12,7 +12,7 @@ import { createLogger, logTypes } from './logger.mjs';
 import { administratorRole, createAuth } from './auth.mjs';
 import { createYamlMonitor } from './yaml-monitor.mjs';
 import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, canCreateOwner, claimsForIdentityMappings, describeIdentityClaims, explainAccess, protectedRoleState, standardRoles } from './rbac.mjs';
-import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, readFeeds, secureFetchText, validateFeedInput, writeFeeds } from './feeds.mjs';
+import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, readFeeds, secureFetchText, serializeFeeds, validateFeedInput, writeFeeds } from './feeds.mjs';
 import { readOwners, validateOwner, writeOwners } from './owners.mjs';
 import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
 import { loadTlsConfiguration } from './tls.mjs';
@@ -253,6 +253,15 @@ async function saveAtomic(file, content) {
   const temporary = `${file}.tmp`;
   await writeFile(temporary, content, 'utf8');
   await rename(temporary, file);
+}
+async function saveRelatedFiles(updates) {
+  const originals = await Promise.all(updates.map(async update => ({ ...update, original: await readFile(update.file, 'utf8') })));
+  try {
+    for (const update of originals) await yamlMonitor.webWrite(update.file, () => saveAtomic(update.file, update.content));
+  } catch (error) {
+    for (const update of originals) await yamlMonitor.webWrite(update.file, () => saveAtomic(update.file, update.original)).catch(() => {});
+    throw error;
+  }
 }
 async function readBody(req) {
   let body = '';
@@ -1096,6 +1105,35 @@ const requestHandler = async (req, res) => {
       if (Object.keys(changes).length) await logger.audit('Application updated', auditActor(req), { type: 'application', id: app.id, name: updated.name }, changes, `${updated.name} (${app.id}); ${describeFields(changes)}`);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ id: app.id, previousId })); return;
     }
+    if (appEdit && req.method === 'DELETE') {
+      const appId = appEdit[1];
+      const { apps, workspaces, feeds, access } = await authorization(req);
+      if (!access.appEdit.has(appId)) { forbidden(res, 'Application Editor role required to remove this application'); return; }
+      const app = apps.find(item => item.id === appId);
+      if (!app) throw new Error('Application not found');
+      const body = await readBody(req);
+      if (body.confirmation !== app.name) throw new Error(`Type the application name exactly to confirm deletion: ${app.name}`);
+      const rbac = await readRbac(rbacFile);
+      if (rbac.grants.some(grant => grant.scopeType === 'application' && grant.resourceIds.includes(app.id))) throw new Error('Remove application grants before deleting this application');
+      if (refreshPromise) await refreshPromise;
+      const remainingApps = apps.filter(item => item.id !== app.id);
+      const affectedWorkspaces = workspaces.filter(group => group.applications.includes(app.id)).map(group => group.id);
+      const affectedFeeds = feeds.filter(feed => feed.applicationIds.includes(app.id)).map(feed => feed.id);
+      const updatedWorkspaces = workspaces.map(group => ({ ...group, applications: group.applications.filter(id => id !== app.id) }));
+      const updatedFeeds = feeds.map(feed => ({ ...feed, applicationIds: feed.applicationIds.filter(id => id !== app.id) }));
+      await saveRelatedFiles([
+        { file: path.join(configDirectory, 'applications.yaml'), content: `# Application IDs, canonical CPE mappings, ownership, and risk context are managed by WatchTower.\napplications:\n${remainingApps.map(serializeApp).join('')}` },
+        { file: path.join(configDirectory, 'workspaces.yaml'), content: serializeWorkspaces(updatedWorkspaces) },
+        { file: feedFile, content: serializeFeeds(updatedFeeds) },
+      ]);
+      if (snapshot) {
+        snapshot = { ...snapshot, results: (snapshot.results || []).filter(item => item.id !== app.id), workspaces: updatedWorkspaces, inventoryCount: remainingApps.filter(item => item.enabled !== false).length, feedSummary: { ...(snapshot.feedSummary || {}), total: updatedFeeds.length } };
+        await saveAtomic(snapshotFile, `${JSON.stringify(snapshot)}\n`);
+      }
+      const changes = { workspaceIds: affectedWorkspaces, feedIds: affectedFeeds, workflowRecords: 'preserved' };
+      await logger.audit('Application removed', auditActor(req), { type: 'application', id: app.id, name: app.name }, changes, `${app.name} (${app.id}); removed from ${affectedWorkspaces.length} workspaces and ${affectedFeeds.length} feeds; finding workflow records preserved`);
+      res.writeHead(204); res.end(); return;
+    }
     const appRefresh = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/refresh$/i);
     if (appRefresh && req.method === 'POST') {
       const { access } = await authorization(req);
@@ -1150,6 +1188,28 @@ const requestHandler = async (req, res) => {
         await logger.audit('Workspace added', auditActor(req), { type: 'workspace', id, name }, { name, applications: membership, ownerIds }, `${name} (${id}); applications: ${membership.join(', ') || 'none'}; owners: ${ownerIds.length}`);
       }
       res.writeHead(index < 0 ? 201 : 200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ ...group, previousId: previousId || id })); return;
+    }
+    if (workspaceEdit && req.method === 'DELETE') {
+      const workspaceId = workspaceEdit[1];
+      const { workspaces, access } = await authorization(req);
+      if (!access.workspaceEdit.has(workspaceId)) { forbidden(res, 'Workspace Manager role required to remove this workspace'); return; }
+      const workspace = workspaces.find(item => item.id === workspaceId);
+      if (!workspace) throw new Error('Workspace not found');
+      const body = await readBody(req);
+      if (body.confirmation !== workspace.name) throw new Error(`Type the workspace name exactly to confirm deletion: ${workspace.name}`);
+      const rbac = await readRbac(rbacFile);
+      if (rbac.grants.some(grant => grant.scopeType === 'workspace' && grant.resourceIds.includes(workspace.id))) throw new Error('Remove workspace grants before deleting this workspace');
+      if (refreshPromise) await refreshPromise;
+      const remainingWorkspaces = workspaces.filter(item => item.id !== workspace.id);
+      const workspaceFile = path.join(configDirectory, 'workspaces.yaml');
+      await yamlMonitor.webWrite(workspaceFile, () => saveAtomic(workspaceFile, serializeWorkspaces(remainingWorkspaces)));
+      if (snapshot) {
+        snapshot = { ...snapshot, workspaces: remainingWorkspaces };
+        await saveAtomic(snapshotFile, `${JSON.stringify(snapshot)}\n`);
+      }
+      const changes = { applicationIds: workspace.applications, ownerIds: workspace.ownerIds, applicationsPreserved: true, workflowRecords: 'preserved' };
+      await logger.audit('Workspace removed', auditActor(req), { type: 'workspace', id: workspace.id, name: workspace.name }, changes, `${workspace.name} (${workspace.id}); ${workspace.applications.length} applications preserved; finding workflow records preserved`);
+      res.writeHead(204); res.end(); return;
     }
     if (url.pathname === '/api/status') {
       await snapshotReady;

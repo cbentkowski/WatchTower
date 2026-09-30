@@ -625,6 +625,7 @@ async function openEditor(mode, targetId = null) {
   editorMode = mode;
   editorTargetId = targetId;
   $('editor-error').hidden = true;
+  $('editor-danger').hidden = true;
   $('editor-fields').innerHTML = '<p class="muted">Loading inventory…</p>';
   $('editor-title').textContent = mode === 'app' ? targetId ? 'Edit application' : 'Add application' : targetId ? 'Edit workspace' : 'Add or edit workspace';
   $('editor').showModal();
@@ -673,6 +674,7 @@ async function openEditor(mode, targetId = null) {
         cpeMapping = { cpeName: app.cpeName || `cpe:2.3:a:${app.cpeVendor}:${app.cpeProduct}:*:*:*:*:${app.cpeEdition || '*'}:*:*:*`, mode: app.cpeMode || 'product', title: app.cpeTitle || app.name, deprecated: app.cpeDeprecated === true || app.cpeDeprecated === 'true', testedAt: app.cpeLastTestedAt || '', candidateCount: app.cpeTestCandidateCount || '', applicableCount: app.cpeTestApplicableCount || '' };
         if (app.lifecycleProduct) lifecycleMapping = { name: app.lifecycleProduct, label: app.lifecycleProduct, sourceUrl: app.lifecycleUrl || `https://endoflife.date/${app.lifecycleProduct}` };
       }
+      updateEditorDanger();
       renderMappingSummary();
       renderLifecycleSummary();
     } else {
@@ -889,6 +891,44 @@ function populateWorkspaceEditor() {
     form.querySelector('[data-association="ownerIds"]').disabled = !permissions.workspaces.notifications.includes(group.id);
     form.querySelector('[data-association="applicationIds"]').disabled = !permissions.workspaces.membership.includes(group.id);
   }
+  updateEditorDanger();
+}
+
+function updateEditorDanger() {
+  const resource = editorMode === 'app' ? editorConfig.applications.find(item => item.id === editorTargetId) : editorConfig.workspaces.find(item => item.id === editorTargetId);
+  const allowed = resource && (isAdmin || (editorMode === 'app' ? permissions.applications.edit.includes(resource.id) : permissions.workspaces.edit.includes(resource.id)));
+  $('editor-danger').hidden = !allowed;
+  if (!allowed) return;
+  $('editor-danger-title').textContent = `Delete ${editorMode === 'app' ? 'application' : 'workspace'}`;
+  $('editor-danger-description').textContent = editorMode === 'app'
+    ? 'Removes this application from inventory, workspaces, feeds, and the current snapshot. Finding workflow history is preserved.'
+    : 'Removes only this workspace. Its applications and finding workflow history are preserved.';
+  $('editor-delete').textContent = `Delete ${editorMode === 'app' ? 'application' : 'workspace'}`;
+}
+
+async function deleteEditorResource() {
+  const resource = editorMode === 'app' ? editorConfig.applications.find(item => item.id === editorTargetId) : editorConfig.workspaces.find(item => item.id === editorTargetId);
+  if (!resource) return;
+  const confirmation = prompt(`Type ${resource.name} to permanently delete this ${editorMode === 'app' ? 'application' : 'workspace'}.`);
+  if (confirmation === null) return;
+  if (confirmation !== resource.name) { $('editor-error').textContent = 'The name did not match. Nothing was deleted.'; $('editor-error').hidden = false; return; }
+  const button = $('editor-delete');
+  button.disabled = true;
+  button.textContent = 'Deleting…';
+  $('editor-error').hidden = true;
+  try {
+    const endpoint = `/api/${editorMode === 'app' ? 'applications' : 'workspaces'}/${encodeURIComponent(resource.id)}`;
+    const response = await fetch(endpoint, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmation }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Could not delete resource');
+    $('editor').close();
+    if (editorMode === 'workspace') selectWorkspace(null);
+    await load(false, false);
+  } catch (error) {
+    $('editor-error').textContent = error.message;
+    $('editor-error').hidden = false;
+    button.disabled = false;
+    updateEditorDanger();
+  }
 }
 
 function applySavedEditorState(saved, payload, fields) {
@@ -983,6 +1023,7 @@ $('manage-workspaces').addEventListener('click', () => openEditor('workspace'));
 $('edit-workspace').addEventListener('click', () => { const group = activeWorkspace(); if (group && group.id !== 'all') openEditor('workspace', group.id); });
 $('edit-app').addEventListener('click', () => { const id = detailAppId; $('details').close(); if (id) openEditor('app', id); });
 $('editor-form').addEventListener('submit', saveEditor);
+$('editor-delete').addEventListener('click', deleteEditorResource);
 $('editor-fields').addEventListener('click', event => {
   const button = event.target.closest('[data-association]');
   if (!button || button.disabled) return;
