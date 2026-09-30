@@ -130,6 +130,14 @@ Workspaces group applications for navigation, delegated access, and notification
 
 Use workspaces for meaningful operational boundaries such as teams, environments, business services, or customer groups. Because applications are shared records, use separate application entries when two environments run different installed versions.
 
+## Deleting applications and workspaces
+
+Deletion is available only in an existing resource's edit dialog. Only full WatchTower administrators can delete applications; application editing permissions, including those inherited through a workspace, never authorize inventory deletion. A Workspace Manager can delete a workspace it manages. Type the displayed resource name exactly when prompted. If an application- or workspace-scoped access-control grant still references the resource, remove that grant before deleting it.
+
+Deleting an application removes it from the inventory, every workspace membership, every feed association, and the current assessment snapshot without starting a full scan. Deleting a workspace removes only the workspace; its applications remain in the inventory. Both operations preserve finding dispositions, assignments, risk acceptances, ticket references, and other workflow history so remediation records are not silently discarded.
+
+Deletion is recorded in the audit log with the resource identity and affected relationships. It cannot be undone in the interface. Restore an accidentally deleted resource and its associations from a backup of the persistent configuration directory; its preserved workflow history will become relevant again when the restored resource uses the same immutable ID.
+
 ## Vendor and advisory feeds
 
 Feeds add reusable vendor evidence to one or more applications. WatchTower supports RSS, Atom, JSON, HTML, and public GitHub repository advisory sources.
