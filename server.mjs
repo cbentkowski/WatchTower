@@ -11,7 +11,7 @@ import { readGeneralSettings, writeGeneralSettings, validateGeneralSettings, gen
 import { createLogger, logTypes } from './logger.mjs';
 import { administratorRole, createAuth } from './auth.mjs';
 import { createYamlMonitor } from './yaml-monitor.mjs';
-import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, canCreateOwner, claimsForIdentityMappings, describeIdentityClaims, explainAccess, protectedRoleState, standardRoles } from './rbac.mjs';
+import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, canCreateOwner, canDeleteApplication, claimsForIdentityMappings, describeIdentityClaims, explainAccess, protectedRoleState, standardRoles } from './rbac.mjs';
 import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, readFeeds, secureFetchText, serializeFeeds, validateFeedInput, writeFeeds } from './feeds.mjs';
 import { readOwners, validateOwner, writeOwners } from './owners.mjs';
 import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
@@ -1108,7 +1108,7 @@ const requestHandler = async (req, res) => {
     if (appEdit && req.method === 'DELETE') {
       const appId = appEdit[1];
       const { apps, workspaces, feeds, access } = await authorization(req);
-      if (!access.appEdit.has(appId)) { forbidden(res, 'Application Editor role required to remove this application'); return; }
+      if (!canDeleteApplication(access)) { forbidden(res, 'Administrator role required to remove applications'); return; }
       const app = apps.find(item => item.id === appId);
       if (!app) throw new Error('Application not found');
       const body = await readBody(req);

@@ -132,7 +132,7 @@ Use workspaces for meaningful operational boundaries such as teams, environments
 
 ## Deleting applications and workspaces
 
-Deletion is available only in an existing resource's edit dialog and only to a user who can edit that application or manage that workspace. Type the displayed resource name exactly when prompted. If an application- or workspace-scoped access-control grant still references the resource, remove that grant before deleting it.
+Deletion is available only in an existing resource's edit dialog. Only full WatchTower administrators can delete applications; application editing permissions, including those inherited through a workspace, never authorize inventory deletion. A Workspace Manager can delete a workspace it manages. Type the displayed resource name exactly when prompted. If an application- or workspace-scoped access-control grant still references the resource, remove that grant before deleting it.
 
 Deleting an application removes it from the inventory, every workspace membership, every feed association, and the current assessment snapshot without starting a full scan. Deleting a workspace removes only the workspace; its applications remain in the inventory. Both operations preserve finding dispositions, assignments, risk acceptances, ticket references, and other workflow history so remediation records are not silently discarded.
 

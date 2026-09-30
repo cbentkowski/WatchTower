@@ -897,7 +897,7 @@ function populateWorkspaceEditor() {
 
 function updateEditorDanger() {
   const resource = editorMode === 'app' ? editorConfig.applications.find(item => item.id === editorTargetId) : editorConfig.workspaces.find(item => item.id === editorTargetId);
-  const allowed = resource && (isAdmin || (editorMode === 'app' ? permissions.applications.edit.includes(resource.id) : permissions.workspaces.edit.includes(resource.id)));
+  const allowed = resource && (editorMode === 'app' ? isAdmin : isAdmin || permissions.workspaces.edit.includes(resource.id));
   $('editor-danger').hidden = !allowed;
   if (!allowed) return;
   $('editor-danger-title').textContent = `Delete ${editorMode === 'app' ? 'application' : 'workspace'}`;
