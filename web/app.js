@@ -24,6 +24,7 @@ let currentFeedId = null;
 let currentOwnerId = null;
 let editorSelections = { ownerIds: new Set(), workspaceIds: new Set(), feedIds: new Set(), applicationIds: new Set() };
 let associationState = null;
+let deleteConfirmation = null;
 let resumeOwnerAssociation = null;
 let accessData = null;
 let isAdmin = false;
@@ -907,28 +908,62 @@ function updateEditorDanger() {
   $('editor-delete').textContent = `Delete ${editorMode === 'app' ? 'application' : 'workspace'}`;
 }
 
-async function deleteEditorResource() {
+function openDeleteConfirmation() {
   const resource = editorMode === 'app' ? editorConfig.applications.find(item => item.id === editorTargetId) : editorConfig.workspaces.find(item => item.id === editorTargetId);
   if (!resource) return;
-  const confirmation = prompt(`Type ${resource.name} to permanently delete this ${editorMode === 'app' ? 'application' : 'workspace'}.`);
-  if (confirmation === null) return;
-  if (confirmation !== resource.name) { $('editor-error').textContent = 'The name did not match. Nothing was deleted.'; $('editor-error').hidden = false; return; }
-  const button = $('editor-delete');
+  deleteConfirmation = { mode: editorMode, id: resource.id, name: resource.name };
+  $('delete-confirmation-title').textContent = `Delete ${editorMode === 'app' ? 'application' : 'workspace'}`;
+  $('delete-confirmation-scope').textContent = editorMode === 'app'
+    ? 'This removes the application from inventory, workspaces, feeds, and the current snapshot. Finding workflow history is preserved.'
+    : 'This removes only the workspace. Its applications and finding workflow history are preserved.';
+  $('delete-confirmation-name').textContent = resource.name;
+  $('delete-confirmation-input').value = '';
+  $('delete-confirmation-submit').disabled = true;
+  $('delete-confirmation-submit').textContent = `Delete ${editorMode === 'app' ? 'application' : 'workspace'} permanently`;
+  $('delete-confirmation-error').hidden = true;
+  $('delete-confirmation').showModal();
+  $('delete-confirmation-input').focus();
+}
+
+function closeDeleteConfirmation() {
+  deleteConfirmation = null;
+  $('delete-confirmation').close();
+}
+
+function updateDeleteConfirmation() {
+  $('delete-confirmation-submit').disabled = !deleteConfirmation || $('delete-confirmation-input').value !== deleteConfirmation.name;
+  $('delete-confirmation-error').hidden = true;
+}
+
+async function deleteEditorResource(event) {
+  event.preventDefault();
+  if (!deleteConfirmation) return;
+  const confirmation = $('delete-confirmation-input').value;
+  if (confirmation !== deleteConfirmation.name) {
+    $('delete-confirmation-submit').disabled = true;
+    $('delete-confirmation-error').textContent = 'The name does not match. Nothing was deleted.';
+    $('delete-confirmation-error').hidden = false;
+    return;
+  }
+  const request = { ...deleteConfirmation };
+  const button = $('delete-confirmation-submit');
   button.disabled = true;
   button.textContent = 'Deleting…';
-  $('editor-error').hidden = true;
+  $('delete-confirmation-error').hidden = true;
   try {
-    const endpoint = `/api/${editorMode === 'app' ? 'applications' : 'workspaces'}/${encodeURIComponent(resource.id)}`;
+    const endpoint = `/api/${request.mode === 'app' ? 'applications' : 'workspaces'}/${encodeURIComponent(request.id)}`;
     const response = await fetch(endpoint, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmation }) });
     if (!response.ok) throw new Error((await response.json()).error || 'Could not delete resource');
+    deleteConfirmation = null;
+    $('delete-confirmation').close();
     $('editor').close();
-    if (editorMode === 'workspace') selectWorkspace(null);
+    if (request.mode === 'workspace') selectWorkspace(null);
     await load(false, false);
   } catch (error) {
-    $('editor-error').textContent = error.message;
-    $('editor-error').hidden = false;
-    button.disabled = false;
-    updateEditorDanger();
+    $('delete-confirmation-error').textContent = error.message;
+    $('delete-confirmation-error').hidden = false;
+    button.disabled = $('delete-confirmation-input').value !== request.name;
+    button.textContent = `Delete ${request.mode === 'app' ? 'application' : 'workspace'} permanently`;
   }
 }
 
@@ -1024,7 +1059,12 @@ $('manage-workspaces').addEventListener('click', () => openEditor('workspace'));
 $('edit-workspace').addEventListener('click', () => { const group = activeWorkspace(); if (group && group.id !== 'all') openEditor('workspace', group.id); });
 $('edit-app').addEventListener('click', () => { const id = detailAppId; $('details').close(); if (id) openEditor('app', id); });
 $('editor-form').addEventListener('submit', saveEditor);
-$('editor-delete').addEventListener('click', deleteEditorResource);
+$('editor-delete').addEventListener('click', openDeleteConfirmation);
+$('delete-confirmation-form').addEventListener('submit', deleteEditorResource);
+$('delete-confirmation-input').addEventListener('input', updateDeleteConfirmation);
+$('delete-confirmation-close').addEventListener('click', closeDeleteConfirmation);
+$('delete-confirmation-cancel').addEventListener('click', closeDeleteConfirmation);
+$('delete-confirmation').addEventListener('close', () => { deleteConfirmation = null; });
 $('editor-fields').addEventListener('click', event => {
   const button = event.target.closest('[data-association]');
   if (!button || button.disabled) return;
