@@ -30,8 +30,11 @@ function httpsGet(url, ca) {
 
 test('browser styles use local system fonts without external requests', async () => {
   const styles = await readFile(path.resolve(import.meta.dirname, '..', 'src', 'web', 'styles.css'), 'utf8');
+  const html = await readFile(path.resolve(import.meta.dirname, '..', 'src', 'web', 'index.html'), 'utf8');
   assert.doesNotMatch(styles, /fonts\.googleapis\.com|@import\s+url\(https?:/i);
   assert.match(styles, /font-family:system-ui/);
+  assert.match(html, /© 2026 Christopher Bentkowski/);
+  assert.match(html, /href="https:\/\/github\.com\/cbentkowski\/WatchTower"/);
 });
 
 test('browser API requests return stale sessions to sign-in', async () => {

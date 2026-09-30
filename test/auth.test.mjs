@@ -63,6 +63,8 @@ test('unauthenticated requests cannot read APIs or the dashboard', async () => {
   assert.equal(loginPage.status, 200);
   assert.match(loginPage.body, /WatchTower/);
   assert.match(loginPage.body, /href="\/auth\/login"/);
+  assert.match(loginPage.body, /© 2026 Christopher Bentkowski/);
+  assert.match(loginPage.body, /href="https:\/\/github\.com\/cbentkowski\/WatchTower"/);
 });
 
 test('stale sessions are cleared while preserving API and browser response semantics', async () => {
@@ -162,6 +164,8 @@ test('login binds the callback to a browser flow and creates a protected session
   await auth.handle({ method: 'GET', headers: {} }, signedOut, new URL('https://home.example.com/signed-out'));
   assert.equal(signedOut.status, 200);
   assert.match(signedOut.body, /successfully signed out/);
+  assert.match(signedOut.body, /© 2026 Christopher Bentkowski/);
+  assert.match(signedOut.body, /WatchTower on GitHub/);
   const proxiedLogout = response();
   await auth.handle({ method: 'POST', headers: { cookie: sessionCookie, origin: 'http://watchtower:4173', 'sec-fetch-site': 'same-origin' } }, proxiedLogout, new URL('https://home.example.com/auth/logout'));
   assert.equal(proxiedLogout.status, 303);

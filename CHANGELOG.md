@@ -7,6 +7,10 @@
 - Refresh the Debian Bookworm OpenSSL runtime packages to include fixes for CVE-2026-75803, CVE-2026-63076, CVE-2026-54874, CVE-2026-63072, CVE-2026-42767, and CVE-2026-63074.
 - Force publish builds to pull the current base image and rebuild package-install layers so a previously cached vulnerable runtime layer cannot bypass container security validation.
 
+### Added
+
+- Display the WatchTower copyright notice and GitHub repository link in the application footer and on sign-in and signed-out screens.
+
 ## [0.9.0] - 2026-09-30
 
 ### Fixed
