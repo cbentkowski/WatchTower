@@ -16,15 +16,14 @@ const date = (value, name) => {
   if (text && (!datePattern.test(text) || !Number.isFinite(Date.parse(`${text}T00:00:00Z`)))) throw new Error(`${name} must be YYYY-MM-DD`);
   return text;
 };
-const httpsUrl = value => {
+const ticketReference = value => {
   const text = String(value || '').trim();
   if (!text) return '';
-  if (text.length > 2048) throw new Error('Ticket URL must be at most 2048 characters');
-  try {
-    const parsed = new URL(text);
-    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw new Error();
-    return parsed.href;
-  } catch { throw new Error('Ticket URL must be a valid HTTPS URL without credentials'); }
+  if (text.length > 2048 || /[\r\n]/.test(text)) throw new Error('Ticket reference must be one line with at most 2048 characters');
+  if (!/^https?:\/\//i.test(text)) return text;
+  try { const parsed = new URL(text); if (parsed.protocol === 'https:' && !parsed.username && !parsed.password) return parsed.href; }
+  catch {}
+  throw new Error('Ticket links must be valid HTTPS URLs without credentials');
 };
 export const findingKey = (applicationId, findingId) => `${applicationId}:${findingId}`;
 export function evidenceFingerprint(finding) {
@@ -38,7 +37,7 @@ export function validateFindingUpdate(input = {}) {
   if (notes.length > 4000) throw new Error('Finding notes must be at most 4000 characters');
   const riskExpiration = date(input.riskExpiration, 'Risk-acceptance expiration');
   if (riskExpiration && state !== 'risk-accepted') throw new Error('Risk-acceptance expiration is only valid for Risk accepted findings');
-  return { state, assignee: oneLine(input.assignee, 'Assignee', 120), dueDate: date(input.dueDate, 'Due date'), ticketUrl: httpsUrl(input.ticketUrl), notes, riskExpiration };
+  return { state, assignee: oneLine(input.assignee, 'Assignee', 120), dueDate: date(input.dueDate, 'Due date'), ticketReference: ticketReference(input.ticketReference ?? input.ticketUrl), notes, riskExpiration };
 }
 export async function readFindingStore(file) {
   try {
@@ -71,7 +70,7 @@ export async function readFindingEvents(file, applicationId, findingId, limit = 
   } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 }
 function publicWorkflow(record) {
-  return { state: record.state, stateLabel: findingStateLabels[record.state], assignee: record.assignee, dueDate: record.dueDate, ticketUrl: record.ticketUrl || '', notes: record.notes, riskExpiration: record.riskExpiration, discoveredAt: record.discoveredAt, updatedAt: record.updatedAt, updatedBy: record.updatedBy, reopenedAt: record.reopenedAt || '', reopenedReason: record.reopenedReason || '' };
+  return { state: record.state, stateLabel: findingStateLabels[record.state], assignee: record.assignee, dueDate: record.dueDate, ticketReference: record.ticketReference || record.ticketUrl || '', notes: record.notes, riskExpiration: record.riskExpiration, discoveredAt: record.discoveredAt, updatedAt: record.updatedAt, updatedBy: record.updatedBy, reopenedAt: record.reopenedAt || '', reopenedReason: record.reopenedReason || '' };
 }
 export function reconcileFindingWorkflows(store, results, actor = { issuer: 'scanner', name: 'Automated assessment' }, now = new Date()) {
   const at = now.toISOString();
@@ -83,7 +82,7 @@ export function reconcileFindingWorkflows(store, results, actor = { issuer: 'sca
     const fingerprint = evidenceFingerprint(finding);
     let record = store.records[key];
     if (!record) {
-      record = store.records[key] = { applicationId: application.id, findingId: finding.id, state: 'new', assignee: '', dueDate: '', ticketUrl: '', notes: '', riskExpiration: '', discoveredAt: at, updatedAt: at, updatedBy: actor, evidenceFingerprint: fingerprint };
+      record = store.records[key] = { applicationId: application.id, findingId: finding.id, state: 'new', assignee: '', dueDate: '', ticketReference: '', notes: '', riskExpiration: '', discoveredAt: at, updatedAt: at, updatedBy: actor, evidenceFingerprint: fingerprint };
       events.push({ at, type: 'finding-discovered', applicationId: application.id, findingId: finding.id, actor, state: 'new' });
       changed = true;
     } else {

@@ -9,7 +9,7 @@
 ### Added
 
 - Track finding response state, assignment, due dates, notes, risk-acceptance expiration, actors, timestamps, and automatic reopening when evidence changes or an acceptance expires.
-- Attach an optional HTTPS ticket URL to a finding for Jira, ServiceNow, GitHub Issues, Azure DevOps, or another external work tracker.
+- Attach an optional external ticket number or HTTPS link to a finding for Jira, ServiceNow, GitHub Issues, Azure DevOps, Remedy, or another work tracker.
 
 ### Changed
 

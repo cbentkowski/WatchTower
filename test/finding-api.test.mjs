@@ -43,7 +43,7 @@ test('finding workflow API persists the update, history, snapshot, and audit eve
     assert.equal(ready, true, serverError);
     const status = await (await fetch(`${origin}/api/status`)).json();
     assert.equal(status.results[0]?.vulnerabilities[0]?.id, findingId, JSON.stringify(status));
-    const updated = await fetch(`${origin}/api/applications/${applicationId}/findings/${findingId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: 'remediation-planned', assignee: 'Platform', dueDate: '2026-03-01', ticketUrl: 'https://tickets.example.com/SEC-123', notes: 'Upgrade scheduled' }) });
+    const updated = await fetch(`${origin}/api/applications/${applicationId}/findings/${findingId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: 'remediation-planned', assignee: 'Platform', dueDate: '2026-03-01', ticketReference: 'INC0001234', notes: 'Upgrade scheduled' }) });
     const updatedBody = await updated.json();
     assert.equal(updated.status, 200, updatedBody.error);
     assert.equal(updatedBody.state, 'remediation-planned');
@@ -52,7 +52,7 @@ test('finding workflow API persists the update, history, snapshot, and audit eve
     assert.equal(history.entries[0].actor.username, 'local');
     const store = JSON.parse(await readFile(path.join(data, 'finding-workflows.json'), 'utf8'));
     assert.equal(store.records[`${applicationId}:${findingId}`].assignee, 'Platform');
-    assert.equal(store.records[`${applicationId}:${findingId}`].ticketUrl, 'https://tickets.example.com/SEC-123');
+    assert.equal(store.records[`${applicationId}:${findingId}`].ticketReference, 'INC0001234');
     const snapshot = JSON.parse(await readFile(path.join(data, 'status.json'), 'utf8'));
     assert.equal(snapshot.results[0].vulnerabilities[0].workflow.state, 'remediation-planned');
     assert.match(await readFile(path.join(data, 'audit.jsonl'), 'utf8'), /Finding workflow updated/);

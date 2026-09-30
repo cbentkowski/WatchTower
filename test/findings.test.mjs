@@ -14,11 +14,11 @@ test('finding workflows persist decisions and attributable changes', () => {
   assert.equal(discovered.events[0].type, 'finding-discovered');
   assert.equal(first[0].vulnerabilities[0].workflow.state, 'new');
   const actor = { issuer: 'https://login.example', username: 'analyst@example.com', name: 'Analyst' };
-  const updated = updateFindingWorkflow(store, first[0].id, 'CVE-2026-1234', { state: 'risk-accepted', assignee: 'Security', dueDate: '2026-06-01', ticketUrl: 'https://tickets.example.com/SEC-123', notes: 'Compensating control', riskExpiration: '2026-05-01' }, actor, new Date('2026-01-02T00:00:00Z'));
+  const updated = updateFindingWorkflow(store, first[0].id, 'CVE-2026-1234', { state: 'risk-accepted', assignee: 'Security', dueDate: '2026-06-01', ticketReference: 'INC0001234', notes: 'Compensating control', riskExpiration: '2026-05-01' }, actor, new Date('2026-01-02T00:00:00Z'));
   assert.equal(updated.record.state, 'risk-accepted');
   assert.equal(updated.event.actor.username, 'analyst@example.com');
   assert.deepEqual(updated.changes.state, { from: 'new', to: 'risk-accepted' });
-  assert.equal(updated.record.ticketUrl, 'https://tickets.example.com/SEC-123');
+  assert.equal(updated.record.ticketReference, 'INC0001234');
 });
 
 test('expired risk acceptance and material evidence changes reopen dispositions', () => {
@@ -66,6 +66,8 @@ test('finding workflow input validates state, dates, and risk expiration scope',
   assert.throws(() => validateFindingUpdate({ state: 'closed' }), /valid finding state/);
   assert.throws(() => validateFindingUpdate({ state: 'resolved', riskExpiration: '2027-01-01' }), /only valid/);
   assert.throws(() => validateFindingUpdate({ state: 'investigating', dueDate: 'tomorrow' }), /YYYY-MM-DD/);
-  assert.throws(() => validateFindingUpdate({ state: 'investigating', ticketUrl: 'http://tickets.example.com/SEC-123' }), /valid HTTPS URL/);
-  assert.throws(() => validateFindingUpdate({ state: 'investigating', ticketUrl: 'https://user:secret@tickets.example.com/SEC-123' }), /without credentials/);
+  assert.equal(validateFindingUpdate({ state: 'investigating', ticketReference: 'Remedy INC0001234' }).ticketReference, 'Remedy INC0001234');
+  assert.equal(validateFindingUpdate({ state: 'investigating', ticketReference: 'https://tickets.example.com/SEC-123' }).ticketReference, 'https://tickets.example.com/SEC-123');
+  assert.throws(() => validateFindingUpdate({ state: 'investigating', ticketReference: 'http://tickets.example.com/SEC-123' }), /valid HTTPS URL/);
+  assert.throws(() => validateFindingUpdate({ state: 'investigating', ticketReference: 'https://user:secret@tickets.example.com/SEC-123' }), /without credentials/);
 });
