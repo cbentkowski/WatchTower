@@ -45,6 +45,10 @@ test('untrusted markup becomes inert text and security ranges are normalized', (
   const [event] = normalizeEntries(feed, response);
   assert.equal(globalThis.__feedExecuted, false);
   assert.equal(inertText('<script>alert(1)</script><b>Safe</b>'), 'Safe');
+  assert.equal(inertText('<script>unsafe</script foo="bar"><b>Visible text</b><strong>Safe</strong>'), 'Visible text Safe');
+  const [htmlEvent] = normalizeEntries(feed, { contentType: 'text/html', url: feed.url, text: '<script>unsafe</script foo="bar"><article><h2>Security CVE-2026-54321</h2><p>Safe advisory text</p></article>' });
+  assert.equal(htmlEvent.summary.includes('unsafe'), false);
+  assert.match(htmlEvent.summary, /Safe advisory text/);
   assert.equal(event.type, 'security');
   assert.equal(event.severity, 'HIGH');
   assert.deepEqual(event.cves, ['CVE-2026-12345']);

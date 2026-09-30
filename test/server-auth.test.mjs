@@ -15,9 +15,9 @@ async function freePort() {
   return port;
 }
 
-function httpsGet(url) {
+function httpsGet(url, ca) {
   return new Promise((resolve, reject) => {
-    const req = request(url, { rejectUnauthorized: false }, response => {
+    const req = request(url, { ca }, response => {
       let body = '';
       response.setEncoding('utf8');
       response.on('data', chunk => { body += chunk; });
@@ -66,6 +66,7 @@ test('native HTTPS serves the health endpoint from mounted certificate files', a
   const key = path.join(directory, 'private-key.pem');
   const generated = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-sha256', '-days', '1', '-subj', '/CN=localhost', '-keyout', key, '-out', cert], { encoding: 'utf8' });
   assert.equal(generated.status, 0, generated.stderr);
+  const certificateAuthority = await readFile(cert);
   const port = await freePort();
   const child = spawn(process.execPath, ['server.mjs'], {
     cwd: path.resolve(import.meta.dirname, '..'),
@@ -77,13 +78,13 @@ test('native HTTPS serves the health endpoint from mounted certificate files', a
   try {
     let health;
     for (let attempt = 0; attempt < 40; attempt++) {
-      try { health = await httpsGet(`https://127.0.0.1:${port}/healthz`); break; }
+      try { health = await httpsGet(`https://localhost:${port}/healthz`, certificateAuthority); break; }
       catch { await new Promise(resolve => setTimeout(resolve, 100)); }
     }
     assert.ok(health, `HTTPS server started: ${errors}`);
     assert.equal(health.status, 200);
     assert.deepEqual(JSON.parse(health.body), { status: 'ok' });
-    const settings = await httpsGet(`https://127.0.0.1:${port}/api/settings`);
+    const settings = await httpsGet(`https://localhost:${port}/api/settings`, certificateAuthority);
     assert.equal(settings.status, 200);
     assert.deepEqual(JSON.parse(settings.body).general, { protocol: 'http', host: 'public.example', port: 80 });
   } finally { child.kill(); }

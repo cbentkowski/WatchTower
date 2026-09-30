@@ -143,8 +143,50 @@ export async function secureFetchText(value, options = {}) {
 
 const entityMap = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
 function decodeEntities(value) { return String(value || '').replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (_, key) => key[0] === '#' ? String.fromCodePoint(key[1].toLowerCase() === 'x' ? parseInt(key.slice(2), 16) : parseInt(key.slice(1), 10)) : entityMap[key.toLowerCase()] ?? ' '); }
+function markupTag(source, start) {
+  const end = source.indexOf('>', start + 1);
+  if (end < 0) return null;
+  const content = source.slice(start + 1, end).trim();
+  const closing = content.startsWith('/');
+  const name = content.slice(closing ? 1 : 0).trimStart().match(/^[a-z][\w:-]*/i)?.[0].toLowerCase() || '';
+  return { closing, end, name };
+}
+function withoutExecutableMarkup(value) {
+  const source = String(value || '');
+  let output = '';
+  let blocked = '';
+  for (let index = 0; index < source.length;) {
+    if (source[index] !== '<') {
+      if (!blocked) output += source[index];
+      index++;
+      continue;
+    }
+    const tag = markupTag(source, index);
+    if (!tag) { if (!blocked) output += source[index]; index++; continue; }
+    if (blocked) {
+      if (tag.closing && tag.name === blocked) blocked = '';
+    } else if (!tag.closing && ['script', 'style'].includes(tag.name)) blocked = tag.name;
+    else output += source.slice(index, tag.end + 1);
+    index = tag.end + 1;
+  }
+  return output;
+}
+function markupToText(value) {
+  const source = withoutExecutableMarkup(value);
+  let output = '';
+  for (let index = 0; index < source.length;) {
+    if (source.startsWith('<![CDATA[', index)) { index += 9; continue; }
+    if (source.startsWith(']]>', index)) { index += 3; continue; }
+    if (source[index] !== '<') { output += source[index++]; continue; }
+    const tag = markupTag(source, index);
+    if (!tag) { output += source[index++]; continue; }
+    output += ' ';
+    index = tag.end + 1;
+  }
+  return output;
+}
 export function inertText(value) {
-  return decodeEntities(String(value || '').replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, '$1').replace(/<script\b[\s\S]*?<\/script\s*>/gi, ' ').replace(/<style\b[\s\S]*?<\/style\s*>/gi, ' ').replace(/<[^>]+>/g, ' ')).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 20_000);
+  return decodeEntities(markupToText(value)).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 20_000);
 }
 function tag(block, names) { for (const name of names) { const value = block.match(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${name}\\s*>`, 'i'))?.[1]; if (value) return inertText(value); } return ''; }
 function attr(block, element, attribute) { return decodeEntities(block.match(new RegExp(`<${element}[^>]*\\s${attribute}=["']([^"']+)["']`, 'i'))?.[1] || ''); }
@@ -170,7 +212,7 @@ function jsonEntries(text, base) {
   }));
 }
 function htmlEntries(text, base) {
-  const clean = text.replace(/<script\b[\s\S]*?<\/script\s*>/gi, ' ').replace(/<style\b[\s\S]*?<\/style\s*>/gi, ' ');
+  const clean = withoutExecutableMarkup(text);
   const blocks = [...clean.matchAll(/<(article|tr|li)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi)].map(match => match[2]).filter(block => /(CVE-|security|vulnerab|release|end.of.(?:life|support)|EOL)/i.test(block)).slice(0, MAX_ENTRIES);
   return blocks.map(block => ({ title: tag(block, ['h1', 'h2', 'h3', 'h4', 'title']) || inertText(block).slice(0, 180), summary: inertText(block), published: '', url: safeSourceUrl(attr(block, 'a', 'href'), base) }));
 }

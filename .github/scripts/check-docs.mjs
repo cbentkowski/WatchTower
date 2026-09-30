@@ -7,10 +7,19 @@ const files = process.argv.slice(2);
 if (!files.length) throw new Error('Provide one or more Markdown files to validate');
 
 const cache = new Map();
+function headingText(value) {
+  let output = '';
+  let insideTag = false;
+  for (const character of value) {
+    if (character === '<') { insideTag = true; continue; }
+    if (character === '>' && insideTag) { insideTag = false; continue; }
+    if (!insideTag) output += character;
+  }
+  return output;
+}
 function slug(value) {
-  return value
+  return headingText(value)
     .toLowerCase()
-    .replace(/<[^>]+>/g, '')
     .replace(/[`*_~]/g, '')
     .replace(/[^\p{L}\p{N}\s-]/gu, '')
     .trim()
