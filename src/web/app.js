@@ -49,7 +49,7 @@ window.fetch = async (...args) => {
 const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeUrl = (url) => { try { const u = new URL(url); return u.protocol === 'https:' ? u.href : '#'; } catch { return '#'; } };
 const safeTicketUrl = value => { try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password ? url.href : '#'; } catch { return '#'; } };
-const ticketReferenceMarkup = reference => { const href = safeTicketUrl(reference); return href === '#' ? `<span class="finding-ticket-reference">Ticket: <strong>${escape(reference)}</strong></span>` : `<a class="finding-ticket-link" href="${href}" target="_blank" rel="noopener noreferrer">Open external ticket ↗</a>`; };
+const ticketReferenceMarkup = reference => { const href = safeTicketUrl(reference); const value = href === '#' ? `<strong>${escape(reference)}</strong>` : `<a href="${href}" target="_blank" rel="noopener noreferrer">Open external ticket ↗</a>`; return `<div class="finding-ticket-display"><span>TICKET</span>${value}</div>`; };
 const labels = { red: 'Needs action', yellow: 'Approaching EOL', green: 'Clear', unknown: 'Unknown' };
 function setTheme(theme) {
   document.documentElement.dataset.theme = theme;
