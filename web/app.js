@@ -626,6 +626,7 @@ async function openEditor(mode, targetId = null) {
   editorTargetId = targetId;
   $('editor-error').hidden = true;
   $('editor-danger').hidden = true;
+  $('editor-delete').disabled = false;
   $('editor-fields').innerHTML = '<p class="muted">Loading inventory…</p>';
   $('editor-title').textContent = mode === 'app' ? targetId ? 'Edit application' : 'Add application' : targetId ? 'Edit workspace' : 'Add or edit workspace';
   $('editor').showModal();
