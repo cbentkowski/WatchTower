@@ -18,6 +18,7 @@ import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
 import { loadTlsConfiguration } from './tls.mjs';
 import { cpeSearchMatch, effectiveCpe, legacyCpe, mappingFromApp, mappingWarnings, parseCpe23, productCpe } from './cpe.mjs';
 import { matchLifecycleRelease, normalizeLifecycleProduct, searchLifecycleProducts } from './lifecycle.mjs';
+import { appendFindingEvents, readFindingStore, reconcileFindingWorkflows, updateFindingWorkflow, writeFindingStore } from './findings.mjs';
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.dirname(sourceDirectory);
@@ -57,6 +58,8 @@ const snapshotFile = path.join(dataDirectory, 'status.json');
 const feedCacheFile = path.join(dataDirectory, 'feeds.json');
 const smtpFile = path.join(configDirectory, 'smtp.yaml');
 const generalFile = path.join(configDirectory, 'general.yaml');
+const findingStoreFile = path.join(dataDirectory, 'finding-workflows.json');
+const findingHistoryFile = path.join(dataDirectory, 'finding-history.jsonl');
 
 async function recordAuthenticationEvent(action, actor, context = {}) {
   const { claims = {}, protectedAdminClaim = '', ...event } = context;
@@ -121,6 +124,10 @@ await yamlMonitor.start();
 
 async function storeSnapshot(data) {
   await mkdir(dataDirectory, { recursive: true });
+  const findingStore = await readFindingStore(findingStoreFile);
+  const reconciliation = reconcileFindingWorkflows(findingStore, data.results || []);
+  if (reconciliation.changed) await writeFindingStore(findingStoreFile, findingStore);
+  await appendFindingEvents(findingHistoryFile, reconciliation.events);
   await saveAtomic(snapshotFile, `${JSON.stringify(data)}\n`);
   snapshot = data;
   notifier.onScan(data).catch(error => { console.error(`Notification check failed: ${error.message}`); logger.log('error', 'Notification check failed', error.message); });
@@ -1042,6 +1049,28 @@ const requestHandler = async (req, res) => {
       await invalidateSnapshot();
       await logger.audit('Feed removed', auditActor(req), { type: 'feed', id: feed.id, name: feed.name }, { applicationIds: feed.applicationIds }, `${feed.name} (${feed.id})`);
       res.writeHead(204); res.end(); return;
+    }
+    const findingRoute = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/findings\/(.+)$/i);
+    if (findingRoute && req.method === 'PUT') {
+      const applicationId = findingRoute[1];
+      const findingId = decodeURIComponent(findingRoute[2]);
+      const { apps, access } = await authorization(req);
+      if (!access.appEdit.has(applicationId)) { forbidden(res, 'Application Editor role required'); return; }
+      const application = apps.find(item => item.id === applicationId);
+      const liveApplication = snapshot?.results?.find(item => item.id === applicationId);
+      const finding = liveApplication?.vulnerabilities?.find(item => item.id === findingId);
+      if (!application || !finding) throw new Error('Active finding not found');
+      const actor = auditActor(req);
+      const store = await readFindingStore(findingStoreFile);
+      const updated = updateFindingWorkflow(store, applicationId, findingId, await readBody(req), actor);
+      if (updated.event) {
+        await writeFindingStore(findingStoreFile, store);
+        await appendFindingEvents(findingHistoryFile, [updated.event]);
+        finding.workflow = updated.record;
+        await saveAtomic(snapshotFile, `${JSON.stringify(snapshot)}\n`);
+        await logger.audit('Finding workflow updated', actor, { type: 'finding', id: findingId, applicationId, applicationName: application.name }, updated.changes, `${application.name}: ${findingId} → ${updated.record.stateLabel}`);
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(updated.record)); return;
     }
     const appFeeds = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/feeds$/i);
     if (appFeeds && req.method === 'PUT') {
