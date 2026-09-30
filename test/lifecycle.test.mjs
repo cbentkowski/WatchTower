@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { matchLifecycleRelease, normalizeLifecycleProduct, searchLifecycleProducts } from '../lifecycle.mjs';
+import { matchLifecycleRelease, normalizeLifecycleProduct, searchLifecycleProducts } from '../src/lifecycle.mjs';
 
 const products = [
   { name: 'chrome', label: 'Google Chrome', aliases: ['google-chrome'], category: 'app', tags: ['google', 'web-browser'] },

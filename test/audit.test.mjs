@@ -21,7 +21,7 @@ test('application, workspace, and settings edits appear in audit logs', async ()
   await writeFile(path.join(directory, 'applications.yaml'), 'applications:\n');
   await writeFile(path.join(directory, 'workspaces.yaml'), 'workspaces:\n');
   const port = await freePort();
-  const child = spawn(process.execPath, ['server.mjs'], {
+  const child = spawn(process.execPath, ['src/server.mjs'], {
     cwd: path.resolve(import.meta.dirname, '..'),
     env: { ...process.env, HOST: '127.0.0.1', SERVER_PORT: String(port), CONFIG_DIR: directory, DATA_DIR: data, AUTO_SCAN: 'false', AUTH_DISABLED: 'true', YAML_CHECK_INTERVAL_MS: '100', OIDC_ISSUER: '', OIDC_CLIENT_ID: '', OIDC_CLIENT_SECRET: '', OIDC_CLIENT_SECRET_FILE: '', OIDC_BASE_URL: '', OIDC_REQUIRED_ROLE: '' },
     stdio: 'ignore',

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseOwners, serializeOwners, validateOwner } from '../owners.mjs';
+import { parseOwners, serializeOwners, validateOwner } from '../src/owners.mjs';
 
 test('owners round-trip with stable IDs and optional escalation emails', () => {
   const owner = validateOwner({ name: 'Platform Engineering', email: 'platform@example.com', escalationEmail: 'on-call@example.com' });

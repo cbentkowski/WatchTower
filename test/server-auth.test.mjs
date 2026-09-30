@@ -29,7 +29,7 @@ function httpsGet(url, ca) {
 }
 
 test('browser styles use local system fonts without external requests', async () => {
-  const styles = await readFile(path.resolve(import.meta.dirname, '..', 'web', 'styles.css'), 'utf8');
+  const styles = await readFile(path.resolve(import.meta.dirname, '..', 'src', 'web', 'styles.css'), 'utf8');
   assert.doesNotMatch(styles, /fonts\.googleapis\.com|@import\s+url\(https?:/i);
   assert.match(styles, /font-family:system-ui/);
 });
@@ -37,7 +37,7 @@ test('browser styles use local system fonts without external requests', async ()
 test('server refuses to start without OIDC or an explicit private-development override', async () => {
   const env = { ...process.env, AUTO_SCAN: 'false' };
   for (const name of ['OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_CLIENT_SECRET_FILE', 'OIDC_BASE_URL', 'OIDC_REQUIRED_ROLE', 'OIDC_PROMPT', 'AUTH_DISABLED']) delete env[name];
-  const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve(import.meta.dirname, '..'), env, stdio: ['ignore', 'ignore', 'pipe'] });
+  const child = spawn(process.execPath, ['src/server.mjs'], { cwd: path.resolve(import.meta.dirname, '..'), env, stdio: ['ignore', 'ignore', 'pipe'] });
   let errors = '';
   child.stderr.on('data', chunk => { errors += chunk; });
   const code = await new Promise(resolve => child.on('exit', resolve));
@@ -48,7 +48,7 @@ test('server refuses to start without OIDC or an explicit private-development ov
 test('server fails closed when native TLS is enabled without certificate files', async () => {
   const env = { ...process.env, AUTO_SCAN: 'false', AUTH_DISABLED: 'true', TLS_ENABLED: 'true' };
   for (const name of ['TLS_CERT_FILE', 'TLS_KEY_FILE']) delete env[name];
-  const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve(import.meta.dirname, '..'), env, stdio: ['ignore', 'ignore', 'pipe'] });
+  const child = spawn(process.execPath, ['src/server.mjs'], { cwd: path.resolve(import.meta.dirname, '..'), env, stdio: ['ignore', 'ignore', 'pipe'] });
   let errors = '';
   child.stderr.on('data', chunk => { errors += chunk; });
   const code = await new Promise(resolve => child.on('exit', resolve));
@@ -68,7 +68,7 @@ test('native HTTPS serves the health endpoint from mounted certificate files', a
   assert.equal(generated.status, 0, generated.stderr);
   const certificateAuthority = await readFile(cert);
   const port = await freePort();
-  const child = spawn(process.execPath, ['server.mjs'], {
+  const child = spawn(process.execPath, ['src/server.mjs'], {
     cwd: path.resolve(import.meta.dirname, '..'),
     env: { ...process.env, HOST: '127.0.0.1', SERVER_PORT: String(port), CONFIG_DIR: config, DEFAULT_CONFIG_DIR: path.resolve(import.meta.dirname, '..', 'config'), DATA_DIR: path.join(directory, 'data'), AUTO_SCAN: 'false', AUTH_DISABLED: 'true', TLS_ENABLED: 'true', TLS_CERT_FILE: cert, TLS_KEY_FILE: key },
     stdio: ['ignore', 'ignore', 'pipe'],
@@ -101,7 +101,7 @@ test('server fails closed when the native TLS private key does not match the cer
     const generated = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-sha256', '-days', '1', '-subj', `/CN=${commonName}`, '-keyout', outputKey, '-out', outputCert], { encoding: 'utf8' });
     assert.equal(generated.status, 0, generated.stderr);
   }
-  const child = spawn(process.execPath, ['server.mjs'], {
+  const child = spawn(process.execPath, ['src/server.mjs'], {
     cwd: path.resolve(import.meta.dirname, '..'),
     env: { ...process.env, AUTO_SCAN: 'false', AUTH_DISABLED: 'true', TLS_ENABLED: 'true', TLS_CERT_FILE: cert, TLS_KEY_FILE: secondKey },
     stdio: ['ignore', 'ignore', 'pipe'],
@@ -116,7 +116,7 @@ test('server fails closed when the native TLS private key does not match the cer
 test('configured OIDC protects real HTTP routes before the API handler', async () => {
   const port = await freePort();
   const data = await mkdtemp(path.join(tmpdir(), 'watchtower-auth-'));
-  const child = spawn(process.execPath, ['server.mjs'], {
+  const child = spawn(process.execPath, ['src/server.mjs'], {
     cwd: path.resolve(import.meta.dirname, '..'),
     env: { ...process.env, HOST: '127.0.0.1', SERVER_PORT: String(port), DATA_DIR: data, AUTO_SCAN: 'false',
       OIDC_ISSUER: 'https://login.example.com/realms/watchtower', OIDC_CLIENT_ID: 'watchtower',
@@ -161,7 +161,7 @@ test('direct server startup migrates legacy YAML files into the config directory
     'general.yaml': 'protocol: "https"\nhost: "home.example.com"\nport: 443\n',
   };
   for (const [name, contents] of Object.entries(files)) await writeFile(path.join(home, name), contents);
-  const child = spawn(process.execPath, ['server.mjs'], {
+  const child = spawn(process.execPath, ['src/server.mjs'], {
     cwd: path.resolve(import.meta.dirname, '..'),
     env: { ...process.env, HOST: '127.0.0.1', SERVER_PORT: String(port), CONFIG_DIR: config, DATA_DIR: data,
       AUTO_SCAN: 'false', AUTH_DISABLED: 'true', OIDC_ISSUER: '', OIDC_CLIENT_ID: '', OIDC_CLIENT_SECRET: '', OIDC_CLIENT_SECRET_FILE: '', OIDC_BASE_URL: '' },
@@ -192,7 +192,7 @@ test('startup gives existing applications safe ownership and risk-context defaul
   await mkdir(config);
   await writeFile(path.join(config, 'applications.yaml'), 'applications:\n  - id: 11111111-1111-4111-8111-111111111111\n    name: "Existing App"\n    version: "1.0"\n    cpeVendor: "example"\n    cpeProduct: "existing"\n    cpeName: "cpe:2.3:a:example:existing:*:*:*:*:*:*:*:*"\n    cpeMode: "product"\n    eolDate: "2030-01-01"\n');
   await writeFile(path.join(config, 'workspaces.yaml'), 'workspaces:\n');
-  const child = spawn(process.execPath, ['server.mjs'], {
+  const child = spawn(process.execPath, ['src/server.mjs'], {
     cwd: path.resolve(import.meta.dirname, '..'),
     env: { ...process.env, HOST: '127.0.0.1', SERVER_PORT: String(port), CONFIG_DIR: config, DATA_DIR: data,
       AUTO_SCAN: 'false', AUTH_DISABLED: 'true', OIDC_ISSUER: '', OIDC_CLIENT_ID: '', OIDC_CLIENT_SECRET: '', OIDC_CLIENT_SECRET_FILE: '', OIDC_BASE_URL: '' },
@@ -228,7 +228,7 @@ test('startup maps legacy workspace notification emails to unique owners', async
   await writeFile(path.join(config, 'applications.yaml'), 'applications:\n');
   await writeFile(path.join(config, 'owners.yaml'), 'owners:\n  - id: 11111111-1111-4111-8111-111111111111\n    name: "Existing owner"\n    email: "existing@example.com"\n');
   await writeFile(path.join(config, 'workspaces.yaml'), 'workspaces:\n  - id: 22222222-2222-4222-8222-222222222222\n    name: "Operations"\n    notificationEmails: "EXISTING@example.com, new@example.com"\n    applications:\n');
-  const child = spawn(process.execPath, ['server.mjs'], {
+  const child = spawn(process.execPath, ['src/server.mjs'], {
     cwd: path.resolve(import.meta.dirname, '..'),
     env: { ...process.env, HOST: '127.0.0.1', SERVER_PORT: String(port), CONFIG_DIR: config, DATA_DIR: data, AUTO_SCAN: 'false', AUTH_DISABLED: 'true', OIDC_ISSUER: '', OIDC_CLIENT_ID: '', OIDC_CLIENT_SECRET: '', OIDC_CLIENT_SECRET_FILE: '', OIDC_BASE_URL: '' },
     stdio: 'ignore',

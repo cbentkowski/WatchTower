@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createAuth, oidcSettings, requiresAdministrator } from '../auth.mjs';
+import { createAuth, oidcSettings, requiresAdministrator } from '../src/auth.mjs';
 
 const values = {
   OIDC_ISSUER: 'https://login.example.com/realms/watchtower',

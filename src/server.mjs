@@ -19,14 +19,15 @@ import { loadTlsConfiguration } from './tls.mjs';
 import { cpeSearchMatch, effectiveCpe, legacyCpe, mappingFromApp, mappingWarnings, parseCpe23, productCpe } from './cpe.mjs';
 import { matchLifecycleRelease, normalizeLifecycleProduct, searchLifecycleProducts } from './lifecycle.mjs';
 
-const root = path.dirname(fileURLToPath(import.meta.url));
-const applicationVersion = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
-const configDirectory = process.env.CONFIG_DIR || path.join(root, 'config');
-const defaultConfigDirectory = process.env.DEFAULT_CONFIG_DIR || path.join(root, 'defaults');
+const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
+const projectDirectory = path.dirname(sourceDirectory);
+const applicationVersion = JSON.parse(await readFile(path.join(projectDirectory, 'package.json'), 'utf8')).version;
+const configDirectory = process.env.CONFIG_DIR || path.join(projectDirectory, 'config');
+const defaultConfigDirectory = process.env.DEFAULT_CONFIG_DIR || path.join(projectDirectory, 'defaults');
 const PORT = Number(process.env.SERVER_PORT || process.env.PORT || 4173);
 const HOST = process.env.HOST || '127.0.0.1';
 const tlsConfiguration = await loadTlsConfiguration();
-const dataDirectory = process.env.DATA_DIR || path.join(root, 'data');
+const dataDirectory = process.env.DATA_DIR || path.join(projectDirectory, 'data');
 const configFiles = ['applications.yaml', 'workspaces.yaml', 'feeds.yaml', 'owners.yaml', 'smtp.yaml', 'general.yaml'];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const exists = file => access(file).then(() => true, () => false);
@@ -1225,7 +1226,7 @@ const requestHandler = async (req, res) => {
     const files = { '/': 'index.html', '/styles.css': 'styles.css', '/theme-init.js': 'theme-init.js', '/app.js': 'app.js', '/favicon.svg': 'favicon.svg' };
     const file = files[url.pathname];
     if (!file) { res.writeHead(404); res.end('Not found'); return; }
-    res.writeHead(200, { 'Content-Type': mime[path.extname(file)] }); res.end(await readFile(path.join(root, 'web', file)));
+    res.writeHead(200, { 'Content-Type': mime[path.extname(file)] }); res.end(await readFile(path.join(sourceDirectory, 'web', file)));
   } catch (error) { res.writeHead(['POST', 'PUT', 'DELETE'].includes(req.method) ? 400 : 500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: error.message })); }
 };
 
