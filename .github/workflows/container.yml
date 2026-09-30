@@ -2,7 +2,9 @@ name: Test, scan, and build container
 
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - "feature/**"
   push:
     branches: [main]
   workflow_dispatch:
