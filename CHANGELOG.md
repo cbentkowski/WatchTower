@@ -14,7 +14,7 @@
 
 - Organize application runtime modules and browser assets under `src/` while preserving local and container behavior.
 - Build, scan, and publish containers only when application source or another image input changes.
-- Expand application details into a responsive wide layout with structured finding response cards and a dedicated workflow editor.
+- Expand application details and the new/edit application workspace into responsive wide layouts, with structured finding response cards and a dedicated workflow editor.
 
 ## [0.8.1] - 2026-09-29
 

@@ -688,6 +688,7 @@ function applyAssociation() {
 async function openEditor(mode, targetId = null) {
   editorMode = mode;
   editorTargetId = targetId;
+  $('editor').dataset.mode = mode;
   $('editor-error').hidden = true;
   $('editor-danger').hidden = true;
   $('editor-delete').disabled = false;
