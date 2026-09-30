@@ -5,14 +5,14 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -d /home/container -s /bin/sh container
 
-COPY --chown=container:container package.json package-lock.json server.mjs auth.mjs rbac.mjs feeds.mjs owners.mjs nvd.mjs cpe.mjs lifecycle.mjs yaml-monitor.mjs notifications.mjs settings.mjs general.mjs logger.mjs tls.mjs /opt/watchtower/
+COPY --chown=container:container package.json package-lock.json /opt/watchtower/
 RUN cd /opt/watchtower \
     && npm ci --omit=dev \
     && npm cache clean --force \
     && rm -rf /root/.npm /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-* \
     && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg \
     && find / -xdev -type f -perm /6000 -exec chmod a-s {} +
-COPY --chown=container:container web /opt/watchtower/web
+COPY --chown=container:container src /opt/watchtower/src
 COPY --chown=container:container config /opt/watchtower/defaults/
 COPY --chown=container:container docker/entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod 755 /entrypoint.sh

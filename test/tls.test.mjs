@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadTlsConfiguration } from '../tls.mjs';
+import { loadTlsConfiguration } from '../src/tls.mjs';
 
 test('native TLS is disabled by default and rejects invalid flags', async () => {
   assert.deepEqual(await loadTlsConfiguration({}), { enabled: false, protocol: 'http', options: null });

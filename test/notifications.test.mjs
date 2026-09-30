@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createNotifier, sendTestEmail } from '../notifications.mjs';
-import { smtpPasswordState, validateSmtpSettings } from '../settings.mjs';
+import { createNotifier, sendTestEmail } from '../src/notifications.mjs';
+import { smtpPasswordState, validateSmtpSettings } from '../src/settings.mjs';
 
 const settings = { enabled: true, host: 'smtp.example.com', port: 587, secure: false, requireTls: true, unauthenticated: true, from: 'alerts@example.com', baseUrl: 'https://watchtower.example.com', timeZone: 'UTC', sendHour: 9, usernameEnv: '' };
 const app = (version = '1.0') => ({ id: 'app', name: 'Test App', version, status: 'red', vulnerabilities: [{ id: 'CVE-2026-1234', score: 9 }], lifecycle: { state: 'supported' }, reasons: ['High risk finding'] });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateAccess, canCreateOwner, canDeleteApplication, describeIdentityClaims, explainAccess, protectedRoleState, validateRbacInput } from '../rbac.mjs';
+import { calculateAccess, canCreateOwner, canDeleteApplication, describeIdentityClaims, explainAccess, protectedRoleState, validateRbacInput } from '../src/rbac.mjs';
 
 const appA = { id: '11111111-1111-4111-8111-111111111111', name: 'Jira' };
 const appB = { id: '22222222-2222-4222-8222-222222222222', name: 'GitLab' };

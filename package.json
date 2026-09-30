@@ -35,7 +35,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "start": "node server.mjs",
+    "start": "node src/server.mjs",
     "test": "node --test"
   },
   "dependencies": {

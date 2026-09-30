@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Organize application runtime modules and browser assets under `src/` while preserving local and container behavior.
+- Build, scan, and publish containers only when application source or another image input changes.
+
 ## [0.8.1] - 2026-09-29
 
 ### Fixed

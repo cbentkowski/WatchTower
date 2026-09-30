@@ -35,7 +35,7 @@ test('safe deletion blocks RBAC references, cleans relationships, preserves appl
   await writeFile(path.join(directory, 'rbac.yaml'), rbac(`  - id: ${appGrantId}\n    groupId: ${groupId}\n    scopeType: application\n    roles:\n      - application-editor\n    resourceIds:\n      - ${appId}\n${workspaceGrant}`));
   await writeFile(path.join(data, 'status.json'), `${JSON.stringify({ checkedAt: new Date().toISOString(), results: [{ id: appId, name: 'Test App' }], workspaces: [{ id: workspaceId, name: 'Operations', ownerIds: [], applications: [appId] }, { id: archiveWorkspaceId, name: 'Archive', ownerIds: [], applications: [appId] }], owners: [], inventoryCount: 1, feedSummary: { total: 1, errors: 0 } })}\n`);
   const port = await freePort();
-  const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve(import.meta.dirname, '..'), env: { ...process.env, HOST: '127.0.0.1', SERVER_PORT: String(port), CONFIG_DIR: directory, DATA_DIR: data, AUTO_SCAN: 'false', AUTH_DISABLED: 'true', OIDC_ISSUER: '', OIDC_CLIENT_ID: '', OIDC_CLIENT_SECRET: '', OIDC_CLIENT_SECRET_FILE: '', OIDC_BASE_URL: '' }, stdio: 'ignore' });
+  const child = spawn(process.execPath, ['src/server.mjs'], { cwd: path.resolve(import.meta.dirname, '..'), env: { ...process.env, HOST: '127.0.0.1', SERVER_PORT: String(port), CONFIG_DIR: directory, DATA_DIR: data, AUTO_SCAN: 'false', AUTH_DISABLED: 'true', OIDC_ISSUER: '', OIDC_CLIENT_ID: '', OIDC_CLIENT_SECRET: '', OIDC_CLIENT_SECRET_FILE: '', OIDC_BASE_URL: '' }, stdio: 'ignore' });
   const origin = `http://127.0.0.1:${port}`;
   const remove = (route, confirmation) => fetch(`${origin}${route}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmation }) });
   try {

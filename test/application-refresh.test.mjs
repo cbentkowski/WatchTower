@@ -31,7 +31,7 @@ test('new application refresh collects only associated feeds and preserves exist
   await writeFile(path.join(data, 'status.json'), `${JSON.stringify({ checkedAt: new Date().toISOString(), results: [existingResult], workspaces: [], owners: [], feedSummary: { total: 2, errors: 0 }, warning: null, inventoryCount: 1 })}\n`);
   const port = await freePort();
   const fixture = pathToFileURL(path.resolve(import.meta.dirname, '..', 'test-support', 'mock-sources.mjs')).href;
-  const child = spawn(process.execPath, ['--import', fixture, 'server.mjs'], {
+  const child = spawn(process.execPath, ['--import', fixture, 'src/server.mjs'], {
     cwd: path.resolve(import.meta.dirname, '..'),
     env: { ...process.env, HOST: '127.0.0.1', SERVER_PORT: String(port), CONFIG_DIR: directory, DATA_DIR: data, AUTO_SCAN: 'false', AUTH_DISABLED: 'true', WATCHTOWER_TEST_FETCH_LOG: fetchLog, OIDC_ISSUER: '', OIDC_CLIENT_ID: '', OIDC_CLIENT_SECRET: '', OIDC_CLIENT_SECRET_FILE: '', OIDC_BASE_URL: '' },
     stdio: ['ignore', 'ignore', 'pipe'],

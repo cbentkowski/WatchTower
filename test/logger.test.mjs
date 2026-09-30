@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createLogger } from '../logger.mjs';
+import { createLogger } from '../src/logger.mjs';
 
 test('system, feed, audit, and authentication events use independent files', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'watchtower-logs-'));

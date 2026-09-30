@@ -29,7 +29,7 @@ test('Permission Preview enforces selected access, blocks mutations, and preserv
   await writeFile(path.join(directory, 'smtp.yaml'), 'enabled: false\n');
   await writeFile(path.join(directory, 'general.yaml'), 'general:\n  protocol: "http"\n  host: "127.0.0.1"\n  port: 4173\n');
   const port = await freePort();
-  const child = spawn(process.execPath, ['server.mjs'], {
+  const child = spawn(process.execPath, ['src/server.mjs'], {
     cwd: path.resolve(import.meta.dirname, '..'),
     env: { ...process.env, HOST: '127.0.0.1', SERVER_PORT: String(port), CONFIG_DIR: directory, DATA_DIR: data, AUTO_SCAN: 'false', AUTH_DISABLED: 'true', OIDC_ISSUER: '', OIDC_CLIENT_ID: '', OIDC_CLIENT_SECRET: '', OIDC_CLIENT_SECRET_FILE: '', OIDC_BASE_URL: '' },
     stdio: ['ignore', 'ignore', 'pipe'],
