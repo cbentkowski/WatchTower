@@ -46,7 +46,9 @@ Select a status card to filter the current list. Selecting more than one status 
 
 A green status is not proof that an application is vulnerability-free. New vulnerabilities can be unpublished, unscored, incorrectly mapped, or absent from the configured sources.
 
-Select an application row to view ownership, local risk context, installed and available releases, assessment reasons, vulnerability findings, vendor-feed evidence, and source links. Confirm remediation decisions against the linked vendor advisory.
+Select an application row to open a wide application workspace with ownership, local risk context, installed and available releases, assessment reasons, vulnerability findings, vendor-feed evidence, and source links. Confirm remediation decisions against the linked vendor advisory.
+
+Application Editors can select **Update response** on a finding to record its state as New, Investigating, Remediation planned, Mitigated, Resolved, Risk accepted, Not affected, or False positive. A response can also include an assignee, due date, notes, and an optional expiration for Risk accepted. WatchTower records the actor and timestamps in audit and finding history. Expired risk acceptance or changed vulnerability evidence automatically returns a completed disposition to New for review.
 
 ## Applications
 

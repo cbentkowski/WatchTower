@@ -6,10 +6,15 @@
 
 - Clear stale authentication cookies and return an already-open browser interface to sign-in after a server restart or session expiration.
 
+### Added
+
+- Track finding response state, assignment, due dates, notes, risk-acceptance expiration, actors, timestamps, and automatic reopening when evidence changes or an acceptance expires.
+
 ### Changed
 
 - Organize application runtime modules and browser assets under `src/` while preserving local and container behavior.
 - Build, scan, and publish containers only when application source or another image input changes.
+- Expand application details and the new/edit application workspace into responsive wide layouts, with structured finding response cards and a dedicated workflow editor.
 
 ## [0.8.1] - 2026-09-29
 
