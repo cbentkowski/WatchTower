@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+const safeTicketUrl = value => { try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password ? url.href : ''; } catch { return ''; } };
 const daysSince = (previous, today) => previous ? Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${previous}T00:00:00Z`)) / 86_400_000) : Infinity;
 const entryKey = (workspaceId, app) => JSON.stringify([workspaceId, app.id, app.version]);
 
@@ -66,8 +67,10 @@ function messageFor(group, alerts, baseUrl) {
     const acknowledgementUrl = new URL(`/ack/${token}`, baseUrl).href;
     const workspaceUrl = new URL(`/#workspace=${encodeURIComponent(group.id)}`, baseUrl).href;
     const note = (app.reasons || []).filter(Boolean).slice(0, 2).join('; ');
-    lines.push(`${app.name} (${app.version})`, reasons.join(' · '), note, `Workspace: ${workspaceUrl}`, `Acknowledge: ${acknowledgementUrl}`, '');
-    return `<section style="padding:16px;margin:14px 0;border:1px solid #dce6eb;border-radius:8px"><h2 style="margin:0 0 8px;font-size:18px">${escape(app.name)} <small style="color:#647987">${escape(app.version)}</small></h2><strong>${escape(reasons.join(' · '))}</strong><p>${escape(note)}</p><a href="${escape(workspaceUrl)}">Open workspace</a> &nbsp;·&nbsp; <a href="${escape(acknowledgementUrl)}">Acknowledge alerts for this application</a></section>`;
+    const tickets = (app.vulnerabilities || []).map(finding => { const reference = String(finding.workflow?.ticketReference || finding.workflow?.ticketUrl || '').trim(); return { id: finding.id || 'Finding', reference, url: safeTicketUrl(reference) }; }).filter(ticket => ticket.reference);
+    lines.push(`${app.name} (${app.version})`, reasons.join(' · '), note, ...tickets.map(ticket => `Ticket (${ticket.id}): ${ticket.reference}`), `Workspace: ${workspaceUrl}`, `Acknowledge: ${acknowledgementUrl}`, '');
+    const ticketLinks = tickets.length ? `<p>${tickets.map(ticket => ticket.url ? `<a href="${escape(ticket.url)}">${escape(ticket.id)} ticket</a>` : `${escape(ticket.id)} ticket: <strong>${escape(ticket.reference)}</strong>`).join(' &nbsp;·&nbsp; ')}</p>` : '';
+    return `<section style="padding:16px;margin:14px 0;border:1px solid #dce6eb;border-radius:8px"><h2 style="margin:0 0 8px;font-size:18px">${escape(app.name)} <small style="color:#647987">${escape(app.version)}</small></h2><strong>${escape(reasons.join(' · '))}</strong><p>${escape(note)}</p>${ticketLinks}<a href="${escape(workspaceUrl)}">Open workspace</a> &nbsp;·&nbsp; <a href="${escape(acknowledgementUrl)}">Acknowledge alerts for this application</a></section>`;
   }).join('');
   return { subject, text: lines.join('\n'), html: `<main style="font-family:Arial,sans-serif;max-width:680px;margin:auto;color:#203646"><h1>WatchTower · ${escape(group.name)}</h1><p>${alerts.length} application${alerts.length === 1 ? '' : 's'} need your attention.</p>${cards}<p style="font-size:12px;color:#647987">The acknowledgment link opens a confirmation page. Confirming stops reminders for that application in this workspace until the alert clears or its version changes.</p></main>` };
 }
