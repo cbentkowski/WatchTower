@@ -65,6 +65,22 @@ test('unauthenticated requests cannot read APIs or the dashboard', async () => {
   assert.match(loginPage.body, /href="\/auth\/login"/);
 });
 
+test('stale sessions are cleared while preserving API and browser response semantics', async () => {
+  const auth = createAuth(oidcSettings(values));
+  const cookie = '__Host-watchtower=stale-session';
+  const api = response();
+  await auth.handle({ method: 'GET', headers: { cookie } }, api, new URL('https://home.example.com/api/session'));
+  assert.equal(api.status, 401);
+  assert.match(api.body, /Sign-in required/);
+  assert.match(api.headers['Set-Cookie'], /__Host-watchtower=.*Max-Age=0.*Secure/);
+
+  const page = response();
+  await auth.handle({ method: 'GET', headers: { cookie } }, page, new URL('https://home.example.com/'));
+  assert.equal(page.status, 303);
+  assert.equal(page.headers.Location, '/login');
+  assert.match(page.headers['Set-Cookie'], /__Host-watchtower=.*Max-Age=0.*Secure/);
+});
+
 test('login binds the callback to a browser flow and creates a protected session', async () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'watchtower-admin-group-'));
   const adminGroupFile = path.join(directory, 'admin-group-id');

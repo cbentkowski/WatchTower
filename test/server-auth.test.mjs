@@ -34,6 +34,13 @@ test('browser styles use local system fonts without external requests', async ()
   assert.match(styles, /font-family:system-ui/);
 });
 
+test('browser API requests return stale sessions to sign-in', async () => {
+  const script = await readFile(path.resolve(import.meta.dirname, '..', 'src', 'web', 'app.js'), 'utf8');
+  assert.match(script, /response\.status === 401/);
+  assert.match(script, /request\.pathname\.startsWith\('\/api\/'\)/);
+  assert.match(script, /location\.replace\('\/login'\)/);
+});
+
 test('server refuses to start without OIDC or an explicit private-development override', async () => {
   const env = { ...process.env, AUTO_SCAN: 'false' };
   for (const name of ['OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_CLIENT_SECRET_FILE', 'OIDC_BASE_URL', 'OIDC_REQUIRED_ROLE', 'OIDC_PROMPT', 'AUTH_DISABLED']) delete env[name];
