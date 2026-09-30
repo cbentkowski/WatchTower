@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Clear stale authentication cookies and return an already-open browser interface to sign-in after a server restart or session expiration.
+
 ### Changed
 
 - Organize application runtime modules and browser assets under `src/` while preserving local and container behavior.

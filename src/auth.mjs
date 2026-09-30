@@ -203,8 +203,9 @@ export function createAuth(settings = oidcSettings(), provider = oidc, authEvent
       }
       if (!session) {
         if (values[sessionName]) await record('Session rejected', null, { outcome: 'warn', issuer: settings.issuer.href, path: url.pathname.startsWith('/api/') ? '/api/*' : url.pathname });
-        if (url.pathname.startsWith('/api/')) send(res, 401, JSON.stringify({ error: 'Sign-in required' }), { 'Content-Type': 'application/json; charset=utf-8' });
-        else send(res, 303, '', { Location: '/login' });
+        const rejectedSession = values[sessionName] ? { 'Set-Cookie': cookie(sessionName, '', 0) } : {};
+        if (url.pathname.startsWith('/api/')) send(res, 401, JSON.stringify({ error: 'Sign-in required' }), { 'Content-Type': 'application/json; charset=utf-8', ...rejectedSession });
+        else send(res, 303, '', { Location: '/login', ...rejectedSession });
         return true;
       }
       if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !hasValidRequestOrigin(req, settings.base.origin)) {

@@ -37,6 +37,14 @@ const selectedGrantIds = new Set();
 const accessDraftKey = 'watchtower-access-preview-draft';
 const accessDraftLifetime = 8 * 60 * 60 * 1000;
 let permissions = { accessManage: false, scan: false, feeds: { manage: false, view: [], edit: [] }, applications: { view: [], edit: [] }, workspaces: { view: [], edit: [], membership: [], notifications: [] } };
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const response = await nativeFetch(...args);
+  const input = args[0];
+  const request = new URL(input instanceof Request ? input.url : input, location.href);
+  if (response.status === 401 && request.origin === location.origin && request.pathname.startsWith('/api/')) location.replace('/login');
+  return response;
+};
 const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeUrl = (url) => { try { const u = new URL(url); return u.protocol === 'https:' ? u.href : '#'; } catch { return '#'; } };
 const labels = { red: 'Needs action', yellow: 'Approaching EOL', green: 'Clear', unknown: 'Unknown' };
