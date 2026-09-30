@@ -1,15 +1,17 @@
 # Changelog
 
-## Unreleased
+## [0.9.0] - 2026-09-30
 
 ### Fixed
 
 - Clear stale authentication cookies and return an already-open browser interface to sign-in after a server restart or session expiration.
+- Harden untrusted vendor-feed markup sanitization and documentation validation against executable markup.
 
 ### Added
 
 - Track finding response state, assignment, due dates, notes, risk-acceptance expiration, actors, timestamps, and automatic reopening when evidence changes or an acceptance expires.
 - Attach an optional external ticket number or HTTPS link to a finding for Jira, ServiceNow, GitHub Issues, Azure DevOps, Remedy, or another work tracker.
+- Safely delete applications and workspaces through exact-name confirmation while cleaning their associations, enforcing server-side permissions, and preserving finding workflow history.
 
 ### Changed
 

@@ -54,7 +54,7 @@ Focus: give applicable findings a recorded and accountable response process.
 
 - Add finding states such as New, Investigating, Remediation planned, Mitigated, Resolved, Risk accepted, Not affected, and False positive.
 - Record assignee, due date, notes, actor, timestamps, and optional risk-acceptance expiration.
-- Add an optional ticket URL compatible with Jira, ServiceNow, GitHub Issues, Azure DevOps, and similar systems.
+- Add an optional ticket reference or HTTPS link compatible with Jira, ServiceNow, GitHub Issues, Azure DevOps, Remedy, and similar systems.
 - Reopen findings when relevant evidence changes or a temporary disposition expires.
 
 ## 0.10.0 - Relay
