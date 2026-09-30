@@ -11,22 +11,24 @@ import { readGeneralSettings, writeGeneralSettings, validateGeneralSettings, gen
 import { createLogger, logTypes } from './logger.mjs';
 import { administratorRole, createAuth } from './auth.mjs';
 import { createYamlMonitor } from './yaml-monitor.mjs';
-import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, canCreateOwner, claimsForIdentityMappings, describeIdentityClaims, explainAccess, protectedRoleState, standardRoles } from './rbac.mjs';
-import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, readFeeds, secureFetchText, validateFeedInput, writeFeeds } from './feeds.mjs';
+import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, canCreateOwner, canDeleteApplication, claimsForIdentityMappings, describeIdentityClaims, explainAccess, protectedRoleState, standardRoles } from './rbac.mjs';
+import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, readFeeds, secureFetchText, serializeFeeds, validateFeedInput, writeFeeds } from './feeds.mjs';
 import { readOwners, validateOwner, writeOwners } from './owners.mjs';
 import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
 import { loadTlsConfiguration } from './tls.mjs';
 import { cpeSearchMatch, effectiveCpe, legacyCpe, mappingFromApp, mappingWarnings, parseCpe23, productCpe } from './cpe.mjs';
 import { matchLifecycleRelease, normalizeLifecycleProduct, searchLifecycleProducts } from './lifecycle.mjs';
+import { appendFindingEvents, readFindingEvents, readFindingStore, reconcileFindingWorkflows, updateFindingWorkflow, writeFindingStore } from './findings.mjs';
 
-const root = path.dirname(fileURLToPath(import.meta.url));
-const applicationVersion = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
-const configDirectory = process.env.CONFIG_DIR || path.join(root, 'config');
-const defaultConfigDirectory = process.env.DEFAULT_CONFIG_DIR || path.join(root, 'defaults');
+const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
+const projectDirectory = path.dirname(sourceDirectory);
+const applicationVersion = JSON.parse(await readFile(path.join(projectDirectory, 'package.json'), 'utf8')).version;
+const configDirectory = process.env.CONFIG_DIR || path.join(projectDirectory, 'config');
+const defaultConfigDirectory = process.env.DEFAULT_CONFIG_DIR || path.join(projectDirectory, 'defaults');
 const PORT = Number(process.env.SERVER_PORT || process.env.PORT || 4173);
 const HOST = process.env.HOST || '127.0.0.1';
 const tlsConfiguration = await loadTlsConfiguration();
-const dataDirectory = process.env.DATA_DIR || path.join(root, 'data');
+const dataDirectory = process.env.DATA_DIR || path.join(projectDirectory, 'data');
 const configFiles = ['applications.yaml', 'workspaces.yaml', 'feeds.yaml', 'owners.yaml', 'smtp.yaml', 'general.yaml'];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const exists = file => access(file).then(() => true, () => false);
@@ -56,6 +58,8 @@ const snapshotFile = path.join(dataDirectory, 'status.json');
 const feedCacheFile = path.join(dataDirectory, 'feeds.json');
 const smtpFile = path.join(configDirectory, 'smtp.yaml');
 const generalFile = path.join(configDirectory, 'general.yaml');
+const findingStoreFile = path.join(dataDirectory, 'finding-workflows.json');
+const findingHistoryFile = path.join(dataDirectory, 'finding-history.jsonl');
 
 async function recordAuthenticationEvent(action, actor, context = {}) {
   const { claims = {}, protectedAdminClaim = '', ...event } = context;
@@ -88,9 +92,15 @@ let nvdLastRequest = 0;
 let lifecycleCatalogCache = null;
 const permissionPreviews = new Map();
 const previewLifetime = 8 * 60 * 60 * 1000;
-const snapshotReady = readFile(snapshotFile, 'utf8').then(raw => {
+const snapshotReady = readFile(snapshotFile, 'utf8').then(async raw => {
   const saved = JSON.parse(raw);
-  if (saved.checkedAt && Array.isArray(saved.results) && Array.isArray(saved.workspaces)) snapshot = saved;
+  if (saved.checkedAt && Array.isArray(saved.results) && Array.isArray(saved.workspaces)) {
+    const findingStore = await readFindingStore(findingStoreFile);
+    const reconciliation = reconcileFindingWorkflows(findingStore, saved.results);
+    if (reconciliation.changed) await writeFindingStore(findingStoreFile, findingStore);
+    await appendFindingEvents(findingHistoryFile, reconciliation.events);
+    snapshot = saved;
+  }
 }).catch(error => { if (error.code !== 'ENOENT') console.warn(`Could not load saved scan: ${error.message}`); });
 const yamlCheckInterval = Number(process.env.YAML_CHECK_INTERVAL_MS || 30_000);
 const yamlMonitor = createYamlMonitor({
@@ -120,6 +130,10 @@ await yamlMonitor.start();
 
 async function storeSnapshot(data) {
   await mkdir(dataDirectory, { recursive: true });
+  const findingStore = await readFindingStore(findingStoreFile);
+  const reconciliation = reconcileFindingWorkflows(findingStore, data.results || []);
+  if (reconciliation.changed) await writeFindingStore(findingStoreFile, findingStore);
+  await appendFindingEvents(findingHistoryFile, reconciliation.events);
   await saveAtomic(snapshotFile, `${JSON.stringify(data)}\n`);
   snapshot = data;
   notifier.onScan(data).catch(error => { console.error(`Notification check failed: ${error.message}`); logger.log('error', 'Notification check failed', error.message); });
@@ -253,6 +267,15 @@ async function saveAtomic(file, content) {
   const temporary = `${file}.tmp`;
   await writeFile(temporary, content, 'utf8');
   await rename(temporary, file);
+}
+async function saveRelatedFiles(updates) {
+  const originals = await Promise.all(updates.map(async update => ({ ...update, original: await readFile(update.file, 'utf8') })));
+  try {
+    for (const update of originals) await yamlMonitor.webWrite(update.file, () => saveAtomic(update.file, update.content));
+  } catch (error) {
+    for (const update of originals) await yamlMonitor.webWrite(update.file, () => saveAtomic(update.file, update.original)).catch(() => {});
+    throw error;
+  }
 }
 async function readBody(req) {
   let body = '';
@@ -1033,6 +1056,39 @@ const requestHandler = async (req, res) => {
       await logger.audit('Feed removed', auditActor(req), { type: 'feed', id: feed.id, name: feed.name }, { applicationIds: feed.applicationIds }, `${feed.name} (${feed.id})`);
       res.writeHead(204); res.end(); return;
     }
+    const findingHistoryRoute = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/findings\/(.+)\/history$/i);
+    if (findingHistoryRoute && req.method === 'GET') {
+      const applicationId = findingHistoryRoute[1];
+      const findingId = decodeURIComponent(findingHistoryRoute[2]);
+      const { apps, access } = await authorization(req);
+      if (!access.appView.has(applicationId)) { forbidden(res); return; }
+      if (!apps.some(item => item.id === applicationId)) throw new Error('Application not found');
+      const entries = await readFindingEvents(findingHistoryFile, applicationId, findingId);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ entries })); return;
+    }
+    const findingRoute = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/findings\/(.+)$/i);
+    if (findingRoute && req.method === 'PUT') {
+      await snapshotReady;
+      const applicationId = findingRoute[1];
+      const findingId = decodeURIComponent(findingRoute[2]);
+      const { apps, access } = await authorization(req);
+      if (!access.appEdit.has(applicationId)) { forbidden(res, 'Application Editor role required'); return; }
+      const application = apps.find(item => item.id === applicationId);
+      const liveApplication = snapshot?.results?.find(item => item.id === applicationId);
+      const finding = liveApplication?.vulnerabilities?.find(item => item.id === findingId);
+      if (!application || !finding) throw new Error('Active finding not found');
+      const actor = auditActor(req);
+      const store = await readFindingStore(findingStoreFile);
+      const updated = updateFindingWorkflow(store, applicationId, findingId, await readBody(req), actor);
+      if (updated.event) {
+        await writeFindingStore(findingStoreFile, store);
+        await appendFindingEvents(findingHistoryFile, [updated.event]);
+        finding.workflow = updated.record;
+        await saveAtomic(snapshotFile, `${JSON.stringify(snapshot)}\n`);
+        await logger.audit('Finding workflow updated', actor, { type: 'finding', id: findingId, applicationId, applicationName: application.name }, updated.changes, `${application.name}: ${findingId} → ${updated.record.stateLabel}`);
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(updated.record)); return;
+    }
     const appFeeds = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/feeds$/i);
     if (appFeeds && req.method === 'PUT') {
       const { feeds, access } = await authorization(req);
@@ -1096,6 +1152,35 @@ const requestHandler = async (req, res) => {
       if (Object.keys(changes).length) await logger.audit('Application updated', auditActor(req), { type: 'application', id: app.id, name: updated.name }, changes, `${updated.name} (${app.id}); ${describeFields(changes)}`);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ id: app.id, previousId })); return;
     }
+    if (appEdit && req.method === 'DELETE') {
+      const appId = appEdit[1];
+      const { apps, workspaces, feeds, access } = await authorization(req);
+      if (!canDeleteApplication(access)) { forbidden(res, 'Administrator role required to remove applications'); return; }
+      const app = apps.find(item => item.id === appId);
+      if (!app) throw new Error('Application not found');
+      const body = await readBody(req);
+      if (body.confirmation !== app.name) throw new Error(`Type the application name exactly to confirm deletion: ${app.name}`);
+      const rbac = await readRbac(rbacFile);
+      if (rbac.grants.some(grant => grant.scopeType === 'application' && grant.resourceIds.includes(app.id))) throw new Error('Remove application grants before deleting this application');
+      if (refreshPromise) await refreshPromise;
+      const remainingApps = apps.filter(item => item.id !== app.id);
+      const affectedWorkspaces = workspaces.filter(group => group.applications.includes(app.id)).map(group => group.id);
+      const affectedFeeds = feeds.filter(feed => feed.applicationIds.includes(app.id)).map(feed => feed.id);
+      const updatedWorkspaces = workspaces.map(group => ({ ...group, applications: group.applications.filter(id => id !== app.id) }));
+      const updatedFeeds = feeds.map(feed => ({ ...feed, applicationIds: feed.applicationIds.filter(id => id !== app.id) }));
+      await saveRelatedFiles([
+        { file: path.join(configDirectory, 'applications.yaml'), content: `# Application IDs, canonical CPE mappings, ownership, and risk context are managed by WatchTower.\napplications:\n${remainingApps.map(serializeApp).join('')}` },
+        { file: path.join(configDirectory, 'workspaces.yaml'), content: serializeWorkspaces(updatedWorkspaces) },
+        { file: feedFile, content: serializeFeeds(updatedFeeds) },
+      ]);
+      if (snapshot) {
+        snapshot = { ...snapshot, results: (snapshot.results || []).filter(item => item.id !== app.id), workspaces: updatedWorkspaces, inventoryCount: remainingApps.filter(item => item.enabled !== false).length, feedSummary: { ...(snapshot.feedSummary || {}), total: updatedFeeds.length } };
+        await saveAtomic(snapshotFile, `${JSON.stringify(snapshot)}\n`);
+      }
+      const changes = { workspaceIds: affectedWorkspaces, feedIds: affectedFeeds, workflowRecords: 'preserved' };
+      await logger.audit('Application removed', auditActor(req), { type: 'application', id: app.id, name: app.name }, changes, `${app.name} (${app.id}); removed from ${affectedWorkspaces.length} workspaces and ${affectedFeeds.length} feeds; finding workflow records preserved`);
+      res.writeHead(204); res.end(); return;
+    }
     const appRefresh = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/refresh$/i);
     if (appRefresh && req.method === 'POST') {
       const { access } = await authorization(req);
@@ -1151,6 +1236,28 @@ const requestHandler = async (req, res) => {
       }
       res.writeHead(index < 0 ? 201 : 200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ ...group, previousId: previousId || id })); return;
     }
+    if (workspaceEdit && req.method === 'DELETE') {
+      const workspaceId = workspaceEdit[1];
+      const { workspaces, access } = await authorization(req);
+      if (!access.workspaceEdit.has(workspaceId)) { forbidden(res, 'Workspace Manager role required to remove this workspace'); return; }
+      const workspace = workspaces.find(item => item.id === workspaceId);
+      if (!workspace) throw new Error('Workspace not found');
+      const body = await readBody(req);
+      if (body.confirmation !== workspace.name) throw new Error(`Type the workspace name exactly to confirm deletion: ${workspace.name}`);
+      const rbac = await readRbac(rbacFile);
+      if (rbac.grants.some(grant => grant.scopeType === 'workspace' && grant.resourceIds.includes(workspace.id))) throw new Error('Remove workspace grants before deleting this workspace');
+      if (refreshPromise) await refreshPromise;
+      const remainingWorkspaces = workspaces.filter(item => item.id !== workspace.id);
+      const workspaceFile = path.join(configDirectory, 'workspaces.yaml');
+      await yamlMonitor.webWrite(workspaceFile, () => saveAtomic(workspaceFile, serializeWorkspaces(remainingWorkspaces)));
+      if (snapshot) {
+        snapshot = { ...snapshot, workspaces: remainingWorkspaces };
+        await saveAtomic(snapshotFile, `${JSON.stringify(snapshot)}\n`);
+      }
+      const changes = { applicationIds: workspace.applications, ownerIds: workspace.ownerIds, applicationsPreserved: true, workflowRecords: 'preserved' };
+      await logger.audit('Workspace removed', auditActor(req), { type: 'workspace', id: workspace.id, name: workspace.name }, changes, `${workspace.name} (${workspace.id}); ${workspace.applications.length} applications preserved; finding workflow records preserved`);
+      res.writeHead(204); res.end(); return;
+    }
     if (url.pathname === '/api/status') {
       await snapshotReady;
       const { owners, access } = await authorization(req);
@@ -1165,7 +1272,7 @@ const requestHandler = async (req, res) => {
     const files = { '/': 'index.html', '/styles.css': 'styles.css', '/theme-init.js': 'theme-init.js', '/app.js': 'app.js', '/favicon.svg': 'favicon.svg' };
     const file = files[url.pathname];
     if (!file) { res.writeHead(404); res.end('Not found'); return; }
-    res.writeHead(200, { 'Content-Type': mime[path.extname(file)] }); res.end(await readFile(path.join(root, 'web', file)));
+    res.writeHead(200, { 'Content-Type': mime[path.extname(file)] }); res.end(await readFile(path.join(sourceDirectory, 'web', file)));
   } catch (error) { res.writeHead(['POST', 'PUT', 'DELETE'].includes(req.method) ? 400 : 500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: error.message })); }
 };
 

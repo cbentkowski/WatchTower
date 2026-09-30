@@ -14,7 +14,7 @@ for file in applications.yaml workspaces.yaml feeds.yaml owners.yaml smtp.yaml g
   fi
 done
 
-if [ -z "${STARTUP:-}" ] || [ "$STARTUP" = 'node /opt/watchtower/server.mjs' ]; then
-  exec node /opt/watchtower/server.mjs
+if [ -z "${STARTUP:-}" ] || [ "$STARTUP" = 'node /opt/watchtower/server.mjs' ] || [ "$STARTUP" = 'node /opt/watchtower/src/server.mjs' ]; then
+  exec node /opt/watchtower/src/server.mjs
 fi
 exec /bin/sh -c "$STARTUP"

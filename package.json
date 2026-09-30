@@ -1,6 +1,6 @@
 {
   "name": "watchtower-vi",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Self-hosted vulnerability intelligence and lifecycle monitoring for application inventories.",
   "private": true,
   "license": "Apache-2.0",
@@ -35,7 +35,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "start": "node server.mjs",
+    "start": "node src/server.mjs",
     "test": "node --test"
   },
   "dependencies": {

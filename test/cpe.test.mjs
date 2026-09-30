@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cpeSearchMatch, effectiveCpe, legacyCpe, mappingFromApp, mappingWarnings, parseCpe23, productCpe } from '../cpe.mjs';
+import { cpeSearchMatch, effectiveCpe, legacyCpe, mappingFromApp, mappingWarnings, parseCpe23, productCpe } from '../src/cpe.mjs';
 
 const exact = 'cpe:2.3:a:atlassian:jira_service_management:5.17.3:*:enterprise:*:*:*:*:*';
 

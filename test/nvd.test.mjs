@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cpeMatchAffectsVersion, cveAffectsApplication, wildcardApplicationCpe } from '../nvd.mjs';
+import { cpeMatchAffectsVersion, cveAffectsApplication, wildcardApplicationCpe } from '../src/nvd.mjs';
 
 const app = { version: '5.17.3', cpeVendor: 'atlassian', cpeProduct: 'jira_service_management', cpeEdition: '' };
 const ranged = { vulnerable: true, criteria: 'cpe:2.3:a:atlassian:jira_service_management:*:*:*:*:*:*:*:*', versionStartIncluding: '5.16.0', versionEndExcluding: '5.17.4' };

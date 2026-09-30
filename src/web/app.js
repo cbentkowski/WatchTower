@@ -7,6 +7,7 @@ let activeFilters = null;
 let editorMode = null;
 let editorTargetId = null;
 let detailAppId = null;
+let activeFindingId = null;
 let editorConfig = { applications: [], workspaces: [] };
 let cpeMapping = null;
 let cpeDraft = null;
@@ -24,6 +25,7 @@ let currentFeedId = null;
 let currentOwnerId = null;
 let editorSelections = { ownerIds: new Set(), workspaceIds: new Set(), feedIds: new Set(), applicationIds: new Set() };
 let associationState = null;
+let deleteConfirmation = null;
 let resumeOwnerAssociation = null;
 let accessData = null;
 let isAdmin = false;
@@ -36,8 +38,18 @@ const selectedGrantIds = new Set();
 const accessDraftKey = 'watchtower-access-preview-draft';
 const accessDraftLifetime = 8 * 60 * 60 * 1000;
 let permissions = { accessManage: false, scan: false, feeds: { manage: false, view: [], edit: [] }, applications: { view: [], edit: [] }, workspaces: { view: [], edit: [], membership: [], notifications: [] } };
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const response = await nativeFetch(...args);
+  const input = args[0];
+  const request = new URL(input instanceof Request ? input.url : input, location.href);
+  if (response.status === 401 && request.origin === location.origin && request.pathname.startsWith('/api/')) location.replace('/login');
+  return response;
+};
 const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeUrl = (url) => { try { const u = new URL(url); return u.protocol === 'https:' ? u.href : '#'; } catch { return '#'; } };
+const safeTicketUrl = value => { try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password ? url.href : '#'; } catch { return '#'; } };
+const ticketReferenceMarkup = reference => { const href = safeTicketUrl(reference); const value = href === '#' ? `<strong>${escape(reference)}</strong>` : `<a href="${href}" target="_blank" rel="noopener noreferrer">Open external ticket ↗</a>`; return `<div class="finding-ticket-display"><span>TICKET</span>${value}</div>`; };
 const labels = { red: 'Needs action', yellow: 'Approaching EOL', green: 'Clear', unknown: 'Unknown' };
 function setTheme(theme) {
   document.documentElement.dataset.theme = theme;
@@ -570,7 +582,8 @@ function showDetails(a) {
   $('detail-name').textContent = a.name;
   $('detail-kicker').textContent = `${a.version} · ${labels[a.status].toUpperCase()}`;
   $('edit-app').hidden = !(isAdmin || permissions.applications.edit.includes(a.id));
-  const findings = a.vulnerabilities.length ? a.vulnerabilities.map(v => `<article class="vuln"><div class="vuln-top"><a href="${safeUrl(v.url)}" target="_blank" rel="noopener noreferrer">${escape(v.id)} ↗</a><span class="badge ${v.knownExploited ? 'red' : 'yellow'}">${v.knownExploited ? 'Known exploited' : `${v.label} · ${v.score}`}</span></div><p>${escape(v.description)}</p>${v.advisories.map(url => `<a class="source" href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer">Vendor advisory ↗</a>`).join('')}</article>`).join('') : `<p class="muted">No high or critical CVEs found for this version in ${escape(a.assessmentSource || 'the current source')}.</p>`;
+  const canEditFindings = isAdmin || permissions.applications.edit.includes(a.id);
+  const findings = a.vulnerabilities.length ? a.vulnerabilities.map(v => { const workflow = v.workflow || { state: 'new', stateLabel: 'New' }; return `<article class="vuln finding-card" data-finding-id="${escape(v.id)}"><div class="vuln-top"><div><a href="${safeUrl(v.url)}" target="_blank" rel="noopener noreferrer">${escape(v.id)} ↗</a><span class="finding-state state-${escape(workflow.state)}">${escape(workflow.stateLabel)}</span></div><span class="badge ${v.knownExploited ? 'red' : 'yellow'}">${v.knownExploited ? 'Known exploited' : `${v.label} · ${v.score}`}</span></div><div class="finding-card-grid"><div class="finding-evidence"><p>${escape(v.description)}</p>${(v.advisories || []).map(url => `<a class="source" href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer">Vendor advisory ↗</a>`).join('')}</div><div class="finding-workflow-summary"><span>ASSIGNEE<strong>${escape(workflow.assignee || 'Unassigned')}</strong></span><span>DUE DATE<strong>${escape(workflow.dueDate || 'Not set')}</strong></span>${workflow.riskExpiration ? `<span>RISK EXPIRES<strong>${escape(workflow.riskExpiration)}</strong></span>` : ''}${workflow.ticketReference ? ticketReferenceMarkup(workflow.ticketReference) : ''}${workflow.notes ? `<p>${escape(workflow.notes)}</p>` : ''}${workflow.reopenedReason ? `<p class="form-error">Reopened: ${escape(workflow.reopenedReason)}</p>` : ''}${canEditFindings ? `<button type="button" class="finding-edit">Update response</button>` : ''}</div></div></article>`; }).join('') : `<p class="muted">No high or critical CVEs found for this version in ${escape(a.assessmentSource || 'the current source')}.</p>`;
   const upgrade = a.upgrades || {};
   const releaseLink = upgrade.sourceUrl ? `<a href="${safeUrl(upgrade.sourceUrl)}" target="_blank" rel="noopener noreferrer">Release source ↗</a>` : '';
   const containing = workspaces.filter(group => group.applications.includes(a.id));
@@ -579,8 +592,62 @@ function showDetails(a) {
   const ownership = assignedOwners.length ? assignedOwners.map(owner => `<article class="owner-contact"><strong>${escape(owner.name)}</strong><span>Email: ${escape(owner.email)}</span>${owner.escalationEmail ? `<span>Escalation: ${escape(owner.escalationEmail)}</span>` : ''}</article>`).join('') : '<p class="muted">No owner assigned.</p>';
   const context = `<div class="detail-grid context-grid"><div><span>CRITICALITY</span><strong>${escape(a.criticality || 'unspecified')}</strong></div><div><span>ENVIRONMENT</span><strong>${escape(a.environment || 'unspecified')}</strong></div><div><span>EXPOSURE</span><strong>${escape(a.exposure || 'unknown')}</strong></div><div><span>TAGS</span><strong>${escape((a.tags || []).join(', ') || 'None')}</strong></div></div><h3>Ownership</h3><div class="owner-contacts">${ownership}</div>`;
   const feedEvidence = (a.feedEvents || []).length ? `<h3>Feed evidence</h3>${a.feedEvents.map(event => `<div class="feed-evidence"><a href="${safeUrl(event.url)}" target="_blank" rel="noopener noreferrer">${escape(event.title)} ↗</a><span class="vendor">${escape(event.type)} · ${escape(event.confidence)} confidence${event.severity && event.severity !== 'UNKNOWN' ? ` · ${escape(event.severity)}` : ''}</span></div>`).join('')}` : '';
-  $('detail-body').innerHTML = `${sharedWarning}<div class="detail-grid"><div><span>INSTALLED VERSION</span><strong>${escape(a.version)}</strong></div><div><span>LATEST AVAILABLE</span><strong>${escape(upgrade.latest || 'Unavailable')}</strong>${releaseLink}</div><div><span>LATEST ON INSTALLED LINE</span><strong>${escape(upgrade.currentLine || 'Unavailable')}</strong></div><div><span>LATEST LTS VERSION</span><strong>${escape(upgrade.latestLts || 'No designated LTS')}</strong></div><div><span>SUPPORT</span><strong>${escape(a.lifecycle?.note || 'Unknown')}</strong></div></div><h3>Application context</h3>${context}<h3>Assessment</h3><ul class="reasons">${a.reasons.map(r => `<li>${escape(r)}</li>`).join('')}</ul><h3>Vulnerability findings</h3>${findings}${feedEvidence}<h3>Sources</h3><div class="sources">${a.sources.map(s => `<a href="${safeUrl(s.url)}" target="_blank" rel="noopener noreferrer">${escape(s.name)} ↗</a>`).join('') || '<span class="muted">No source links available</span>'}</div><p class="detail-note">CPE: <code>${escape(a.cpe)}</code>. Confirm product identity and affected version ranges in the linked advisories before remediation decisions.</p>`;
+  $('detail-body').innerHTML = `${sharedWarning}<div class="application-overview"><section><h3>Version and lifecycle</h3><div class="detail-grid"><div><span>INSTALLED VERSION</span><strong>${escape(a.version)}</strong></div><div><span>LATEST AVAILABLE</span><strong>${escape(upgrade.latest || 'Unavailable')}</strong>${releaseLink}</div><div><span>LATEST ON INSTALLED LINE</span><strong>${escape(upgrade.currentLine || 'Unavailable')}</strong></div><div><span>LATEST LTS VERSION</span><strong>${escape(upgrade.latestLts || 'No designated LTS')}</strong></div><div><span>SUPPORT</span><strong>${escape(a.lifecycle?.note || 'Unknown')}</strong></div></div></section><section><h3>Application context</h3>${context}</section></div><section class="assessment-section"><h3>Assessment</h3><ul class="reasons">${a.reasons.map(r => `<li>${escape(r)}</li>`).join('')}</ul></section><section class="findings-section"><h3>Vulnerability findings</h3>${findings}</section>${feedEvidence}<h3>Sources</h3><div class="sources">${a.sources.map(s => `<a href="${safeUrl(s.url)}" target="_blank" rel="noopener noreferrer">${escape(s.name)} ↗</a>`).join('') || '<span class="muted">No source links available</span>'}</div><p class="detail-note">CPE: <code>${escape(a.cpe)}</code>. Confirm product identity and affected version ranges in the linked advisories before remediation decisions.</p>`;
   $('details').showModal();
+}
+
+async function openFindingEditor(findingId) {
+  const application = allResults.find(item => item.id === detailAppId);
+  const finding = application?.vulnerabilities.find(item => item.id === findingId);
+  if (!finding) return;
+  activeFindingId = findingId;
+  const workflow = finding.workflow || { state: 'new' };
+  const form = $('finding-form');
+  form.reset();
+  form.elements.state.value = workflow.state || 'new';
+  form.elements.assignee.value = workflow.assignee || '';
+  form.elements.dueDate.value = workflow.dueDate || '';
+  form.elements.riskExpiration.value = workflow.riskExpiration || '';
+  form.elements.ticketReference.value = workflow.ticketReference || '';
+  form.elements.notes.value = workflow.notes || '';
+  $('finding-editor-title').textContent = `${finding.id} response`;
+  $('finding-error').hidden = true;
+  updateFindingExpiration();
+  $('finding-editor').showModal();
+  $('finding-history').innerHTML = '<p class="muted">Loading history…</p>';
+  try {
+    const response = await fetch(`/api/applications/${encodeURIComponent(application.id)}/findings/${encodeURIComponent(finding.id)}/history`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not load finding history');
+    $('finding-history').innerHTML = data.entries.length ? data.entries.map(event => {
+      const actor = event.actor?.name || event.actor?.username || 'Automated assessment';
+      const action = event.type === 'finding-discovered' ? 'Finding discovered' : event.type === 'finding-reopened' ? `Reopened: ${event.reason}` : `Workflow updated to ${event.state || 'a new state'}`;
+      const changes = event.changes ? Object.keys(event.changes).map(field => `<span>${escape(field)}: ${escape(event.changes[field].from || 'empty')} → ${escape(event.changes[field].to || 'empty')}</span>`).join('') : '';
+      return `<article><div><strong>${escape(action)}</strong><time>${escape(new Date(event.at).toLocaleString())}</time></div><p>${escape(actor)}</p>${changes ? `<div class="finding-history-changes">${changes}</div>` : ''}</article>`;
+    }).join('') : '<p class="muted">No recorded history for this finding yet.</p>';
+  } catch (error) { $('finding-history').innerHTML = `<p class="form-error">${escape(error.message)}</p>`; }
+}
+
+function updateFindingExpiration() {
+  const accepted = $('finding-form').elements.state.value === 'risk-accepted';
+  $('finding-risk-expiration').hidden = !accepted;
+  if (!accepted) $('finding-form').elements.riskExpiration.value = '';
+}
+
+async function saveFindingWorkflow(event) {
+  event.preventDefault();
+  const application = allResults.find(item => item.id === detailAppId);
+  const finding = application?.vulnerabilities.find(item => item.id === activeFindingId);
+  if (!application || !finding) return;
+  try {
+    const payload = Object.fromEntries(new FormData($('finding-form')));
+    const response = await fetch(`/api/applications/${encodeURIComponent(application.id)}/findings/${encodeURIComponent(finding.id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not update finding workflow');
+    finding.workflow = data;
+    $('finding-editor').close();
+    showDetails(application);
+  } catch (error) { $('finding-error').textContent = error.message; $('finding-error').hidden = false; }
 }
 
 function associationRow(key, title, emptyText) {
@@ -624,7 +691,10 @@ function applyAssociation() {
 async function openEditor(mode, targetId = null) {
   editorMode = mode;
   editorTargetId = targetId;
+  $('editor').dataset.mode = mode;
   $('editor-error').hidden = true;
+  $('editor-danger').hidden = true;
+  $('editor-delete').disabled = false;
   $('editor-fields').innerHTML = '<p class="muted">Loading inventory…</p>';
   $('editor-title').textContent = mode === 'app' ? targetId ? 'Edit application' : 'Add application' : targetId ? 'Edit workspace' : 'Add or edit workspace';
   $('editor').showModal();
@@ -673,6 +743,7 @@ async function openEditor(mode, targetId = null) {
         cpeMapping = { cpeName: app.cpeName || `cpe:2.3:a:${app.cpeVendor}:${app.cpeProduct}:*:*:*:*:${app.cpeEdition || '*'}:*:*:*`, mode: app.cpeMode || 'product', title: app.cpeTitle || app.name, deprecated: app.cpeDeprecated === true || app.cpeDeprecated === 'true', testedAt: app.cpeLastTestedAt || '', candidateCount: app.cpeTestCandidateCount || '', applicableCount: app.cpeTestApplicableCount || '' };
         if (app.lifecycleProduct) lifecycleMapping = { name: app.lifecycleProduct, label: app.lifecycleProduct, sourceUrl: app.lifecycleUrl || `https://endoflife.date/${app.lifecycleProduct}` };
       }
+      updateEditorDanger();
       renderMappingSummary();
       renderLifecycleSummary();
     } else {
@@ -889,6 +960,78 @@ function populateWorkspaceEditor() {
     form.querySelector('[data-association="ownerIds"]').disabled = !permissions.workspaces.notifications.includes(group.id);
     form.querySelector('[data-association="applicationIds"]').disabled = !permissions.workspaces.membership.includes(group.id);
   }
+  updateEditorDanger();
+}
+
+function updateEditorDanger() {
+  const resource = editorMode === 'app' ? editorConfig.applications.find(item => item.id === editorTargetId) : editorConfig.workspaces.find(item => item.id === editorTargetId);
+  const allowed = resource && (editorMode === 'app' ? isAdmin : isAdmin || permissions.workspaces.edit.includes(resource.id));
+  $('editor-danger').hidden = !allowed;
+  if (!allowed) return;
+  $('editor-danger-title').textContent = `Delete ${editorMode === 'app' ? 'application' : 'workspace'}`;
+  $('editor-danger-description').textContent = editorMode === 'app'
+    ? 'Removes this application from inventory, workspaces, feeds, and the current snapshot. Finding workflow history is preserved.'
+    : 'Removes only this workspace. Its applications and finding workflow history are preserved.';
+  $('editor-delete').textContent = `Delete ${editorMode === 'app' ? 'application' : 'workspace'}`;
+}
+
+function openDeleteConfirmation() {
+  const resource = editorMode === 'app' ? editorConfig.applications.find(item => item.id === editorTargetId) : editorConfig.workspaces.find(item => item.id === editorTargetId);
+  if (!resource) return;
+  deleteConfirmation = { mode: editorMode, id: resource.id, name: resource.name };
+  $('delete-confirmation-title').textContent = `Delete ${editorMode === 'app' ? 'application' : 'workspace'}`;
+  $('delete-confirmation-scope').textContent = editorMode === 'app'
+    ? 'This removes the application from inventory, workspaces, feeds, and the current snapshot. Finding workflow history is preserved.'
+    : 'This removes only the workspace. Its applications and finding workflow history are preserved.';
+  $('delete-confirmation-name').textContent = resource.name;
+  $('delete-confirmation-input').value = '';
+  $('delete-confirmation-submit').disabled = true;
+  $('delete-confirmation-submit').textContent = `Delete ${editorMode === 'app' ? 'application' : 'workspace'} permanently`;
+  $('delete-confirmation-error').hidden = true;
+  $('delete-confirmation').showModal();
+  $('delete-confirmation-input').focus();
+}
+
+function closeDeleteConfirmation() {
+  deleteConfirmation = null;
+  $('delete-confirmation').close();
+}
+
+function updateDeleteConfirmation() {
+  $('delete-confirmation-submit').disabled = !deleteConfirmation || $('delete-confirmation-input').value !== deleteConfirmation.name;
+  $('delete-confirmation-error').hidden = true;
+}
+
+async function deleteEditorResource(event) {
+  event.preventDefault();
+  if (!deleteConfirmation) return;
+  const confirmation = $('delete-confirmation-input').value;
+  if (confirmation !== deleteConfirmation.name) {
+    $('delete-confirmation-submit').disabled = true;
+    $('delete-confirmation-error').textContent = 'The name does not match. Nothing was deleted.';
+    $('delete-confirmation-error').hidden = false;
+    return;
+  }
+  const request = { ...deleteConfirmation };
+  const button = $('delete-confirmation-submit');
+  button.disabled = true;
+  button.textContent = 'Deleting…';
+  $('delete-confirmation-error').hidden = true;
+  try {
+    const endpoint = `/api/${request.mode === 'app' ? 'applications' : 'workspaces'}/${encodeURIComponent(request.id)}`;
+    const response = await fetch(endpoint, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmation }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Could not delete resource');
+    deleteConfirmation = null;
+    $('delete-confirmation').close();
+    $('editor').close();
+    if (request.mode === 'workspace') selectWorkspace(null);
+    await load(false, false);
+  } catch (error) {
+    $('delete-confirmation-error').textContent = error.message;
+    $('delete-confirmation-error').hidden = false;
+    button.disabled = $('delete-confirmation-input').value !== request.name;
+    button.textContent = `Delete ${request.mode === 'app' ? 'application' : 'workspace'} permanently`;
+  }
 }
 
 function applySavedEditorState(saved, payload, fields) {
@@ -983,6 +1126,12 @@ $('manage-workspaces').addEventListener('click', () => openEditor('workspace'));
 $('edit-workspace').addEventListener('click', () => { const group = activeWorkspace(); if (group && group.id !== 'all') openEditor('workspace', group.id); });
 $('edit-app').addEventListener('click', () => { const id = detailAppId; $('details').close(); if (id) openEditor('app', id); });
 $('editor-form').addEventListener('submit', saveEditor);
+$('editor-delete').addEventListener('click', openDeleteConfirmation);
+$('delete-confirmation-form').addEventListener('submit', deleteEditorResource);
+$('delete-confirmation-input').addEventListener('input', updateDeleteConfirmation);
+$('delete-confirmation-close').addEventListener('click', closeDeleteConfirmation);
+$('delete-confirmation-cancel').addEventListener('click', closeDeleteConfirmation);
+$('delete-confirmation').addEventListener('close', () => { deleteConfirmation = null; });
 $('editor-fields').addEventListener('click', event => {
   const button = event.target.closest('[data-association]');
   if (!button || button.disabled) return;
@@ -1082,6 +1231,12 @@ window.addEventListener('hashchange', () => { activeFilters = null; renderView()
 $('theme-toggle').addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
 $('close').addEventListener('click', () => $('details').close());
 $('details').addEventListener('click', e => { if (e.target === $('details')) $('details').close(); });
+$('detail-body').addEventListener('click', event => { const button = event.target.closest('.finding-edit'); if (button) openFindingEditor(button.closest('[data-finding-id]').dataset.findingId); });
+$('finding-form').addEventListener('submit', saveFindingWorkflow);
+$('finding-form').elements.state.addEventListener('change', updateFindingExpiration);
+$('finding-editor-close').addEventListener('click', () => $('finding-editor').close());
+$('finding-cancel').addEventListener('click', () => $('finding-editor').close());
+$('finding-editor').addEventListener('click', event => { if (event.target === $('finding-editor')) $('finding-editor').close(); });
 setTheme(document.documentElement.dataset.theme || 'light');
 fetch('/api/session', { cache: 'no-store' }).then(response => response.json()).then(data => {
   isAdmin = Boolean(data.isAdmin);

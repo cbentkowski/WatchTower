@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createNotifier, sendTestEmail } from '../notifications.mjs';
-import { smtpPasswordState, validateSmtpSettings } from '../settings.mjs';
+import { createNotifier, sendTestEmail } from '../src/notifications.mjs';
+import { smtpPasswordState, validateSmtpSettings } from '../src/settings.mjs';
 
 const settings = { enabled: true, host: 'smtp.example.com', port: 587, secure: false, requireTls: true, unauthenticated: true, from: 'alerts@example.com', baseUrl: 'https://watchtower.example.com', timeZone: 'UTC', sendHour: 9, usernameEnv: '' };
 const app = (version = '1.0') => ({ id: 'app', name: 'Test App', version, status: 'red', vulnerabilities: [{ id: 'CVE-2026-1234', score: 9 }], lifecycle: { state: 'supported' }, reasons: ['High risk finding'] });
@@ -34,6 +34,19 @@ test('needs-action alert is immediate, weekly thereafter, and stops after acknow
   assert.equal(sent.length, 2);
   await notifier.onScan(snapshot(app('1.1')));
   assert.equal(sent.length, 3);
+});
+
+test('alert messages include linked and plain external finding tickets', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-ticket-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const sent = [];
+  const ticketed = { ...app(), vulnerabilities: [{ id: 'CVE-2026-1234', score: 9, workflow: { ticketReference: 'https://tickets.example.com/SEC-123' } }, { id: 'CVE-2026-9999', score: 8, workflow: { ticketReference: 'Remedy INC0001234' } }] };
+  const notifier = createNotifier({ dataDirectory: directory, settingsLoader: async () => settings, clock: () => new Date('2026-09-20T09:00:00Z'), transport: { sendMail: async message => { sent.push(message); return { accepted: ['team@example.com'], rejected: [] }; } } });
+  await notifier.onScan(snapshot(ticketed));
+  assert.match(sent[0].text, /Ticket \(CVE-2026-1234\): https:\/\/tickets\.example\.com\/SEC-123/);
+  assert.match(sent[0].html, /href="https:\/\/tickets\.example\.com\/SEC-123"/);
+  assert.match(sent[0].text, /Ticket \(CVE-2026-9999\): Remedy INC0001234/);
+  assert.match(sent[0].html, /CVE-2026-9999 ticket: <strong>Remedy INC0001234<\/strong>/);
 });
 
 test('EOL alert fires once within 30 days and weekly after expiration', async t => {

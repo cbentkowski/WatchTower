@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateAccess, canCreateOwner, describeIdentityClaims, explainAccess, protectedRoleState, validateRbacInput } from '../rbac.mjs';
+import { calculateAccess, canCreateOwner, canDeleteApplication, describeIdentityClaims, explainAccess, protectedRoleState, validateRbacInput } from '../src/rbac.mjs';
 
 const appA = { id: '11111111-1111-4111-8111-111111111111', name: 'Jira' };
 const appB = { id: '22222222-2222-4222-8222-222222222222', name: 'GitLab' };
@@ -46,6 +46,7 @@ test('application editors and notification managers may create but do not admini
     grants: [{ id: grantId, groupId, scopeType: 'application', roles: ['application-editor'], resourceIds: [appA.id] }],
   }, [appA], [workspace]);
   assert.equal(canCreateOwner(editor), true);
+  assert.equal(canDeleteApplication(editor), false);
   assert.equal(editor.isAdmin, false);
 
   const notifications = calculateAccess({ claims: { groups: ['notifications'] } }, {
@@ -60,6 +61,16 @@ test('application editors and notification managers may create but do not admini
     grants: [{ id: grantId, groupId, scopeType: 'application', roles: ['application-viewer'], resourceIds: [appA.id] }],
   }, [appA], [workspace]);
   assert.equal(canCreateOwner(viewer), false);
+});
+
+test('only full administrators may delete application inventory records', () => {
+  const inheritedEditor = calculateAccess({ claims: { groups: ['workspace-editors'] } }, {
+    groups: [{ id: groupId, name: 'Workspace Editors', claimSource: 'groups', claimValue: 'workspace-editors', enabled: true }],
+    grants: [{ id: grantId, groupId, scopeType: 'workspace', roles: ['workspace-application-editor'], resourceIds: [workspace.id] }],
+  }, [appA, appB], [workspace]);
+  assert.equal(inheritedEditor.appEdit.has(appA.id), true);
+  assert.equal(canDeleteApplication(inheritedEditor), false);
+  assert.equal(canDeleteApplication(calculateAccess({ issuer: 'local', isAdmin: true }, { groups: [], grants: [] }, [appA], [workspace])), true);
 });
 
 test('feed roles separate scoped viewing and editing from global feed management', () => {
