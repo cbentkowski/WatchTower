@@ -36,6 +36,18 @@ test('needs-action alert is immediate, weekly thereafter, and stops after acknow
   assert.equal(sent.length, 3);
 });
 
+test('alert messages include validated external finding tickets', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-ticket-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const sent = [];
+  const ticketed = { ...app(), vulnerabilities: [{ id: 'CVE-2026-1234', score: 9, workflow: { ticketUrl: 'https://tickets.example.com/SEC-123' } }, { id: 'CVE-2026-9999', score: 8, workflow: { ticketUrl: 'javascript:alert(1)' } }] };
+  const notifier = createNotifier({ dataDirectory: directory, settingsLoader: async () => settings, clock: () => new Date('2026-09-20T09:00:00Z'), transport: { sendMail: async message => { sent.push(message); return { accepted: ['team@example.com'], rejected: [] }; } } });
+  await notifier.onScan(snapshot(ticketed));
+  assert.match(sent[0].text, /Ticket \(CVE-2026-1234\): https:\/\/tickets\.example\.com\/SEC-123/);
+  assert.match(sent[0].html, /href="https:\/\/tickets\.example\.com\/SEC-123"/);
+  assert.doesNotMatch(`${sent[0].text}${sent[0].html}`, /javascript:/);
+});
+
 test('EOL alert fires once within 30 days and weekly after expiration', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

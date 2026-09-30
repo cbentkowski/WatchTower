@@ -48,7 +48,7 @@ A green status is not proof that an application is vulnerability-free. New vulne
 
 Select an application row to open a wide application workspace with ownership, local risk context, installed and available releases, assessment reasons, vulnerability findings, vendor-feed evidence, and source links. Confirm remediation decisions against the linked vendor advisory.
 
-Application Editors can select **Update response** on a finding to record its state as New, Investigating, Remediation planned, Mitigated, Resolved, Risk accepted, Not affected, or False positive. A response can also include an assignee, due date, notes, and an optional expiration for Risk accepted. WatchTower records the actor and timestamps in audit and finding history. Expired risk acceptance or changed vulnerability evidence automatically returns a completed disposition to New for review.
+Application Editors can select **Update response** on a finding to record its state as New, Investigating, Remediation planned, Mitigated, Resolved, Risk accepted, Not affected, or False positive. A response can also include an assignee, due date, notes, an optional expiration for Risk accepted, and an HTTPS link to work tracked in Jira, ServiceNow, GitHub Issues, Azure DevOps, or another external system. Ticket links appear in application details and alert emails. WatchTower records the actor and timestamps in audit and finding history. Expired risk acceptance or changed vulnerability evidence automatically returns a completed disposition to New for review.
 
 ## Applications
 
