@@ -18,7 +18,7 @@ import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
 import { loadTlsConfiguration } from './tls.mjs';
 import { cpeSearchMatch, effectiveCpe, legacyCpe, mappingFromApp, mappingWarnings, parseCpe23, productCpe } from './cpe.mjs';
 import { matchLifecycleRelease, normalizeLifecycleProduct, searchLifecycleProducts } from './lifecycle.mjs';
-import { appendFindingEvents, readFindingStore, reconcileFindingWorkflows, updateFindingWorkflow, writeFindingStore } from './findings.mjs';
+import { appendFindingEvents, readFindingEvents, readFindingStore, reconcileFindingWorkflows, updateFindingWorkflow, writeFindingStore } from './findings.mjs';
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.dirname(sourceDirectory);
@@ -92,9 +92,15 @@ let nvdLastRequest = 0;
 let lifecycleCatalogCache = null;
 const permissionPreviews = new Map();
 const previewLifetime = 8 * 60 * 60 * 1000;
-const snapshotReady = readFile(snapshotFile, 'utf8').then(raw => {
+const snapshotReady = readFile(snapshotFile, 'utf8').then(async raw => {
   const saved = JSON.parse(raw);
-  if (saved.checkedAt && Array.isArray(saved.results) && Array.isArray(saved.workspaces)) snapshot = saved;
+  if (saved.checkedAt && Array.isArray(saved.results) && Array.isArray(saved.workspaces)) {
+    const findingStore = await readFindingStore(findingStoreFile);
+    const reconciliation = reconcileFindingWorkflows(findingStore, saved.results);
+    if (reconciliation.changed) await writeFindingStore(findingStoreFile, findingStore);
+    await appendFindingEvents(findingHistoryFile, reconciliation.events);
+    snapshot = saved;
+  }
 }).catch(error => { if (error.code !== 'ENOENT') console.warn(`Could not load saved scan: ${error.message}`); });
 const yamlCheckInterval = Number(process.env.YAML_CHECK_INTERVAL_MS || 30_000);
 const yamlMonitor = createYamlMonitor({
@@ -1050,8 +1056,19 @@ const requestHandler = async (req, res) => {
       await logger.audit('Feed removed', auditActor(req), { type: 'feed', id: feed.id, name: feed.name }, { applicationIds: feed.applicationIds }, `${feed.name} (${feed.id})`);
       res.writeHead(204); res.end(); return;
     }
+    const findingHistoryRoute = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/findings\/(.+)\/history$/i);
+    if (findingHistoryRoute && req.method === 'GET') {
+      const applicationId = findingHistoryRoute[1];
+      const findingId = decodeURIComponent(findingHistoryRoute[2]);
+      const { apps, access } = await authorization(req);
+      if (!access.appView.has(applicationId)) { forbidden(res); return; }
+      if (!apps.some(item => item.id === applicationId)) throw new Error('Application not found');
+      const entries = await readFindingEvents(findingHistoryFile, applicationId, findingId);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ entries })); return;
+    }
     const findingRoute = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/findings\/(.+)$/i);
     if (findingRoute && req.method === 'PUT') {
+      await snapshotReady;
       const applicationId = findingRoute[1];
       const findingId = decodeURIComponent(findingRoute[2]);
       const { apps, access } = await authorization(req);

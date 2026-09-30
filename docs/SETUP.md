@@ -38,7 +38,7 @@ WatchTower runs its own hourly scheduler. Do not create a host cron job or a sec
 Mount persistent storage at `/home/container`. WatchTower creates and maintains these directories inside it:
 
 - `/home/container/config` contains application, owner, workspace, feed, access-control, general, and email configuration.
-- `/home/container/data` contains the latest scan, feed cache, notification state, and system, feed, audit, and authentication logs.
+- `/home/container/data` contains the latest scan, finding workflows and append-only finding history, feed cache, notification state, and system, feed, audit, and authentication logs.
 
 Back up the entire mounted directory. Replacing a container without preserving this mount removes configuration, acknowledgement state, and locally retained results.
 

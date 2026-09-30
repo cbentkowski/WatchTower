@@ -18,7 +18,7 @@ const date = (value, name) => {
 };
 export const findingKey = (applicationId, findingId) => `${applicationId}:${findingId}`;
 export function evidenceFingerprint(finding) {
-  const evidence = { id: finding.id, score: Number(finding.score) || 0, severity: finding.severity || finding.label || '', knownExploited: Boolean(finding.knownExploited), url: finding.url || '', advisories: [...(finding.advisories || [])].sort(), description: finding.description || '' };
+  const evidence = { id: finding.id, score: Number(finding.score) || 0, severity: finding.severity || finding.label || '', knownExploited: Boolean(finding.knownExploited), url: finding.url || '', advisories: [...(finding.advisories || [])].sort() };
   return createHash('sha256').update(JSON.stringify(evidence)).digest('hex');
 }
 export function validateFindingUpdate(input = {}) {
@@ -46,6 +46,19 @@ export async function appendFindingEvents(file, events) {
   if (!events.length) return;
   await mkdir(path.dirname(file), { recursive: true });
   await appendFile(file, events.map(event => `${JSON.stringify(event)}\n`).join(''), 'utf8');
+}
+export async function readFindingEvents(file, applicationId, findingId, limit = 50) {
+  try {
+    const lines = (await readFile(file, 'utf8')).trim().split('\n').filter(Boolean);
+    const events = [];
+    for (let index = lines.length - 1; index >= 0 && events.length < limit; index--) {
+      try {
+        const event = JSON.parse(lines[index]);
+        if (event.applicationId === applicationId && event.findingId === findingId) events.push(event);
+      } catch {}
+    }
+    return events;
+  } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 }
 function publicWorkflow(record) {
   return { state: record.state, stateLabel: findingStateLabels[record.state], assignee: record.assignee, dueDate: record.dueDate, notes: record.notes, riskExpiration: record.riskExpiration, discoveredAt: record.discoveredAt, updatedAt: record.updatedAt, updatedBy: record.updatedBy, reopenedAt: record.reopenedAt || '', reopenedReason: record.reopenedReason || '' };
