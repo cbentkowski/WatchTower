@@ -377,8 +377,8 @@ jobs:
           context: .
           push: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository) }}
           tags: ${{ steps.image.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          pull: true
+          no-cache: true
           sbom: true
           provenance: mode=max
       - name: Install Cosign
