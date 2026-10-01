@@ -183,6 +183,16 @@ An empty multi-select means **Any** and does not restrict that field. For exampl
 
 Policies can use severity, known-exploitation evidence, application criticality, environment, exposure, workspace, owner, finding state, and minimum or maximum finding age. Select **Preview matches** to evaluate a draft against the latest assessment. The preview lists matching finding, application, and workspace names and must be refreshed after every draft change before the policy can be saved.
 
+Each policy also controls delivery and routing:
+
+- **Adaptive** preserves WatchTower's established behavior: new Critical or known-exploited findings can send immediately, while other matches and reminders use the delivery hour.
+- **Immediate** sends a new match on the next scan during the allowed delivery window. **Daily digest** sends at the policy delivery hour, and **Weekly digest** sends on the chosen weekday and hour.
+- A blank policy delivery hour inherits the global email delivery hour. The allowed start and end hours limit sending in the configured time zone; a start later than the end represents an overnight window.
+- The reminder interval controls how many days WatchTower waits before sending an unresolved match again. Notification state is persisted, so scans and container restarts do not resend the same match early.
+- Workspace owners are included by default. A policy can add specific owners or use only those selected owners. When escalation is enabled, their escalation addresses are added after the configured number of matched days.
+
+The required preview shows the timing rule, resolved recipient names and email addresses for each matching workspace, escalation routes, and matching findings. Use it to confirm both who will receive a message and when it can be sent before saving.
+
 Disabling a policy preserves it without allowing it to match. Removing every policy prevents vulnerability findings from entering notification delivery; lifecycle notifications continue to follow their existing behavior.
 
 Each workspace receives its own message containing alerts due for its applications. An application in several workspaces can generate a message for each workspace. Initial Critical and known-exploited findings can send immediately; scheduled High, lifecycle, and reminder messages wait for the configured local delivery window.

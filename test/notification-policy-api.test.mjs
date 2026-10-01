@@ -41,12 +41,16 @@ test('notification policy API migrates defaults, previews drafts, and persists r
     const draft = { id: 'critical-only', name: 'Critical only', enabled: true, conditions: { severities: ['critical'] } };
     const previewResponse = await fetch(`${origin}/api/notification-policies/preview`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ policy: draft }) });
     assert.equal(previewResponse.status, 200);
-    assert.deepEqual(await previewResponse.json(), { policy: draft, evaluatedFindings: 0, matches: [] });
+    const preview = await previewResponse.json();
+    assert.deepEqual(preview.matches, []);
+    assert.deepEqual(preview.routes, []);
+    assert.equal(preview.delivery.cadence, 'adaptive');
 
     const saveResponse = await fetch(`${origin}/api/notification-policies`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ policies: [draft] }) });
     assert.equal(saveResponse.status, 200);
-    assert.deepEqual((await saveResponse.json()).policies, [draft]);
-    assert.deepEqual((JSON.parse(await readFile(path.join(directory, 'notification-policies.json'), 'utf8'))).policies, [draft]);
+    const saved = (await saveResponse.json()).policies;
+    assert.equal(saved[0].delivery.cadence, 'adaptive');
+    assert.deepEqual((JSON.parse(await readFile(path.join(directory, 'notification-policies.json'), 'utf8'))).policies, saved);
   } finally {
     child.kill('SIGTERM');
     await new Promise(resolve => child.once('exit', resolve));

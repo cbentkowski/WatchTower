@@ -35,15 +35,19 @@ test('policy validation rejects empty, duplicate, invalid-resource, and inverted
   assert.throws(() => validateNotificationPolicy({ name: 'Missing workspace', conditions: { workspaceIds: ['missing'] } }, resources), /valid workspaces/);
   assert.throws(() => validateNotificationPolicy({ name: 'Age', conditions: { minimumAgeDays: 10, maximumAgeDays: 2 } }), /Minimum age/);
   assert.throws(() => validateNotificationPolicies([{ id: 'one', name: 'Same', conditions: { knownExploited: true } }, { id: 'two', name: 'same', conditions: { severities: ['high'] } }]), /names must be unique/);
+  assert.throws(() => validateNotificationPolicy({ name: 'No route', conditions: { severities: ['high'] }, delivery: { workspaceRecipients: false } }, resources), /workspace recipients/);
+  assert.throws(() => validateNotificationPolicy({ name: 'Escalation', conditions: { severities: ['high'] }, delivery: { includeEscalationContacts: true } }, resources), /escalation age/);
 });
 
 test('policy preview returns human-readable matches and explanations without saving', () => {
   const policy = validateNotificationPolicy({ id: 'production-critical', name: 'Production critical', conditions: { severities: ['critical'], environments: ['production'] } });
   const preview = previewNotificationPolicy(policy, {
-    workspaces: [{ id: 'workspace-1', name: 'Operations', applications: ['app-1'] }],
+    owners: [{ id: 'owner-1', name: 'Security', email: 'security@example.com', escalationEmail: 'security-lead@example.com' }],
+    workspaces: [{ id: 'workspace-1', name: 'Operations', ownerIds: ['owner-1'], applications: ['app-1'] }],
     results: [{ id: 'app-1', name: 'Payments', environment: 'production', vulnerabilities: [{ id: 'CVE-2026-1234', score: 9.8 }] }],
   });
   assert.equal(preview.evaluatedFindings, 1);
   assert.deepEqual(preview.matches.map(({ workspace, application, finding }) => ({ workspace, application, finding })), [{ workspace: 'Operations', application: 'Payments', finding: 'CVE-2026-1234' }]);
   assert.ok(preview.matches[0].explanation.every(item => item.matched));
+  assert.deepEqual(preview.routes[0].recipients, [{ name: 'Security', email: 'security@example.com' }]);
 });

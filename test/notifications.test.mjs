@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createNotifier, sendTestEmail } from '../src/notifications.mjs';
@@ -131,6 +131,63 @@ test('notification policies determine which vulnerable findings enter the existi
   policies = [{ id: 'development', name: 'Development', conditions: { environments: ['development'] } }];
   await notifier.onScan(snapshot({ ...app(), environment: 'development' }));
   assert.equal(sent.length, 1);
+});
+
+test('policy cadence and delivery windows control daily and weekly digests', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-cadence-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const sent = [];
+  let now = new Date('2026-09-21T08:00:00Z'); // Monday
+  let policies = [{ id: 'daily', name: 'Daily', conditions: { severities: ['critical'] }, delivery: { cadence: 'daily', sendHour: 10, windowStartHour: 9, windowEndHour: 17, reminderDays: 7, workspaceRecipients: true, recipientOwnerIds: [] } }];
+  const notifier = createNotifier({ dataDirectory: directory, settingsLoader: async () => settings, policyLoader: async () => policies, clock: () => now, transport: { sendMail: async message => { sent.push(message); return { accepted: ['team@example.com'], rejected: [] }; } } });
+  await notifier.onScan(snapshot(app()));
+  assert.equal(sent.length, 0);
+  now = new Date('2026-09-21T10:00:00Z');
+  await notifier.onScan(snapshot(app()));
+  assert.equal(sent.length, 1);
+
+  const weeklyDirectory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-weekly-'));
+  t.after(() => rm(weeklyDirectory, { recursive: true, force: true }));
+  const weeklySent = [];
+  policies = [{ id: 'weekly', name: 'Weekly', conditions: { severities: ['critical'] }, delivery: { cadence: 'weekly', sendHour: 10, weeklyDay: 2, windowStartHour: 0, windowEndHour: 23, reminderDays: 7, workspaceRecipients: true, recipientOwnerIds: [] } }];
+  const weeklyNotifier = createNotifier({ dataDirectory: weeklyDirectory, settingsLoader: async () => settings, policyLoader: async () => policies, clock: () => now, transport: { sendMail: async message => { weeklySent.push(message); return { accepted: ['team@example.com'], rejected: [] }; } } });
+  await weeklyNotifier.onScan(snapshot(app()));
+  assert.equal(weeklySent.length, 0);
+  now = new Date('2026-09-22T10:00:00Z'); // Tuesday
+  await weeklyNotifier.onScan(snapshot(app()));
+  assert.equal(weeklySent.length, 1);
+});
+
+test('policy routing adds selected owners and later escalation contacts without losing restart deduplication', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-routing-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const sent = [];
+  let now = new Date('2026-09-20T09:00:00Z');
+  const policy = { id: 'route', name: 'Route', conditions: { severities: ['critical'] }, delivery: { cadence: 'immediate', windowStartHour: 0, windowEndHour: 23, reminderDays: 1, workspaceRecipients: true, recipientOwnerIds: ['security'], includeEscalationContacts: true, escalationAfterDays: 2 } };
+  const routedSnapshot = { owners: [{ id: 'owner', name: 'Team owner', email: 'team@example.com', escalationEmail: 'team-lead@example.com' }, { id: 'security', name: 'Security', email: 'security@example.com', escalationEmail: 'security-lead@example.com' }], workspaces: [{ id: 'team', name: 'Team', ownerIds: ['owner'], applications: ['app'] }], results: [app()] };
+  const makeNotifier = () => createNotifier({ dataDirectory: directory, settingsLoader: async () => settings, policyLoader: async () => [policy], clock: () => now, transport: { sendMail: async message => { sent.push(message); return { accepted: String(message.to).split(', '), rejected: [] }; } } });
+  await makeNotifier().onScan(routedSnapshot);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].to, /team@example.com/);
+  assert.match(sent[0].to, /security@example.com/);
+  await makeNotifier().onScan(routedSnapshot);
+  assert.equal(sent.length, 1);
+  now = new Date('2026-09-22T09:00:00Z');
+  await makeNotifier().onScan(routedSnapshot);
+  assert.equal(sent.length, 2);
+  assert.match(sent[1].to, /team-lead@example.com/);
+  assert.match(sent[1].to, /security-lead@example.com/);
+});
+
+test('legacy notification state migrates without resending an already delivered match', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-state-migration-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, 'notifications.json'), JSON.stringify({ entries: { [JSON.stringify(['team', 'app', '1.0'])]: { token: 'legacy-token', redLastSentOn: '2026-09-20', urgentFingerprint: 'CVE-2026-1234:9:false' } } }));
+  const sent = [];
+  const notifier = createNotifier({ dataDirectory: directory, settingsLoader: async () => settings, clock: () => new Date('2026-09-20T09:00:00Z'), transport: { sendMail: async message => { sent.push(message); return { accepted: ['team@example.com'], rejected: [] }; } } });
+  await notifier.onScan(snapshot(app()));
+  assert.equal(sent.length, 0);
 });
 
 test('unmatched findings do not affect urgency or appear in policy-routed messages', async t => {

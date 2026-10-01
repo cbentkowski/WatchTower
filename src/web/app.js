@@ -401,9 +401,16 @@ function policyConditionText(policy) {
   }).join(' · ');
 }
 
+const deliveryCadenceLabel = cadence => ({ adaptive: 'Immediate for urgent findings; daily otherwise', immediate: 'Immediate', daily: 'Daily digest', weekly: 'Weekly digest' })[cadence] || cadence;
+function policyDeliveryText(policy) {
+  const delivery = policy.delivery || {};
+  const hour = delivery.sendHour === null || delivery.sendHour === undefined ? 'global delivery hour' : `${String(delivery.sendHour).padStart(2, '0')}:00`;
+  return `${deliveryCadenceLabel(delivery.cadence || 'adaptive')} · ${hour} · reminders every ${delivery.reminderDays || 7} days`;
+}
+
 function renderNotificationPolicies() {
   const list = $('notification-policy-list');
-  list.innerHTML = notificationPolicyData.policies.length ? notificationPolicyData.policies.map(policy => `<article class="policy-row"><div><h3>${escape(policy.name)}</h3><p>${escape(policyConditionText(policy))}</p></div><span class="policy-state ${policy.enabled === false ? 'disabled' : ''}">${policy.enabled === false ? 'Disabled' : 'Enabled'}</span><button type="button" data-notification-policy="${escape(policy.id)}">Edit</button></article>`).join('') : '<div class="empty"><strong>No notification policies configured</strong><p>No vulnerability findings will enter notification delivery until an enabled policy is added.</p></div>';
+  list.innerHTML = notificationPolicyData.policies.length ? notificationPolicyData.policies.map(policy => `<article class="policy-row"><div><h3>${escape(policy.name)}</h3><p>${escape(policyConditionText(policy))}</p><p>${escape(policyDeliveryText(policy))}</p></div><span class="policy-state ${policy.enabled === false ? 'disabled' : ''}">${policy.enabled === false ? 'Disabled' : 'Enabled'}</span><button type="button" data-notification-policy="${escape(policy.id)}">Edit</button></article>`).join('') : '<div class="empty"><strong>No notification policies configured</strong><p>No vulnerability findings will enter notification delivery until an enabled policy is added.</p></div>';
 }
 
 async function loadNotificationPolicies() {
@@ -425,11 +432,29 @@ function policyDraft() {
   }
   if (form.elements.knownExploited.value !== '') conditions.knownExploited = form.elements.knownExploited.value === 'true';
   for (const field of ['minimumAgeDays', 'maximumAgeDays']) if (form.elements[field].value !== '') conditions[field] = Number(form.elements[field].value);
-  return { id: current?.id || crypto.randomUUID(), name: form.elements.name.value, enabled: form.elements.enabled.checked, conditions };
+  const delivery = {
+    cadence: form.elements.deliveryCadence.value,
+    sendHour: form.elements.deliveryHour.value === '' ? null : Number(form.elements.deliveryHour.value),
+    weeklyDay: Number(form.elements.weeklyDay.value),
+    windowStartHour: Number(form.elements.windowStartHour.value),
+    windowEndHour: Number(form.elements.windowEndHour.value),
+    reminderDays: Number(form.elements.reminderDays.value),
+    workspaceRecipients: form.elements.workspaceRecipients.checked,
+    recipientOwnerIds: selectedPolicyValues(form.elements.recipientOwnerIds),
+    includeEscalationContacts: form.elements.includeEscalationContacts.checked,
+    escalationAfterDays: form.elements.escalationAfterDays.value === '' ? null : Number(form.elements.escalationAfterDays.value),
+  };
+  return { id: current?.id || crypto.randomUUID(), name: form.elements.name.value, enabled: form.elements.enabled.checked, conditions, delivery };
+}
+
+function ensurePolicyDeliveryFields() {
+  if ($('policy-delivery-fields')) return;
+  $('notification-policy-preview').closest('.policy-preview-section').insertAdjacentHTML('beforebegin', `<section id="policy-delivery-fields" class="policy-delivery-section"><h3>Delivery and routing</h3><div class="policy-condition-grid"><label>Cadence<small>Adaptive preserves the existing urgent-immediate and daily behavior.</small><select name="deliveryCadence"><option value="adaptive">Adaptive</option><option value="immediate">Immediate</option><option value="daily">Daily digest</option><option value="weekly">Weekly digest</option></select></label><label>Delivery hour<small>Blank uses the global email delivery hour.</small><input name="deliveryHour" type="number" min="0" max="23" placeholder="Global"></label><label>Weekly delivery day<select name="weeklyDay"><option value="0">Sunday</option><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option></select></label><label>Reminder interval in days<input name="reminderDays" type="number" min="1" max="365" value="7" required></label><label>Allowed window starts<input name="windowStartHour" type="number" min="0" max="23" value="0" required></label><label>Allowed window ends<input name="windowEndHour" type="number" min="0" max="23" value="23" required></label><label class="setting-enabled"><input name="workspaceRecipients" type="checkbox" checked> Include workspace owners</label><label>Additional delivery owners<small>No selection adds no policy-specific owners.</small><select name="recipientOwnerIds" multiple size="6"></select></label><label class="setting-enabled"><input name="includeEscalationContacts" type="checkbox"> Add escalation contacts after</label><label>Escalation age in days<small>Required when escalation contacts are enabled.</small><input name="escalationAfterDays" type="number" min="1" max="365" placeholder="Days"></label></div></section>`);
 }
 
 const policyOptions = (values, selected = []) => values.map(value => `<option value="${escape(value)}" ${selected.includes(value) ? 'selected' : ''}>${escape(friendlyPolicyValue(value))}</option>`).join('');
 function openNotificationPolicyEditor(id = null) {
+  ensurePolicyDeliveryFields();
   currentNotificationPolicyId = id;
   const policy = notificationPolicyData.policies.find(item => item.id === id);
   const form = $('notification-policy-form');
@@ -443,6 +468,17 @@ function openNotificationPolicyEditor(id = null) {
   form.elements.knownExploited.value = policy?.conditions && Object.hasOwn(policy.conditions, 'knownExploited') ? String(policy.conditions.knownExploited) : '';
   form.elements.minimumAgeDays.value = policy?.conditions?.minimumAgeDays ?? '';
   form.elements.maximumAgeDays.value = policy?.conditions?.maximumAgeDays ?? '';
+  const delivery = policy?.delivery || {};
+  form.elements.deliveryCadence.value = delivery.cadence || 'adaptive';
+  form.elements.deliveryHour.value = delivery.sendHour ?? '';
+  form.elements.weeklyDay.value = delivery.weeklyDay ?? 1;
+  form.elements.reminderDays.value = delivery.reminderDays ?? 7;
+  form.elements.windowStartHour.value = delivery.windowStartHour ?? 0;
+  form.elements.windowEndHour.value = delivery.windowEndHour ?? 23;
+  form.elements.workspaceRecipients.checked = delivery.workspaceRecipients !== false;
+  form.elements.recipientOwnerIds.innerHTML = notificationPolicyData.owners.map(item => `<option value="${escape(item.id)}" ${(delivery.recipientOwnerIds || []).includes(item.id) ? 'selected' : ''}>${escape(item.name)} · ${escape(item.email)}</option>`).join('');
+  form.elements.includeEscalationContacts.checked = delivery.includeEscalationContacts === true;
+  form.elements.escalationAfterDays.value = delivery.escalationAfterDays ?? '';
   $('notification-policy-delete').hidden = !policy;
   $('notification-policy-save').disabled = true;
   $('notification-policy-error').hidden = true;
@@ -457,7 +493,11 @@ async function previewNotificationPolicyDraft() {
     const response = await fetch('/api/notification-policies/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ policy: policyDraft() }) });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not preview policy');
-    $('notification-policy-preview').innerHTML = `<div class="policy-preview-summary"><strong>${data.matches.length} matching finding${data.matches.length === 1 ? '' : 's'}</strong><span>${data.evaluatedFindings} evaluated</span></div>${data.matches.length ? data.matches.slice(0, 50).map(match => `<article><strong>${escape(match.finding)}</strong><span>${escape(match.application)} · ${escape(match.workspace)}</span><small>${escape(match.explanation.map(item => `${policyFieldLabels[item.condition] || item.condition} matched`).join(' · '))}</small></article>`).join('') : '<p class="muted">No findings in the latest assessment match this policy.</p>'}${data.matches.length > 50 ? `<p class="muted">Showing the first 50 of ${data.matches.length} matches.</p>` : ''}`;
+    const routes = data.routes.map(route => `<article><strong>${escape(route.workspace)}</strong><span>To: ${escape(route.recipients.map(item => `${item.name} <${item.email}>`).join(', ') || 'No recipients')}</span>${route.escalationRecipients.length ? `<small>Escalation: ${escape(route.escalationRecipients.map(item => `${item.name} <${item.email}>`).join(', '))}</small>` : ''}</article>`).join('');
+    const findings = data.matches.slice(0, 50).map(match => `<article><strong>${escape(match.finding)}</strong><span>${escape(match.application)} · ${escape(match.workspace)}</span><small>${escape(match.explanation.map(item => `${policyFieldLabels[item.condition] || item.condition} matched`).join(' · '))}</small></article>`).join('');
+    const routePreview = routes ? `<h4>Routing preview</h4>${routes}` : '<p class="muted">No recipient routes are produced by the latest assessment.</p>';
+    const findingPreview = findings ? `<h4>Matching findings</h4>${findings}` : '<p class="muted">No findings in the latest assessment match this policy.</p>';
+    $('notification-policy-preview').innerHTML = `<div class="policy-preview-summary"><strong>${data.matches.length} matching finding${data.matches.length === 1 ? '' : 's'}</strong><span>${data.evaluatedFindings} evaluated</span></div><p><strong>Timing:</strong> ${escape(policyDeliveryText({ delivery: data.delivery }))}</p>${routePreview}${findingPreview}${data.matches.length > 50 ? `<p class="muted">Showing the first 50 of ${data.matches.length} matches.</p>` : ''}`;
     $('notification-policy-save').disabled = false;
   } catch (error) { $('notification-policy-error').textContent = error.message; $('notification-policy-error').hidden = false; $('notification-policy-save').disabled = true; }
   finally { $('notification-policy-preview-button').disabled = false; }

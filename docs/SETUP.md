@@ -37,7 +37,7 @@ WatchTower runs its own hourly scheduler. Do not create a host cron job or a sec
 
 Mount persistent storage at `/home/container`. WatchTower creates and maintains these directories inside it:
 
-- `/home/container/config` contains application, owner, workspace, feed, notification-policy, access-control, general, and email configuration. Notification policies are stored in `notification-policies.json`; an upgrade without that file creates equivalent default policies automatically.
+- `/home/container/config` contains application, owner, workspace, feed, notification-policy, access-control, general, and email configuration. Notification policies, schedules, recipient routes, reminder intervals, and escalation rules are stored in `notification-policies.json`; an upgrade without that file creates equivalent default policies automatically.
 - `/home/container/data` contains the latest scan, finding workflows and append-only finding history, feed cache, notification state, and system, feed, audit, and authentication logs.
 
 Back up the entire mounted directory. Replacing a container without preserving this mount removes configuration, acknowledgement state, and locally retained results.
