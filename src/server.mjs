@@ -183,10 +183,9 @@ function parseInventory(source, includeDisabled = false, allowLegacyIds = false)
       if (!app[key] || typeof app[key] !== 'string') throw new Error(`Application is missing ${key}`);
     }
     if (!allowLegacyIds && !uuidPattern.test(app.id)) throw new Error(`Invalid immutable application ID for ${app.name}`);
-    for (const key of ['version', 'cpeVendor', 'cpeProduct']) {
+    for (const key of ['version']) {
       if (!/^[A-Za-z0-9._-]+$/.test(app[key])) throw new Error(`Invalid ${key} for ${app.name}`);
     }
-    if (app.cpeEdition && !/^[A-Za-z0-9._-]+$/.test(app.cpeEdition)) throw new Error(`Invalid cpeEdition for ${app.name}`);
     if (app.cpeMode && !['product', 'exact'].includes(app.cpeMode)) throw new Error(`Invalid cpeMode for ${app.name}`);
     const hadCanonicalCpe = Boolean(app.cpeName);
     const mapping = mappingFromApp(app);

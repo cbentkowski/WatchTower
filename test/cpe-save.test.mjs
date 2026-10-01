@@ -28,6 +28,7 @@ test('application API saves a canonical CPE containing escaped punctuation', asy
     env: { ...process.env, HOST: '127.0.0.1', SERVER_PORT: String(port), CONFIG_DIR: directory, DATA_DIR: data, AUTO_SCAN: 'false', AUTH_DISABLED: 'true', OIDC_ISSUER: '', OIDC_CLIENT_ID: '', OIDC_CLIENT_SECRET: '', OIDC_CLIENT_SECRET_FILE: '', OIDC_BASE_URL: '' },
     stdio: ['ignore', 'ignore', 'pipe'],
   });
+  let restartedChild;
   let serverError = '';
   child.stderr.on('data', chunk => { serverError += chunk; });
   const origin = `http://127.0.0.1:${port}`;
@@ -46,10 +47,30 @@ test('application API saves a canonical CPE containing escaped punctuation', asy
     });
     assert.equal(response.status, 201, await response.text());
     assert.match(await readFile(path.join(directory, 'applications.yaml'), 'utf8'), /notepad\\\\\+\\\\\+/);
+    child.kill();
+    await once(child, 'exit');
+
+    restartedChild = spawn(process.execPath, ['src/server.mjs'], {
+      cwd: path.resolve(import.meta.dirname, '..'),
+      env: { ...process.env, HOST: '127.0.0.1', SERVER_PORT: String(port), CONFIG_DIR: directory, DATA_DIR: data, AUTO_SCAN: 'false', AUTH_DISABLED: 'true', OIDC_ISSUER: '', OIDC_CLIENT_ID: '', OIDC_CLIENT_SECRET: '', OIDC_CLIENT_SECRET_FILE: '', OIDC_BASE_URL: '' },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let restartError = '';
+    restartedChild.stderr.on('data', chunk => { restartError += chunk; });
+    let restarted = false;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      try { restarted = (await fetch(`${origin}/api/session`)).ok; if (restarted) break; }
+      catch { await new Promise(resolve => setTimeout(resolve, 100)); }
+    }
+    assert.equal(restarted, true, restartError);
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill();
       await once(child, 'exit');
+    }
+    if (restartedChild?.exitCode === null && restartedChild.signalCode === null) {
+      restartedChild.kill();
+      await once(restartedChild, 'exit');
     }
     await rm(directory, { recursive: true, force: true });
   }
