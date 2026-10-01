@@ -113,6 +113,26 @@ test('new Critical and known-exploited alerts send immediately but reminders use
   assert.equal(kevSent.length, 1);
 });
 
+test('notification policies determine which vulnerable findings enter the existing delivery flow', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-policy-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const sent = [];
+  let policies = [{ id: 'production', name: 'Production only', conditions: { environments: ['production'] } }];
+  const notifier = createNotifier({
+    dataDirectory: directory,
+    settingsLoader: async () => settings,
+    policyLoader: async () => policies,
+    clock: () => new Date('2026-09-20T09:00:00Z'),
+    transport: { sendMail: async message => { sent.push(message); return { accepted: ['team@example.com'], rejected: [] }; } },
+  });
+
+  await notifier.onScan(snapshot({ ...app(), environment: 'development' }));
+  assert.equal(sent.length, 0);
+  policies = [{ id: 'development', name: 'Development', conditions: { environments: ['development'] } }];
+  await notifier.onScan(snapshot({ ...app(), environment: 'development' }));
+  assert.equal(sent.length, 1);
+});
+
 test('a new Critical finding sends immediately after an earlier High notification', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-escalation-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

@@ -11,6 +11,21 @@ const conditionOrder = Object.freeze([
   'maximumAgeDays',
 ]);
 
+export const defaultNotificationPolicies = Object.freeze([
+  Object.freeze({
+    id: 'default-high-severity',
+    name: 'High and Critical findings',
+    enabled: true,
+    conditions: Object.freeze({ severities: Object.freeze(['high', 'critical']) }),
+  }),
+  Object.freeze({
+    id: 'default-known-exploited',
+    name: 'Known-exploited findings',
+    enabled: true,
+    conditions: Object.freeze({ knownExploited: true }),
+  }),
+]);
+
 const severityFor = finding => {
   const supplied = String(finding.severity || finding.label || '').trim().toLowerCase();
   if (supplied) return supplied;
@@ -78,4 +93,8 @@ export function evaluatePolicy(policy, { finding, application, workspace }, now 
 
 export function evaluatePolicies(policies, context, now = new Date()) {
   return policies.filter(policy => policy.enabled !== false).map(policy => evaluatePolicy(policy, context, now));
+}
+
+export function matchingPolicies(policies, context, now = new Date()) {
+  return evaluatePolicies(policies, context, now).filter(result => result.matched);
 }

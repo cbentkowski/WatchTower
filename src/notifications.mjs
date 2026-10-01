@@ -2,6 +2,7 @@ import { createTransport } from 'nodemailer';
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { defaultNotificationPolicies, matchingPolicies } from './notification-policies.mjs';
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const safeTicketUrl = value => { try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password ? url.href : ''; } catch { return ''; } };
@@ -40,15 +41,16 @@ function localTime(date, timeZone) {
   return { day: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour) };
 }
 
-function classify(app) {
+function classify(app, workspace, policies, now) {
   const findings = app.vulnerabilities || [];
-  const vulnerable = app.status === 'red' && findings.some(item => Number(item.score) >= 7 || item.knownExploited);
+  const policyMatches = findings.flatMap(finding => matchingPolicies(policies, { finding, application: app, workspace }, now).map(policy => ({ findingId: finding.id, ...policy })));
+  const vulnerable = app.status === 'red' && policyMatches.length > 0;
   const urgentFindings = app.status === 'red' ? findings.filter(item => Number(item.score) >= 9 || item.knownExploited) : [];
   const urgentFingerprint = urgentFindings.map(item => `${item.id || 'unknown'}:${Number(item.score) || 0}:${Boolean(item.knownExploited)}`).sort().join('|');
   const days = Number(app.lifecycle?.daysRemaining);
   const approaching = app.lifecycle?.state === 'approaching' && Number.isFinite(days) && days >= 0 && days <= 30;
   const expired = app.lifecycle?.state === 'expired';
-  return { vulnerable, urgent: Boolean(urgentFingerprint), urgentFingerprint, approaching, expired, days };
+  return { vulnerable, policyMatches, urgent: Boolean(urgentFingerprint), urgentFingerprint, approaching, expired, days };
 }
 
 function dueReasons(entry, flags, today, urgentChanged) {
@@ -75,7 +77,7 @@ function messageFor(group, alerts, baseUrl) {
   return { subject, text: lines.join('\n'), html: `<main style="font-family:Arial,sans-serif;max-width:680px;margin:auto;color:#203646"><h1>WatchTower · ${escape(group.name)}</h1><p>${alerts.length} application${alerts.length === 1 ? '' : 's'} need your attention.</p>${cards}<p style="font-size:12px;color:#647987">The acknowledgment link opens a confirmation page. Confirming stops reminders for that application in this workspace until the alert clears or its version changes.</p></main>` };
 }
 
-export function createNotifier({ dataDirectory, settingsLoader, env = process.env, clock = () => new Date(), transport = null, transportFactory = createTransport, secretLoader = readFile }) {
+export function createNotifier({ dataDirectory, settingsLoader, policyLoader = async () => defaultNotificationPolicies, env = process.env, clock = () => new Date(), transport = null, transportFactory = createTransport, secretLoader = readFile }) {
   const file = path.join(dataDirectory, 'notifications.json');
   let state = null;
   let pending = Promise.resolve();
@@ -107,7 +109,9 @@ export function createNotifier({ dataDirectory, settingsLoader, env = process.en
     await load();
     const settings = await settingsLoader();
     if (!settings.enabled) return;
-    const { day, hour: currentHour } = localTime(clock(), settings.timeZone);
+    const now = clock();
+    const { day, hour: currentHour } = localTime(now, settings.timeZone);
+    const policies = await policyLoader();
     let baseUrl = null;
     try { if (settings.baseUrl) baseUrl = new URL(settings.baseUrl); } catch {}
     let auth;
@@ -124,7 +128,7 @@ export function createNotifier({ dataDirectory, settingsLoader, env = process.en
       if (!recipients.length) continue;
       const alerts = [];
       for (const app of apps.filter(item => group.applications.includes(item.id))) {
-        const flags = classify(app);
+        const flags = classify(app, group, policies, now);
         if (!flags.vulnerable && !flags.approaching && !flags.expired) continue;
         const key = entryKey(group.id, app);
         active.add(key);
