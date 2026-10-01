@@ -36,7 +36,7 @@ test('application, workspace, and settings edits appear in audit logs', async ()
     }
     assert.equal(ready, true);
     const settings = await (await fetch(`${origin}/api/settings`)).json();
-    assert.equal(settings.version, '0.9.2');
+    assert.equal(settings.version, '0.10.0');
 
     const ownerResponse = await post('/api/owners', { name: 'Platform Engineering', email: 'platform@example.com', escalationEmail: 'on-call@example.com' });
     assert.equal(ownerResponse.status, 201);
