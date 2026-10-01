@@ -235,7 +235,9 @@ function cleanApp(input, existingId = '') {
   app.cpeEdition = mapping.edition === '*' || mapping.edition === '-' ? '' : mapping.edition;
   const blocking = mappingWarnings({ ...mapping, mode: app.cpeMode, deprecated: app.cpeDeprecated === 'true' }, app.version).filter(item => item.code === 'version-conflict');
   if (blocking.length) throw new Error(blocking[0].message);
-  for (const key of ['version', 'cpeVendor', 'cpeProduct', 'cpeEdition', 'lifecycleProduct']) if (app[key] && !idPattern.test(app[key])) throw new Error(`${key} may contain only letters, numbers, dots, underscores, and hyphens`);
+  // CPE-derived fields have already been validated as part of the canonical CPE.
+  // They may legitimately contain escaped punctuation such as Notepad++'s `notepad\+\+`.
+  for (const key of ['version', 'lifecycleProduct']) if (app[key] && !idPattern.test(app[key])) throw new Error(`${key} may contain only letters, numbers, dots, underscores, and hyphens`);
   if (!app.lifecycleProduct && !app.eolDate) throw new Error('A lifecycle product or end-of-life date is required');
   if (app.eolDate && (!/^\d{4}-\d{2}-\d{2}$/.test(app.eolDate) || !Number.isFinite(Date.parse(`${app.eolDate}T00:00:00Z`)))) throw new Error('End-of-life date must be YYYY-MM-DD');
   for (const key of ['lifecycleUrl', 'vendorBulletinUrl', 'releaseUrl']) if (app[key]) { try { if (new URL(app[key]).protocol !== 'https:') throw new Error(); } catch { throw new Error(`${key} must be an HTTPS URL`); } }
