@@ -14,6 +14,13 @@ test('CPE 2.3 parsing returns named components and rejects malformed names', () 
   assert.throws(() => parseCpe23('cpe:2.3:*:*:*:*:*:*:*:*:*:*:*'), /part/);
 });
 
+test('CPE 2.3 parsing accepts escaped punctuation in canonical components', () => {
+  const cpe = String.raw`cpe:2.3:a:notepad-plus-plus:notepad\+\+:*:*:*:*:*:*:*:*`;
+  const parsed = parseCpe23(cpe);
+  assert.equal(parsed.product, String.raw`notepad\+\+`);
+  assert.equal(productCpe(parsed), cpe);
+});
+
 test('product and exact mapping modes produce their intended query CPE', () => {
   const parsed = parseCpe23(exact);
   assert.equal(productCpe(parsed), 'cpe:2.3:a:atlassian:jira_service_management:*:*:*:*:*:*:*:*');

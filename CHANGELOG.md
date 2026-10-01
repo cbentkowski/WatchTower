@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.9.2] - 2026-09-30
+
+### Fixed
+
+- Accept valid canonical CPE components containing escaped punctuation, including the NVD mapping for Notepad++ (`notepad\+\+`), when creating or updating applications.
+
 ## [0.9.1] - 2026-09-30
 
 ### Security
