@@ -71,3 +71,8 @@ test('unknown conditions are rejected instead of silently ignored', () => {
     /Unsupported notification policy condition: severty/,
   );
 });
+
+test('unrated source labels normalize to the user-facing unknown severity', () => {
+  const result = evaluatePolicy({ id: 'unknown', name: 'Unknown severity', conditions: { severities: ['unknown'] } }, { ...context, finding: { ...context.finding, score: 0, label: 'Unrated' } });
+  assert.equal(result.matched, true);
+});

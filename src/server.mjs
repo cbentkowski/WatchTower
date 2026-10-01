@@ -19,6 +19,7 @@ import { loadTlsConfiguration } from './tls.mjs';
 import { cpeSearchMatch, effectiveCpe, legacyCpe, mappingFromApp, mappingWarnings, parseCpe23, productCpe } from './cpe.mjs';
 import { matchLifecycleRelease, normalizeLifecycleProduct, searchLifecycleProducts } from './lifecycle.mjs';
 import { appendFindingEvents, readFindingEvents, readFindingStore, reconcileFindingWorkflows, updateFindingWorkflow, writeFindingStore } from './findings.mjs';
+import { ensureNotificationPolicies, notificationPolicyOptions, previewNotificationPolicy, readNotificationPolicies, validateNotificationPolicies, validateNotificationPolicy, writeNotificationPolicies } from './notification-policy-store.mjs';
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.dirname(sourceDirectory);
@@ -58,8 +59,10 @@ const snapshotFile = path.join(dataDirectory, 'status.json');
 const feedCacheFile = path.join(dataDirectory, 'feeds.json');
 const smtpFile = path.join(configDirectory, 'smtp.yaml');
 const generalFile = path.join(configDirectory, 'general.yaml');
+const notificationPolicyFile = path.join(configDirectory, 'notification-policies.json');
 const findingStoreFile = path.join(dataDirectory, 'finding-workflows.json');
 const findingHistoryFile = path.join(dataDirectory, 'finding-history.jsonl');
+await ensureNotificationPolicies(notificationPolicyFile);
 
 async function recordAuthenticationEvent(action, actor, context = {}) {
   const { claims = {}, protectedAdminClaim = '', ...event } = context;
@@ -71,7 +74,7 @@ async function recordAuthenticationEvent(action, actor, context = {}) {
     ...describeIdentityClaims(config, claims, { administratorRole, protectedAdminClaim }),
   });
 }
-const notifier = createNotifier({ dataDirectory, settingsLoader: async () => ({ ...await readSmtpSettings(smtpFile), baseUrl: generalUrl(await readGeneralSettings(generalFile)) }) });
+const notifier = createNotifier({ dataDirectory, settingsLoader: async () => ({ ...await readSmtpSettings(smtpFile), baseUrl: generalUrl(await readGeneralSettings(generalFile)) }), policyLoader: () => readNotificationPolicies(notificationPolicyFile) });
 for (const [from, to] of resourceMigration.applications) await notifier.renameIdentifiers({ appFrom: from, appTo: to });
 for (const [from, to] of resourceMigration.workspaces) await notifier.renameIdentifiers({ workspaceFrom: from, workspaceTo: to });
 function detectedGeneral(req) {
@@ -757,7 +760,7 @@ const requestHandler = async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify({ enabled: Boolean(auth), user: req.authUser?.name || 'Local development session', isAdmin: access.isAdmin, canManageAccess: access.accessManage, claims: real.access.isAdmin ? req.authUser?.claims : undefined, groupOverage: Boolean(req.authUser?.groupOverage), preview: req.permissionPreview ? { name: req.permissionPreview.name, mappingIds: req.permissionPreview.mappingIds, expires: new Date(req.permissionPreview.expires).toISOString() } : null })); return;
     }
-    if ((url.pathname.startsWith('/api/settings') || url.pathname === '/api/logs') && !(await authorization(req)).access.isAdmin) { forbidden(res, 'Administrator role required'); return; }
+    if ((url.pathname.startsWith('/api/settings') || url.pathname.startsWith('/api/notification-policies') || url.pathname === '/api/logs') && !(await authorization(req)).access.isAdmin) { forbidden(res, 'Administrator role required'); return; }
     if (url.pathname === '/api/rbac/preview' && req.method === 'DELETE') {
       const preview = req.permissionPreview;
       if (req.permissionPreviewToken) permissionPreviews.delete(req.permissionPreviewToken);
@@ -804,6 +807,28 @@ const requestHandler = async (req, res) => {
       const result = await sendTestEmail(smtp, body.recipient);
       await logger.audit('Test email sent', auditActor(req), { type: 'settings', id: 'email-delivery' }, { transportSecurity: smtp.secure ? 'tls' : smtp.requireTls ? 'starttls' : 'none', unauthenticated: smtp.unauthenticated }, 'SMTP test completed successfully; settings were not saved');
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ sent: true, accepted: result.accepted })); return;
+    }
+    if (url.pathname === '/api/notification-policies' && req.method === 'GET') {
+      const { apps, workspaces, owners } = await authorizationResources();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ policies: await readNotificationPolicies(notificationPolicyFile), options: notificationPolicyOptions, workspaces: workspaces.map(({ id, name }) => ({ id, name })), owners: owners.map(({ id, name, email }) => ({ id, name, email })), applications: apps.map(({ id, name }) => ({ id, name })) })); return;
+    }
+    if (url.pathname === '/api/notification-policies/preview' && req.method === 'POST') {
+      const body = await readBody(req);
+      const { workspaces, owners } = await authorizationResources();
+      const policy = validateNotificationPolicy(body.policy, { workspaces, owners });
+      const preview = previewNotificationPolicy(policy, snapshot);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ policy, ...preview })); return;
+    }
+    if (url.pathname === '/api/notification-policies' && req.method === 'PUT') {
+      const body = await readBody(req);
+      const { workspaces, owners } = await authorizationResources();
+      const previous = await readNotificationPolicies(notificationPolicyFile);
+      const policies = validateNotificationPolicies(body.policies, { workspaces, owners });
+      await writeNotificationPolicies(notificationPolicyFile, policies);
+      await logger.audit('Notification policies updated', auditActor(req), { type: 'notification-policies', id: 'relay' }, { policies: { from: previous.map(policy => policy.name), to: policies.map(policy => policy.name) } }, `${policies.length} notification ${policies.length === 1 ? 'policy' : 'policies'} configured`);
+      if (snapshot) notifier.onScan(snapshot).catch(error => logger.log('error', 'Notification check after policy update failed', error.message));
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ policies })); return;
     }
     if (url.pathname === '/api/config' && req.method === 'GET') {
       const { apps, workspaces, feeds, owners, access } = await authorization(req);

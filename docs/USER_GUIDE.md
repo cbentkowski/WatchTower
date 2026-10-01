@@ -175,6 +175,16 @@ Email delivery has two parts: global delivery settings and owners assigned to ea
 
 Edit a workspace and choose one or more owners. WatchTower sends workspace notifications to those owners' primary email addresses; a workspace with no owners does not send email. Email addresses are unique in the owner directory, so changing an owner's address updates notification delivery everywhere.
 
+### Configure notification policies
+
+Notification policies decide which vulnerability findings enter the delivery flow. Open **Settings > Notification policies** to review the migrated defaults, add a policy, or edit an existing policy.
+
+An empty multi-select means **Any** and does not restrict that field. For example, leaving Environment empty includes findings from every environment; selecting Production and Staging limits it to either of those environments. Values selected within one field use OR: selecting High and Critical matches either severity. Different populated fields use AND: a policy with Critical severity, Production environment, and Internet exposure matches only findings satisfying all three conditions. Multiple enabled policies can independently match the same finding without creating duplicate application cards in one workspace message. A policy must contain at least one condition, so every field cannot be left unrestricted.
+
+Policies can use severity, known-exploitation evidence, application criticality, environment, exposure, workspace, owner, finding state, and minimum or maximum finding age. Select **Preview matches** to evaluate a draft against the latest assessment. The preview lists matching finding, application, and workspace names and must be refreshed after every draft change before the policy can be saved.
+
+Disabling a policy preserves it without allowing it to match. Removing every policy prevents vulnerability findings from entering notification delivery; lifecycle notifications continue to follow their existing behavior.
+
 Each workspace receives its own message containing alerts due for its applications. An application in several workspaces can generate a message for each workspace. Initial Critical and known-exploited findings can send immediately; scheduled High, lifecycle, and reminder messages wait for the configured local delivery window.
 
 Acknowledgement links require confirmation. Acknowledging an application stops repeat reminders for that application and workspace until the alert clears or its installed version changes. It does not remove the application from the dashboard.

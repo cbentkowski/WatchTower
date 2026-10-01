@@ -15,6 +15,8 @@ let lifecycleMapping = null;
 let lifecycleDraft = null;
 let cpeSearchPage = { previousIndex: null, nextIndex: null, startIndex: 0, totalResults: 0 };
 let settingsLoaded = false;
+let notificationPolicyData = { policies: [], options: {}, workspaces: [], owners: [] };
+let currentNotificationPolicyId = null;
 let logsLoaded = false;
 let activeLogType = 'system';
 let accessLoaded = false;
@@ -385,6 +387,108 @@ function updateCredentialFields() {
   if (relay) $('settings-env-status').textContent = 'Unauthenticated relay selected. SMTP credentials are not used.';
 }
 
+const policyFieldLabels = { severities: 'Severity', knownExploited: 'Known exploitation', criticalities: 'Criticality', environments: 'Environment', exposures: 'Exposure', workspaceIds: 'Workspace', ownerIds: 'Owner', findingStates: 'Finding state', minimumAgeDays: 'Minimum age', maximumAgeDays: 'Maximum age' };
+const friendlyPolicyValue = value => String(value).replaceAll('-', ' ').replace(/\b\w/g, letter => letter.toUpperCase());
+function policyConditionText(policy) {
+  return Object.entries(policy.conditions || {}).map(([field, value]) => {
+    let displayed = Array.isArray(value) ? value : [value];
+    if (field === 'workspaceIds') displayed = displayed.map(id => notificationPolicyData.workspaces.find(item => item.id === id)?.name || id);
+    else if (field === 'ownerIds') displayed = displayed.map(id => notificationPolicyData.owners.find(item => item.id === id)?.name || id);
+    else if (field === 'knownExploited') displayed = [value ? 'Yes' : 'No'];
+    else if (field === 'minimumAgeDays' || field === 'maximumAgeDays') displayed = [`${value} days`];
+    else displayed = displayed.map(friendlyPolicyValue);
+    return `${policyFieldLabels[field] || field}: ${displayed.join(' or ')}`;
+  }).join(' · ');
+}
+
+function renderNotificationPolicies() {
+  const list = $('notification-policy-list');
+  list.innerHTML = notificationPolicyData.policies.length ? notificationPolicyData.policies.map(policy => `<article class="policy-row"><div><h3>${escape(policy.name)}</h3><p>${escape(policyConditionText(policy))}</p></div><span class="policy-state ${policy.enabled === false ? 'disabled' : ''}">${policy.enabled === false ? 'Disabled' : 'Enabled'}</span><button type="button" data-notification-policy="${escape(policy.id)}">Edit</button></article>`).join('') : '<div class="empty"><strong>No notification policies configured</strong><p>No vulnerability findings will enter notification delivery until an enabled policy is added.</p></div>';
+}
+
+async function loadNotificationPolicies() {
+  const response = await fetch('/api/notification-policies', { cache: 'no-store' });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Could not load notification policies');
+  notificationPolicyData = data;
+  renderNotificationPolicies();
+}
+
+const selectedPolicyValues = select => [...select.selectedOptions].map(option => option.value);
+function policyDraft() {
+  const form = $('notification-policy-form');
+  const current = notificationPolicyData.policies.find(policy => policy.id === currentNotificationPolicyId);
+  const conditions = {};
+  for (const field of ['severities', 'criticalities', 'environments', 'exposures', 'workspaceIds', 'ownerIds', 'findingStates']) {
+    const selected = selectedPolicyValues(form.elements[field]);
+    if (selected.length) conditions[field] = selected;
+  }
+  if (form.elements.knownExploited.value !== '') conditions.knownExploited = form.elements.knownExploited.value === 'true';
+  for (const field of ['minimumAgeDays', 'maximumAgeDays']) if (form.elements[field].value !== '') conditions[field] = Number(form.elements[field].value);
+  return { id: current?.id || crypto.randomUUID(), name: form.elements.name.value, enabled: form.elements.enabled.checked, conditions };
+}
+
+const policyOptions = (values, selected = []) => values.map(value => `<option value="${escape(value)}" ${selected.includes(value) ? 'selected' : ''}>${escape(friendlyPolicyValue(value))}</option>`).join('');
+function openNotificationPolicyEditor(id = null) {
+  currentNotificationPolicyId = id;
+  const policy = notificationPolicyData.policies.find(item => item.id === id);
+  const form = $('notification-policy-form');
+  form.reset();
+  $('notification-policy-editor-title').textContent = policy ? 'Edit notification policy' : 'Add notification policy';
+  form.elements.name.value = policy?.name || '';
+  form.elements.enabled.checked = policy?.enabled !== false;
+  for (const field of ['severities', 'criticalities', 'environments', 'exposures', 'findingStates']) form.elements[field].innerHTML = policyOptions(notificationPolicyData.options[field] || [], policy?.conditions?.[field] || []);
+  form.elements.workspaceIds.innerHTML = notificationPolicyData.workspaces.map(item => `<option value="${escape(item.id)}" ${(policy?.conditions?.workspaceIds || []).includes(item.id) ? 'selected' : ''}>${escape(item.name)}</option>`).join('');
+  form.elements.ownerIds.innerHTML = notificationPolicyData.owners.map(item => `<option value="${escape(item.id)}" ${(policy?.conditions?.ownerIds || []).includes(item.id) ? 'selected' : ''}>${escape(item.name)} · ${escape(item.email)}</option>`).join('');
+  form.elements.knownExploited.value = policy?.conditions && Object.hasOwn(policy.conditions, 'knownExploited') ? String(policy.conditions.knownExploited) : '';
+  form.elements.minimumAgeDays.value = policy?.conditions?.minimumAgeDays ?? '';
+  form.elements.maximumAgeDays.value = policy?.conditions?.maximumAgeDays ?? '';
+  $('notification-policy-delete').hidden = !policy;
+  $('notification-policy-save').disabled = true;
+  $('notification-policy-error').hidden = true;
+  $('notification-policy-preview').innerHTML = '<p class="muted">Preview the draft against the latest assessment before saving.</p>';
+  $('notification-policy-editor').showModal();
+}
+
+async function previewNotificationPolicyDraft() {
+  $('notification-policy-preview-button').disabled = true;
+  $('notification-policy-error').hidden = true;
+  try {
+    const response = await fetch('/api/notification-policies/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ policy: policyDraft() }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not preview policy');
+    $('notification-policy-preview').innerHTML = `<div class="policy-preview-summary"><strong>${data.matches.length} matching finding${data.matches.length === 1 ? '' : 's'}</strong><span>${data.evaluatedFindings} evaluated</span></div>${data.matches.length ? data.matches.slice(0, 50).map(match => `<article><strong>${escape(match.finding)}</strong><span>${escape(match.application)} · ${escape(match.workspace)}</span><small>${escape(match.explanation.map(item => `${policyFieldLabels[item.condition] || item.condition} matched`).join(' · '))}</small></article>`).join('') : '<p class="muted">No findings in the latest assessment match this policy.</p>'}${data.matches.length > 50 ? `<p class="muted">Showing the first 50 of ${data.matches.length} matches.</p>` : ''}`;
+    $('notification-policy-save').disabled = false;
+  } catch (error) { $('notification-policy-error').textContent = error.message; $('notification-policy-error').hidden = false; $('notification-policy-save').disabled = true; }
+  finally { $('notification-policy-preview-button').disabled = false; }
+}
+
+async function persistNotificationPolicies(policies) {
+  const response = await fetch('/api/notification-policies', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ policies }) });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Could not save notification policies');
+  notificationPolicyData.policies = data.policies;
+  renderNotificationPolicies();
+}
+
+async function saveNotificationPolicy(event) {
+  event.preventDefault();
+  const draft = policyDraft();
+  const policies = currentNotificationPolicyId ? notificationPolicyData.policies.map(policy => policy.id === currentNotificationPolicyId ? draft : policy) : [...notificationPolicyData.policies, draft];
+  $('notification-policy-save').disabled = true;
+  try { await persistNotificationPolicies(policies); $('notification-policy-editor').close(); }
+  catch (error) { $('notification-policy-error').textContent = error.message; $('notification-policy-error').hidden = false; }
+}
+
+async function deleteNotificationPolicy() {
+  const policy = notificationPolicyData.policies.find(item => item.id === currentNotificationPolicyId);
+  if (!policy || !confirm(`Remove notification policy "${policy.name}"?`)) return;
+  $('notification-policy-delete').disabled = true;
+  try { await persistNotificationPolicies(notificationPolicyData.policies.filter(item => item.id !== policy.id)); $('notification-policy-editor').close(); }
+  catch (error) { $('notification-policy-error').textContent = error.message; $('notification-policy-error').hidden = false; }
+  finally { $('notification-policy-delete').disabled = false; }
+}
+
 async function loadSettings() {
   settingsLoaded = true;
   try {
@@ -406,6 +510,7 @@ async function loadSettings() {
     form.querySelector(`[name="transportSecurity"][value="${data.smtp.secure ? 'tls' : data.smtp.requireTls ? 'starttls' : 'none'}"]`).checked = true;
     updateCredentialFields();
     showEnvironmentStatus(data);
+    await loadNotificationPolicies();
   } catch (error) { settingsLoaded = false; $('settings-message').textContent = error.message; $('settings-message').hidden = false; $('settings-message').classList.remove('success'); }
 }
 
@@ -1196,6 +1301,14 @@ $('logs-refresh').addEventListener('click', loadLogs);
 for (const button of document.querySelectorAll('[data-log-type]')) button.addEventListener('click', () => { activeLogType = button.dataset.logType; loadLogs(); });
 $('settings-form').addEventListener('submit', saveSettings);
 $('settings-test-email').addEventListener('click', testEmailSettings);
+$('add-notification-policy').addEventListener('click', () => openNotificationPolicyEditor());
+$('notification-policy-list').addEventListener('click', event => { const button = event.target.closest('[data-notification-policy]'); if (button) openNotificationPolicyEditor(button.dataset.notificationPolicy); });
+$('notification-policy-form').addEventListener('submit', saveNotificationPolicy);
+$('notification-policy-form').addEventListener('input', () => { $('notification-policy-save').disabled = true; $('notification-policy-preview').innerHTML = '<p class="muted">Draft changed. Preview it again before saving.</p>'; });
+$('notification-policy-preview-button').addEventListener('click', previewNotificationPolicyDraft);
+$('notification-policy-delete').addEventListener('click', deleteNotificationPolicy);
+$('notification-policy-editor-close').addEventListener('click', () => $('notification-policy-editor').close());
+$('notification-policy-cancel').addEventListener('click', () => $('notification-policy-editor').close());
 $('access-form').addEventListener('submit', saveAccess);
 $('access-evaluate').addEventListener('click', () => verifyAccess(false));
 $('access-preview').addEventListener('click', () => verifyAccess(true));

@@ -212,7 +212,7 @@ test('login redirects alternate hostnames to the configured OIDC origin', async 
 });
 
 test('administrator authorization covers every privileged API', () => {
-  for (const route of ['/api/settings', '/api/settings/test-email', '/api/logs', '/api/config', '/api/applications', '/api/applications/test', '/api/workspaces', '/api/owners', '/api/owners/example', '/api/status?refresh=1']) {
+  for (const route of ['/api/settings', '/api/settings/test-email', '/api/notification-policies', '/api/notification-policies/preview', '/api/logs', '/api/config', '/api/applications', '/api/applications/test', '/api/workspaces', '/api/owners', '/api/owners/example', '/api/status?refresh=1']) {
     assert.equal(requiresAdministrator(new URL(route, 'https://home.example.com')), true, route);
   }
   for (const route of ['/api/session', '/api/status', '/', '/app.js']) {
