@@ -133,6 +133,31 @@ test('notification policies determine which vulnerable findings enter the existi
   assert.equal(sent.length, 1);
 });
 
+test('unmatched findings do not affect urgency or appear in policy-routed messages', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-policy-scope-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const sent = [];
+  let now = new Date('2026-09-20T08:00:00Z');
+  const high = { id: 'CVE-2026-8000', score: 8, workflow: { ticketReference: 'HIGH-1' } };
+  const critical = { id: 'CVE-2026-9000', score: 9.8, workflow: { ticketReference: 'CRITICAL-1' } };
+  const notifier = createNotifier({
+    dataDirectory: directory,
+    settingsLoader: async () => ({ ...settings, sendHour: 8 }),
+    policyLoader: async () => [{ id: 'high-only', name: 'High only', conditions: { severities: ['high'] } }],
+    clock: () => now,
+    transport: { sendMail: async message => { sent.push(message); return { accepted: ['team@example.com'], rejected: [] }; } },
+  });
+
+  await notifier.onScan(snapshot({ ...app(), vulnerabilities: [high, critical] }));
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /HIGH-1/);
+  assert.doesNotMatch(sent[0].text, /CRITICAL-1/);
+
+  now = new Date('2026-09-20T20:00:00Z');
+  await notifier.onScan(snapshot({ ...app(), vulnerabilities: [high, critical, { id: 'CVE-2026-9001', score: 10 }] }));
+  assert.equal(sent.length, 1);
+});
+
 test('a new Critical finding sends immediately after an earlier High notification', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-escalation-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

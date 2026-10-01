@@ -43,14 +43,19 @@ function localTime(date, timeZone) {
 
 function classify(app, workspace, policies, now) {
   const findings = app.vulnerabilities || [];
-  const policyMatches = findings.flatMap(finding => matchingPolicies(policies, { finding, application: app, workspace }, now).map(policy => ({ findingId: finding.id, ...policy })));
+  const matchedFindings = [];
+  const policyMatches = findings.flatMap(finding => {
+    const matches = matchingPolicies(policies, { finding, application: app, workspace }, now);
+    if (matches.length) matchedFindings.push(finding);
+    return matches.map(policy => ({ findingId: finding.id, ...policy }));
+  });
   const vulnerable = app.status === 'red' && policyMatches.length > 0;
-  const urgentFindings = app.status === 'red' ? findings.filter(item => Number(item.score) >= 9 || item.knownExploited) : [];
+  const urgentFindings = vulnerable ? matchedFindings.filter(item => Number(item.score) >= 9 || item.knownExploited) : [];
   const urgentFingerprint = urgentFindings.map(item => `${item.id || 'unknown'}:${Number(item.score) || 0}:${Boolean(item.knownExploited)}`).sort().join('|');
   const days = Number(app.lifecycle?.daysRemaining);
   const approaching = app.lifecycle?.state === 'approaching' && Number.isFinite(days) && days >= 0 && days <= 30;
   const expired = app.lifecycle?.state === 'expired';
-  return { vulnerable, policyMatches, urgent: Boolean(urgentFingerprint), urgentFingerprint, approaching, expired, days };
+  return { vulnerable, matchedFindings, policyMatches, urgent: Boolean(urgentFingerprint), urgentFingerprint, approaching, expired, days };
 }
 
 function dueReasons(entry, flags, today, urgentChanged) {
@@ -65,11 +70,12 @@ function dueReasons(entry, flags, today, urgentChanged) {
 function messageFor(group, alerts, baseUrl) {
   const subject = `[WatchTower] ${group.name}: ${alerts.length} application alert${alerts.length === 1 ? '' : 's'}`;
   const lines = [`WatchTower alerts for ${group.name}`, ''];
-  const cards = alerts.map(({ app, reasons, token }) => {
+  const cards = alerts.map(({ app, flags, reasons, token }) => {
     const acknowledgementUrl = new URL(`/ack/${token}`, baseUrl).href;
     const workspaceUrl = new URL(`/#workspace=${encodeURIComponent(group.id)}`, baseUrl).href;
     const note = (app.reasons || []).filter(Boolean).slice(0, 2).join('; ');
-    const tickets = (app.vulnerabilities || []).map(finding => { const reference = String(finding.workflow?.ticketReference || finding.workflow?.ticketUrl || '').trim(); return { id: finding.id || 'Finding', reference, url: safeTicketUrl(reference) }; }).filter(ticket => ticket.reference);
+    const messageFindings = flags.vulnerable ? flags.matchedFindings : (app.vulnerabilities || []);
+    const tickets = messageFindings.map(finding => { const reference = String(finding.workflow?.ticketReference || finding.workflow?.ticketUrl || '').trim(); return { id: finding.id || 'Finding', reference, url: safeTicketUrl(reference) }; }).filter(ticket => ticket.reference);
     lines.push(`${app.name} (${app.version})`, reasons.join(' · '), note, ...tickets.map(ticket => `Ticket (${ticket.id}): ${ticket.reference}`), `Workspace: ${workspaceUrl}`, `Acknowledge: ${acknowledgementUrl}`, '');
     const ticketLinks = tickets.length ? `<p>${tickets.map(ticket => ticket.url ? `<a href="${escape(ticket.url)}">${escape(ticket.id)} ticket</a>` : `${escape(ticket.id)} ticket: <strong>${escape(ticket.reference)}</strong>`).join(' &nbsp;·&nbsp; ')}</p>` : '';
     return `<section style="padding:16px;margin:14px 0;border:1px solid #dce6eb;border-radius:8px"><h2 style="margin:0 0 8px;font-size:18px">${escape(app.name)} <small style="color:#647987">${escape(app.version)}</small></h2><strong>${escape(reasons.join(' · '))}</strong><p>${escape(note)}</p>${ticketLinks}<a href="${escape(workspaceUrl)}">Open workspace</a> &nbsp;·&nbsp; <a href="${escape(acknowledgementUrl)}">Acknowledge alerts for this application</a></section>`;
