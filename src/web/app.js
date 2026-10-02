@@ -254,30 +254,44 @@ function closeOwnerEditor() {
 
 async function loadLogs() {
   logsLoaded = true;
+  const requestedType = activeLogType;
   const list = $('logs-list');
   const types = {
     system: { title: 'System events', description: 'Newest first. Scans, notifications, server activity, and runtime errors.' },
     feed: { title: 'Feed events', description: 'Newest first. Source requests, collection results, failures, and recovery.' },
     audit: { title: 'Audit events', description: 'Newest first. Attributable changes to configuration and access control.' },
     auth: { title: 'Authentication events', description: 'Newest first. Sign-ins, sign-outs, rejected sessions, and identity matching.' },
+    notification: { title: 'Notification delivery', description: 'Newest first. Intended recipients and SMTP outcomes; acceptance does not prove inbox delivery or that a message was read.' },
   };
   $('logs-title').textContent = types[activeLogType].title;
   $('logs-description').textContent = types[activeLogType].description;
   for (const button of document.querySelectorAll('[data-log-type]')) button.setAttribute('aria-selected', String(button.dataset.logType === activeLogType));
+  $('notification-log-filters').hidden = activeLogType !== 'notification';
   try {
-    const response = await fetch(`/api/logs?type=${encodeURIComponent(activeLogType)}`, { cache: 'no-store' });
+    const response = await fetch(`/api/logs?type=${encodeURIComponent(requestedType)}`, { cache: 'no-store' });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not load logs');
-    list.innerHTML = data.entries.length ? data.entries.map(entry => {
+    if (requestedType !== activeLogType) return;
+    const entries = requestedType === 'notification' ? data.entries.filter(entry => {
+      const notification = entry.notification || {};
+      const search = $('notification-log-search').value.trim().toLowerCase();
+      return (!search || JSON.stringify(notification).toLowerCase().includes(search))
+        && (!$('notification-log-outcome').value || entry.level === $('notification-log-outcome').value)
+        && (!$('notification-log-delivery').value || notification.deliveryType === $('notification-log-delivery').value)
+        && (!$('notification-log-date').value || String(entry.at).slice(0, 10) === $('notification-log-date').value);
+    }) : data.entries;
+    list.innerHTML = entries.length ? entries.map(entry => {
       const authentication = entry.authentication;
+      const notification = entry.notification;
       const identityDetails = authentication?.identities?.map(identity => identity.mappings.length
         ? identity.mappings.map(mapping => `${escape(mapping.name)} → ${escape(mapping.roles.join(', ') || 'No grants')}`).join('<br>')
         : `${escape(identity.source)}: ${escape(identity.value)} <span class="muted">(unmatched)</span>`).join('<br>') || '';
       const authContext = authentication ? [authentication.issuer ? `Provider: ${escape(authentication.issuer)}` : '', authentication.reason ? `Reason: ${escape(authentication.reason)}` : '', authentication.fromOrigin && authentication.toOrigin ? `${escape(authentication.fromOrigin)} → ${escape(authentication.toOrigin)}` : ''].filter(Boolean).join(' · ') : '';
       const showClaims = Boolean(authentication && (authentication.identities?.length || authentication.groupOverage || ['Sign-in succeeded', 'Sign-in denied'].includes(entry.message)));
       const authSummary = authentication ? `${authContext ? `<p>${authContext}</p>` : ''}${showClaims ? `<p>${authentication.groupCount} group value${authentication.groupCount === 1 ? '' : 's'} received · ${authentication.matchedCount} access value${authentication.matchedCount === 1 ? '' : 's'} matched · ${authentication.unmatchedCount} unmatched${authentication.groupOverage ? ' · group overage reported' : ''}</p>${identityDetails ? `<p class="log-identities">${identityDetails}</p>` : ''}` : ''}` : '';
-      return `<article class="log-entry"><time>${escape(new Date(entry.at).toLocaleString())}</time><span class="log-level ${escape(entry.level)}">${escape(entry.level)}</span><div><strong>${escape(entry.message)}</strong>${entry.actor ? `<p class="log-actor">${escape(entry.actor.name)} · ${escape(entry.actor.username || entry.actor.subject)}</p>` : ''}${entry.detail ? `<p>${escape(entry.detail)}</p>` : ''}${authSummary}</div></article>`;
-    }).join('') : '<p class="muted">No log entries yet.</p>';
+      const notificationSummary = notification ? `<p>${notification.workspace ? `Workspace: ${escape(notification.workspace)} · ` : ''}Type: ${escape(notification.deliveryType)}${notification.policies?.length ? ` · Policies: ${escape(notification.policies.join(', '))}` : ''}</p>${notification.applications?.length ? `<p>Applications: ${escape(notification.applications.join(', '))}</p>` : ''}<p>Recipients: ${notification.recipients?.length ? notification.recipients.map(item => `${escape(item.name)} &lt;${escape(item.email)}&gt; (${escape(item.route)})`).join(' · ') : 'None'}</p>${notification.accepted?.length ? `<p>Accepted: ${escape(notification.accepted.join(', '))}</p>` : ''}${notification.rejected?.length ? `<p>Rejected: ${escape(notification.rejected.join(', '))}</p>` : ''}${notification.messageId ? `<p>SMTP message ID: ${escape(notification.messageId)}</p>` : ''}${notification.reasons?.length ? `<p>Reasons: ${escape(notification.reasons.join(' · '))}</p>` : ''}${notification.error ? `<p>Error: ${escape(notification.error)}</p>` : ''}` : '';
+      return `<article class="log-entry"><time>${escape(new Date(entry.at).toLocaleString())}</time><span class="log-level ${escape(entry.level)}">${escape(entry.level === 'partial' ? 'partial' : entry.level)}</span><div><strong>${escape(entry.message)}</strong>${entry.actor ? `<p class="log-actor">${escape(entry.actor.name)} · ${escape(entry.actor.username || entry.actor.subject)}</p>` : ''}${entry.detail ? `<p>${escape(entry.detail)}</p>` : ''}${authSummary}${notificationSummary}</div></article>`;
+    }).join('') : '<p class="muted">No matching log entries.</p>';
   } catch (error) { logsLoaded = false; list.innerHTML = `<p class="form-error">${escape(error.message)}</p>`; }
 }
 
@@ -401,9 +415,16 @@ function policyConditionText(policy) {
   }).join(' · ');
 }
 
+const deliveryCadenceLabel = cadence => ({ adaptive: 'Immediate for urgent findings; daily otherwise', immediate: 'Immediate', daily: 'Daily digest', weekly: 'Weekly digest' })[cadence] || cadence;
+function policyDeliveryText(policy) {
+  const delivery = policy.delivery || {};
+  const hour = delivery.sendHour === null || delivery.sendHour === undefined ? 'global delivery hour' : `${String(delivery.sendHour).padStart(2, '0')}:00`;
+  return `${deliveryCadenceLabel(delivery.cadence || 'adaptive')} · ${hour} · reminders every ${delivery.reminderDays || 7} days`;
+}
+
 function renderNotificationPolicies() {
   const list = $('notification-policy-list');
-  list.innerHTML = notificationPolicyData.policies.length ? notificationPolicyData.policies.map(policy => `<article class="policy-row"><div><h3>${escape(policy.name)}</h3><p>${escape(policyConditionText(policy))}</p></div><span class="policy-state ${policy.enabled === false ? 'disabled' : ''}">${policy.enabled === false ? 'Disabled' : 'Enabled'}</span><button type="button" data-notification-policy="${escape(policy.id)}">Edit</button></article>`).join('') : '<div class="empty"><strong>No notification policies configured</strong><p>No vulnerability findings will enter notification delivery until an enabled policy is added.</p></div>';
+  list.innerHTML = notificationPolicyData.policies.length ? notificationPolicyData.policies.map(policy => `<article class="policy-row"><div><h3>${escape(policy.name)}</h3><p>${escape(policyConditionText(policy))}</p><p>${escape(policyDeliveryText(policy))}</p></div><span class="policy-state ${policy.enabled === false ? 'disabled' : ''}">${policy.enabled === false ? 'Disabled' : 'Enabled'}</span><button type="button" data-notification-policy="${escape(policy.id)}">Edit</button></article>`).join('') : '<div class="empty"><strong>No notification policies configured</strong><p>No vulnerability findings will enter notification delivery until an enabled policy is added.</p></div>';
 }
 
 async function loadNotificationPolicies() {
@@ -425,11 +446,46 @@ function policyDraft() {
   }
   if (form.elements.knownExploited.value !== '') conditions.knownExploited = form.elements.knownExploited.value === 'true';
   for (const field of ['minimumAgeDays', 'maximumAgeDays']) if (form.elements[field].value !== '') conditions[field] = Number(form.elements[field].value);
-  return { id: current?.id || crypto.randomUUID(), name: form.elements.name.value, enabled: form.elements.enabled.checked, conditions };
+  const delivery = {
+    cadence: form.elements.deliveryCadence.value,
+    sendHour: form.elements.deliveryHour.value === '' ? null : Number(form.elements.deliveryHour.value),
+    weeklyDay: Number(form.elements.weeklyDay.value),
+    windowStartHour: Number(form.elements.windowStartHour.value),
+    windowEndHour: Number(form.elements.windowEndHour.value),
+    reminderDays: Number(form.elements.reminderDays.value),
+    workspaceRecipients: form.elements.workspaceRecipients.checked,
+    recipientOwnerIds: selectedPolicyValues(form.elements.recipientOwnerIds),
+    includeEscalationContacts: form.elements.includeEscalationContacts.checked,
+    escalationAfterDays: form.elements.escalationAfterDays.value === '' ? null : Number(form.elements.escalationAfterDays.value),
+  };
+  return { id: current?.id || crypto.randomUUID(), name: form.elements.name.value, enabled: form.elements.enabled.checked, conditions, delivery };
+}
+
+function ensurePolicyDeliveryFields() {
+  if ($('policy-delivery-fields')) return;
+  const conditionGrid = $('notification-policy-form').querySelector('.policy-condition-grid');
+  conditionGrid.insertAdjacentHTML('beforebegin', '<div class="policy-section-head"><h3>Match conditions</h3><p>Choose the finding and application context this policy should match.</p></div>');
+  $('notification-policy-preview').closest('.policy-preview-section').insertAdjacentHTML('beforebegin', `<section id="policy-delivery-fields" class="policy-delivery-section"><h3>Delivery and routing</h3><div class="policy-condition-grid"><label>Cadence<small>Adaptive preserves the existing urgent-immediate and daily behavior.</small><select name="deliveryCadence"><option value="adaptive">Adaptive</option><option value="immediate">Immediate</option><option value="daily">Daily digest</option><option value="weekly">Weekly digest</option></select></label><label>Delivery hour<small>Blank uses the global email delivery hour.</small><input name="deliveryHour" type="number" min="0" max="23" placeholder="Global"></label><label>Weekly delivery day<select name="weeklyDay"><option value="0">Sunday</option><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option></select></label><label>Reminder interval in days<input name="reminderDays" type="number" min="1" max="365" value="7" required></label><label>Allowed window starts<input name="windowStartHour" type="number" min="0" max="23" value="0" required></label><label>Allowed window ends<input name="windowEndHour" type="number" min="0" max="23" value="23" required></label><label class="setting-enabled"><input name="workspaceRecipients" type="checkbox" checked> Include workspace owners</label><label>Additional delivery owners<small>No selection adds no policy-specific owners.</small><select name="recipientOwnerIds" multiple size="6"></select></label><label class="setting-enabled"><input name="includeEscalationContacts" type="checkbox"> Add escalation contacts after</label><label>Escalation age in days<small>Required when escalation contacts are enabled.</small><input name="escalationAfterDays" type="number" min="1" max="365" placeholder="Days"></label></div></section>`);
+  const help = { weeklyDay: 'Used for weekly digests.', reminderDays: 'Days between unresolved reminders.', windowStartHour: 'First allowed local delivery hour.', windowEndHour: 'Last allowed local delivery hour.' };
+  for (const [name, text] of Object.entries(help)) $('notification-policy-form').elements[name].insertAdjacentHTML('beforebegin', `<small>${text}</small>`);
+}
+
+function updatePolicyClearButtons() {
+  for (const select of $('notification-policy-form').querySelectorAll('select[multiple]')) {
+    let actions = select.parentElement.querySelector('.policy-select-actions');
+    if (!actions) {
+      actions = document.createElement('span');
+      actions.className = 'policy-select-actions';
+      actions.innerHTML = `<button type="button" data-clear-policy-select="${escape(select.name)}">Clear selection · use Any</button>`;
+      select.insertAdjacentElement('afterend', actions);
+    }
+    actions.querySelector('button').disabled = select.selectedOptions.length === 0;
+  }
 }
 
 const policyOptions = (values, selected = []) => values.map(value => `<option value="${escape(value)}" ${selected.includes(value) ? 'selected' : ''}>${escape(friendlyPolicyValue(value))}</option>`).join('');
 function openNotificationPolicyEditor(id = null) {
+  ensurePolicyDeliveryFields();
   currentNotificationPolicyId = id;
   const policy = notificationPolicyData.policies.find(item => item.id === id);
   const form = $('notification-policy-form');
@@ -443,11 +499,26 @@ function openNotificationPolicyEditor(id = null) {
   form.elements.knownExploited.value = policy?.conditions && Object.hasOwn(policy.conditions, 'knownExploited') ? String(policy.conditions.knownExploited) : '';
   form.elements.minimumAgeDays.value = policy?.conditions?.minimumAgeDays ?? '';
   form.elements.maximumAgeDays.value = policy?.conditions?.maximumAgeDays ?? '';
+  const delivery = policy?.delivery || {};
+  form.elements.deliveryCadence.value = delivery.cadence || 'adaptive';
+  form.elements.deliveryHour.value = delivery.sendHour ?? '';
+  form.elements.weeklyDay.value = delivery.weeklyDay ?? 1;
+  form.elements.reminderDays.value = delivery.reminderDays ?? 7;
+  form.elements.windowStartHour.value = delivery.windowStartHour ?? 0;
+  form.elements.windowEndHour.value = delivery.windowEndHour ?? 23;
+  form.elements.workspaceRecipients.checked = delivery.workspaceRecipients !== false;
+  form.elements.recipientOwnerIds.innerHTML = notificationPolicyData.owners.map(item => `<option value="${escape(item.id)}" ${(delivery.recipientOwnerIds || []).includes(item.id) ? 'selected' : ''}>${escape(item.name)} · ${escape(item.email)}</option>`).join('');
+  form.elements.includeEscalationContacts.checked = delivery.includeEscalationContacts === true;
+  form.elements.escalationAfterDays.value = delivery.escalationAfterDays ?? '';
+  updatePolicyClearButtons();
   $('notification-policy-delete').hidden = !policy;
   $('notification-policy-save').disabled = true;
   $('notification-policy-error').hidden = true;
   $('notification-policy-preview').innerHTML = '<p class="muted">Preview the draft against the latest assessment before saving.</p>';
-  $('notification-policy-editor').showModal();
+  const dialog = $('notification-policy-editor');
+  form.scrollTop = 0;
+  dialog.showModal();
+  requestAnimationFrame(() => { form.scrollTop = 0; dialog.scrollTop = 0; form.elements.name.focus({ preventScroll: true }); });
 }
 
 async function previewNotificationPolicyDraft() {
@@ -457,7 +528,11 @@ async function previewNotificationPolicyDraft() {
     const response = await fetch('/api/notification-policies/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ policy: policyDraft() }) });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not preview policy');
-    $('notification-policy-preview').innerHTML = `<div class="policy-preview-summary"><strong>${data.matches.length} matching finding${data.matches.length === 1 ? '' : 's'}</strong><span>${data.evaluatedFindings} evaluated</span></div>${data.matches.length ? data.matches.slice(0, 50).map(match => `<article><strong>${escape(match.finding)}</strong><span>${escape(match.application)} · ${escape(match.workspace)}</span><small>${escape(match.explanation.map(item => `${policyFieldLabels[item.condition] || item.condition} matched`).join(' · '))}</small></article>`).join('') : '<p class="muted">No findings in the latest assessment match this policy.</p>'}${data.matches.length > 50 ? `<p class="muted">Showing the first 50 of ${data.matches.length} matches.</p>` : ''}`;
+    const routes = data.routes.map(route => `<article><strong>${escape(route.workspace)}</strong><span>To: ${escape(route.recipients.map(item => `${item.name} <${item.email}>`).join(', ') || 'No recipients')}</span>${route.escalationRecipients.length ? `<small>Escalation: ${escape(route.escalationRecipients.map(item => `${item.name} <${item.email}>`).join(', '))}</small>` : ''}</article>`).join('');
+    const findings = data.matches.slice(0, 50).map(match => `<article><strong>${escape(match.finding)}</strong><span>${escape(match.application)} · ${escape(match.workspace)}</span><small>${escape(match.explanation.map(item => `${policyFieldLabels[item.condition] || item.condition} matched`).join(' · '))}</small></article>`).join('');
+    const routePreview = routes ? `<h4>Routing preview</h4>${routes}` : '<p class="muted">No recipient routes are produced by the latest assessment.</p>';
+    const findingPreview = findings ? `<h4>Matching findings</h4>${findings}` : '<p class="muted">No findings in the latest assessment match this policy.</p>';
+    $('notification-policy-preview').innerHTML = `<div class="policy-preview-summary"><strong>${data.matches.length} matching finding${data.matches.length === 1 ? '' : 's'}</strong><span>${data.evaluatedFindings} evaluated</span></div><p><strong>Timing:</strong> ${escape(policyDeliveryText({ delivery: data.delivery }))}</p>${routePreview}${findingPreview}${data.matches.length > 50 ? `<p class="muted">Showing the first 50 of ${data.matches.length} matches.</p>` : ''}`;
     $('notification-policy-save').disabled = false;
   } catch (error) { $('notification-policy-error').textContent = error.message; $('notification-policy-error').hidden = false; $('notification-policy-save').disabled = true; }
   finally { $('notification-policy-preview-button').disabled = false; }
@@ -1299,12 +1374,14 @@ $('owner-editor-close').addEventListener('click', closeOwnerEditor);
 $('owner-cancel').addEventListener('click', closeOwnerEditor);
 $('logs-refresh').addEventListener('click', loadLogs);
 for (const button of document.querySelectorAll('[data-log-type]')) button.addEventListener('click', () => { activeLogType = button.dataset.logType; loadLogs(); });
+for (const input of document.querySelectorAll('#notification-log-filters input,#notification-log-filters select')) input.addEventListener('input', loadLogs);
 $('settings-form').addEventListener('submit', saveSettings);
 $('settings-test-email').addEventListener('click', testEmailSettings);
 $('add-notification-policy').addEventListener('click', () => openNotificationPolicyEditor());
 $('notification-policy-list').addEventListener('click', event => { const button = event.target.closest('[data-notification-policy]'); if (button) openNotificationPolicyEditor(button.dataset.notificationPolicy); });
 $('notification-policy-form').addEventListener('submit', saveNotificationPolicy);
-$('notification-policy-form').addEventListener('input', () => { $('notification-policy-save').disabled = true; $('notification-policy-preview').innerHTML = '<p class="muted">Draft changed. Preview it again before saving.</p>'; });
+$('notification-policy-form').addEventListener('input', () => { updatePolicyClearButtons(); $('notification-policy-save').disabled = true; $('notification-policy-preview').innerHTML = '<p class="muted">Draft changed. Preview it again before saving.</p>'; });
+$('notification-policy-form').addEventListener('click', event => { const button = event.target.closest('[data-clear-policy-select]'); if (!button) return; const select = $('notification-policy-form').elements[button.dataset.clearPolicySelect]; for (const option of select.options) option.selected = false; select.dispatchEvent(new Event('input', { bubbles: true })); });
 $('notification-policy-preview-button').addEventListener('click', previewNotificationPolicyDraft);
 $('notification-policy-delete').addEventListener('click', deleteNotificationPolicy);
 $('notification-policy-editor-close').addEventListener('click', () => $('notification-policy-editor').close());

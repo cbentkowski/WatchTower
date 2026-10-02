@@ -41,12 +41,31 @@ test('notification policy API migrates defaults, previews drafts, and persists r
     const draft = { id: 'critical-only', name: 'Critical only', enabled: true, conditions: { severities: ['critical'] } };
     const previewResponse = await fetch(`${origin}/api/notification-policies/preview`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ policy: draft }) });
     assert.equal(previewResponse.status, 200);
-    assert.deepEqual(await previewResponse.json(), { policy: draft, evaluatedFindings: 0, matches: [] });
+    const preview = await previewResponse.json();
+    assert.deepEqual(preview.matches, []);
+    assert.deepEqual(preview.routes, []);
+    assert.equal(preview.delivery.cadence, 'adaptive');
 
     const saveResponse = await fetch(`${origin}/api/notification-policies`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ policies: [draft] }) });
     assert.equal(saveResponse.status, 200);
-    assert.deepEqual((await saveResponse.json()).policies, [draft]);
-    assert.deepEqual((JSON.parse(await readFile(path.join(directory, 'notification-policies.json'), 'utf8'))).policies, [draft]);
+    const saved = (await saveResponse.json()).policies;
+    assert.equal(saved[0].delivery.cadence, 'adaptive');
+    assert.deepEqual((JSON.parse(await readFile(path.join(directory, 'notification-policies.json'), 'utf8'))).policies, saved);
+
+    const updated = { ...saved[0], name: 'Critical production', enabled: false, conditions: { ...saved[0].conditions, environments: ['production'] }, delivery: { ...saved[0].delivery, cadence: 'daily', sendHour: 9 } };
+    const updateResponse = await fetch(`${origin}/api/notification-policies`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ policies: [updated] }) });
+    assert.equal(updateResponse.status, 200);
+    const audits = (await (await fetch(`${origin}/api/logs?type=audit`)).json()).entries;
+    const changed = audits.find(entry => entry.message === 'Notification policy updated');
+    assert.equal(changed.target.name, 'Critical production');
+    assert.deepEqual(changed.changes.name, { from: 'Critical only', to: 'Critical production' });
+    assert.deepEqual(changed.changes.enabled, { from: 'Yes', to: 'No' });
+    assert.deepEqual(changed.changes.environments, { from: 'Any', to: 'Production' });
+    assert.deepEqual(changed.changes.cadence, { from: 'Adaptive', to: 'Daily' });
+    assert.deepEqual(changed.changes.sendHour, { from: 'Global', to: '09:00' });
+    assert.match(changed.detail, /Critical production; Name: Critical only → Critical production/);
+    assert.equal(audits.filter(entry => entry.message === 'Notification policy added').length, 1);
+    assert.equal(audits.filter(entry => entry.message === 'Notification policy removed').length, 2);
   } finally {
     child.kill('SIGTERM');
     await new Promise(resolve => child.once('exit', resolve));

@@ -14,6 +14,7 @@ export const notificationPolicyOptions = Object.freeze({
 
 const listFields = ['severities', 'criticalities', 'environments', 'exposures', 'workspaceIds', 'ownerIds', 'findingStates'];
 const allowedConditions = new Set([...listFields, 'knownExploited', 'minimumAgeDays', 'maximumAgeDays']);
+const deliveryCadences = new Set(['adaptive', 'immediate', 'daily', 'weekly']);
 const oneLine = (value, label, limit = 120) => {
   const text = String(value || '').trim();
   if (!text) throw new Error(`${label} is required`);
@@ -21,6 +22,41 @@ const oneLine = (value, label, limit = 120) => {
   return text;
 };
 const uniqueStrings = value => [...new Set((Array.isArray(value) ? value : []).map(item => String(item).trim()).filter(Boolean))].sort();
+const optionalHour = (value, label) => {
+  if (value === '' || value === undefined || value === null) return null;
+  const hour = Number(value);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) throw new Error(`${label} must be a whole hour from 0 to 23`);
+  return hour;
+};
+
+function validateDelivery(input = {}, resources = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Policy delivery settings must be an object');
+  const cadence = String(input.cadence || 'adaptive');
+  if (!deliveryCadences.has(cadence)) throw new Error('Select a valid delivery cadence');
+  const reminderDays = input.reminderDays === '' || input.reminderDays === undefined || input.reminderDays === null ? 7 : Number(input.reminderDays);
+  if (!Number.isInteger(reminderDays) || reminderDays < 1 || reminderDays > 365) throw new Error('Reminder interval must be from 1 to 365 days');
+  const weeklyDay = input.weeklyDay === '' || input.weeklyDay === undefined || input.weeklyDay === null ? 1 : Number(input.weeklyDay);
+  if (!Number.isInteger(weeklyDay) || weeklyDay < 0 || weeklyDay > 6) throw new Error('Select a valid weekly delivery day');
+  const escalationAfterDays = input.escalationAfterDays === '' || input.escalationAfterDays === undefined || input.escalationAfterDays === null ? null : Number(input.escalationAfterDays);
+  if (escalationAfterDays !== null && (!Number.isInteger(escalationAfterDays) || escalationAfterDays < 1 || escalationAfterDays > 365)) throw new Error('Escalation age must be from 1 to 365 days');
+  const recipientOwnerIds = uniqueStrings(input.recipientOwnerIds);
+  if (resources.owners && recipientOwnerIds.some(value => !resources.owners.some(item => item.id === value))) throw new Error('Select valid delivery owners');
+  const workspaceRecipients = input.workspaceRecipients !== false;
+  if (!workspaceRecipients && !recipientOwnerIds.length) throw new Error('Select workspace recipients or at least one delivery owner');
+  if (input.includeEscalationContacts === true && escalationAfterDays === null) throw new Error('Enter an escalation age when escalation contacts are enabled');
+  return {
+    cadence,
+    sendHour: optionalHour(input.sendHour, 'Delivery hour'),
+    weeklyDay,
+    windowStartHour: optionalHour(input.windowStartHour ?? 0, 'Delivery window start'),
+    windowEndHour: optionalHour(input.windowEndHour ?? 23, 'Delivery window end'),
+    reminderDays,
+    workspaceRecipients,
+    recipientOwnerIds,
+    includeEscalationContacts: input.includeEscalationContacts === true,
+    escalationAfterDays,
+  };
+}
 
 export function validateNotificationPolicy(input, resources = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Notification policy details are required');
@@ -48,7 +84,7 @@ export function validateNotificationPolicy(input, resources = {}) {
   }
   if (normalized.minimumAgeDays !== undefined && normalized.maximumAgeDays !== undefined && normalized.minimumAgeDays > normalized.maximumAgeDays) throw new Error('Minimum age cannot exceed maximum age');
   if (!Object.keys(normalized).length) throw new Error('Select at least one policy condition');
-  return { id, name: oneLine(input.name, 'Policy name'), enabled: input.enabled !== false, conditions: normalized };
+  return { id, name: oneLine(input.name, 'Policy name'), enabled: input.enabled !== false, conditions: normalized, delivery: validateDelivery(input.delivery, resources) };
 }
 
 export function validateNotificationPolicies(input, resources = {}) {
@@ -88,15 +124,22 @@ export async function ensureNotificationPolicies(file) {
 
 export function previewNotificationPolicy(policy, snapshot, now = new Date()) {
   const matches = [];
+  const routes = new Map();
+  const ownerById = new Map((snapshot?.owners || []).map(owner => [owner.id, owner]));
   let evaluatedFindings = 0;
   for (const workspace of snapshot?.workspaces || []) {
     for (const application of (snapshot?.results || []).filter(item => workspace.applications.includes(item.id))) {
       for (const finding of application.vulnerabilities || []) {
         evaluatedFindings++;
         const result = evaluatePolicies([policy], { finding, application, workspace }, now)[0];
-        if (result?.matched) matches.push({ workspace: workspace.name, application: application.name, finding: finding.id || 'Unknown finding', explanation: result.explanation });
+        if (result?.matched) {
+          matches.push({ workspace: workspace.name, application: application.name, finding: finding.id || 'Unknown finding', explanation: result.explanation });
+          const ownerIds = [...new Set([...(policy.delivery.workspaceRecipients ? workspace.ownerIds || [] : []), ...policy.delivery.recipientOwnerIds])];
+          const recipients = ownerIds.map(id => ownerById.get(id)).filter(Boolean);
+          routes.set(workspace.id, { workspace: workspace.name, recipients: recipients.map(owner => ({ name: owner.name, email: owner.email })), escalationRecipients: policy.delivery.includeEscalationContacts ? recipients.filter(owner => owner.escalationEmail).map(owner => ({ name: owner.name, email: owner.escalationEmail })) : [] });
+        }
       }
     }
   }
-  return { evaluatedFindings, matches };
+  return { evaluatedFindings, matches, delivery: policy.delivery, routes: [...routes.values()] };
 }

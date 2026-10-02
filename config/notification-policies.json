@@ -10,6 +10,18 @@
           "critical",
           "high"
         ]
+      },
+      "delivery": {
+        "cadence": "adaptive",
+        "sendHour": null,
+        "weeklyDay": 1,
+        "windowStartHour": 0,
+        "windowEndHour": 23,
+        "reminderDays": 7,
+        "workspaceRecipients": true,
+        "recipientOwnerIds": [],
+        "includeEscalationContacts": false,
+        "escalationAfterDays": null
       }
     },
     {
@@ -18,6 +30,18 @@
       "enabled": true,
       "conditions": {
         "knownExploited": true
+      },
+      "delivery": {
+        "cadence": "adaptive",
+        "sendHour": null,
+        "weeklyDay": 1,
+        "windowStartHour": 0,
+        "windowEndHour": 23,
+        "reminderDays": 7,
+        "workspaceRecipients": true,
+        "recipientOwnerIds": [],
+        "includeEscalationContacts": false,
+        "escalationAfterDays": null
       }
     }
   ]
