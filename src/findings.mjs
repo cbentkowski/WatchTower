@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { reconcilePackageFinding } from './package-findings.mjs';
+import { packageEvidenceFingerprint } from './package-assessment.mjs';
 
 export const findingStates = Object.freeze(['new', 'investigating', 'remediation-planned', 'mitigated', 'resolved', 'risk-accepted', 'not-affected', 'false-positive']);
 export const findingStateLabels = Object.freeze({ new: 'New', investigating: 'Investigating', 'remediation-planned': 'Remediation planned', mitigated: 'Mitigated', resolved: 'Resolved', 'risk-accepted': 'Risk accepted', 'not-affected': 'Not affected', 'false-positive': 'False positive' });
@@ -28,6 +29,7 @@ const ticketReference = value => {
 };
 export const findingKey = (applicationId, findingId) => `${applicationId}:${findingId}`;
 export function evidenceFingerprint(finding) {
+  if (finding.package) return packageEvidenceFingerprint(finding);
   const evidence = { id: finding.id, score: Number(finding.score) || 0, severity: finding.severity || finding.label || '', knownExploited: Boolean(finding.knownExploited), url: finding.url || '', advisories: [...(finding.advisories || [])].sort() };
   return createHash('sha256').update(JSON.stringify(evidence)).digest('hex');
 }
@@ -83,6 +85,9 @@ export function reconcileFindingWorkflows(store, results, actor = { issuer: 'sca
       const identity = reconcilePackageFinding(store, { ...finding.package, applicationId: application.id, advisoryId: finding.advisoryId, aliases: finding.aliases });
       if (identity.status === 'ambiguous') {
         finding.identity = identity;
+        finding.id = `ambiguous-${identity.findingIds.join('-')}`;
+        if (application.status !== 'red') application.status = 'unknown';
+        if (application.reasons) application.reasons.push('Package advisory aliases connect multiple response records; identity review required');
         delete finding.workflow;
         continue;
       }

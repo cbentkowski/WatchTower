@@ -91,6 +91,11 @@ Signal's intermediate SBOM ingestion APIs and supported formats are described in
 [SBOM imports](SBOM_IMPORTS.md); upload controls and package assessment follow in
 later work.
 
+[Package assessment](PACKAGE_ASSESSMENT.md) now connects imported inventories to
+OSV on refresh. Package findings show the exact installed component and advisory;
+unsupported or failed evidence remains incomplete. Upload/management controls
+will follow in the final interface part.
+
 Administrators manage reusable contacts from **Owners**. Each owner requires a name and unique email address and may include an escalation email. Editing an owner updates its contact information everywhere that owner is assigned. An owner cannot be removed while any application or workspace still references it.
 
 Application Editors and Workspace Notification Managers can create an owner from the owner-selection dialog and immediately assign it to the resource they are editing. They cannot edit or remove directory entries unless they are administrators. If the email already belongs to an owner, WatchTower prevents the duplicate and directs the user to select the existing owner.

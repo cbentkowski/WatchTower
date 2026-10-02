@@ -1,11 +1,11 @@
 # SBOM ingestion in Signal
 
-This intermediate implementation provides API-based image configuration and SBOM
-ingestion. Upload controls and inventory views will follow in the interface part
-of issue #90. Package vulnerability lookups are the next part. Imported inventory
-is explicitly **awaiting assessment** and does not prove an application is clean.
-Applications still require their existing CPE and lifecycle configuration in this
-build; CPE-less application behavior will be connected with assessment support.
+API-based image configuration and SBOM ingestion are part 2 of issue #90.
+Upload controls and inventory views follow in the interface part. Newly imported
+inventory is explicitly **awaiting assessment** and does not prove an application
+is clean. The [package assessment implementation](PACKAGE_ASSESSMENT.md) connects
+OSV queries and explicit inventory-only application configuration through the API.
+The ingestion contracts below remain applicable.
 
 ## Supported import profile
 

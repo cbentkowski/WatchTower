@@ -36,6 +36,29 @@ export function createInventoryStore(directory) {
   }
   return {
     read,
+    loadActive: async applicationId => {
+      const state = await read(applicationId);
+      const activeImages = new Set(state.images.filter(image => image.enabled && !image.retired).map(image => image.id));
+      const inventories = [];
+      for (const revision of state.revisions.filter(item => item.active && (item.scope.imageId === null || activeImages.has(item.scope.imageId)))) {
+        inventoryScope(revision.id);
+        const inventory = JSON.parse(await readFile(path.join(folder(applicationId), `${revision.id}.json`), 'utf8'));
+        try { inventory.previousAssessment = JSON.parse(await readFile(path.join(folder(applicationId), `${revision.id}-assessment.json`), 'utf8')); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+        inventories.push(inventory);
+      }
+      return { images: state.images, inventories };
+    },
+    recordAssessment: (applicationId, revisionId, assessment) => update(applicationId, async state => {
+      inventoryScope(revisionId);
+      const revision = state.revisions.find(item => item.id === revisionId && item.active);
+      if (!revision) return false;
+      await atomic(path.join(folder(applicationId), `${revisionId}-assessment.json`), assessment);
+      const { findings, ...summary } = assessment;
+      revision.assessment = summary;
+      revision.assessmentState = summary.state;
+      return true;
+    }),
     setImages: (applicationId, images) => update(applicationId, state => { state.images = reconcileImages(images, state.images); return state; }),
     import: (applicationId, raw, selection, actor) => update(applicationId, async state => {
       const inventory = await processSbom(raw);
