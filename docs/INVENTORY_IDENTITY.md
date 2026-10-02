@@ -5,6 +5,10 @@ package assessment, lifecycle reconciliation, and interface/documentation.
 This first change establishes contracts used by subsequent changes. It does not
 yet expose image configuration, SBOM uploads, or package-source queries.
 
+The subsequent [SBOM ingestion implementation](SBOM_IMPORTS.md) connects image
+configuration and imports through scoped APIs. Package-source queries and upload
+controls remain later parts of the feature.
+
 ## Inventory contracts
 
 An inventory scope is an immutable application UUID and either an immutable image

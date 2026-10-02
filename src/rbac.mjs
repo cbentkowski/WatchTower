@@ -116,6 +116,9 @@ export function calculateAccess(user, config, apps, workspaces, feeds = []) {
 }
 
 export function accessJson(access) { return { isAdmin: access.isAdmin, accessManage: access.accessManage, scan: access.scan, feeds: { manage: access.feedManage, view: [...access.feedView], edit: [...access.feedEdit] }, applications: { view: [...access.appView], edit: [...access.appEdit] }, workspaces: { view: [...access.workspaceView], edit: [...access.workspaceEdit], membership: [...access.workspaceMembership], notifications: [...access.workspaceNotifications] } }; }
+export function canRefreshApplication(access, applicationId) {
+  return Boolean(access.appView.has(applicationId) && (access.isAdmin || access.appEdit.has(applicationId) || access.scan));
+}
 
 export function canCreateOwner(access) { return Boolean(access.isAdmin || access.appEdit.size || access.workspaceNotifications.size); }
 export function canDeleteApplication(access) { return Boolean(access.isAdmin); }

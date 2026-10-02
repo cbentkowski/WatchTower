@@ -11,7 +11,7 @@ import { readGeneralSettings, writeGeneralSettings, validateGeneralSettings, gen
 import { createLogger, logTypes } from './logger.mjs';
 import { administratorRole, createAuth } from './auth.mjs';
 import { createYamlMonitor } from './yaml-monitor.mjs';
-import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, canCreateOwner, canDeleteApplication, claimsForIdentityMappings, describeIdentityClaims, explainAccess, protectedRoleState, standardRoles } from './rbac.mjs';
+import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, canCreateOwner, canDeleteApplication, claimsForIdentityMappings, describeIdentityClaims, explainAccess, protectedRoleState, standardRoles, canRefreshApplication } from './rbac.mjs';
 import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, readFeeds, secureFetchText, serializeFeeds, validateFeedInput, writeFeeds } from './feeds.mjs';
 import { readOwners, validateOwner, writeOwners } from './owners.mjs';
 import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
@@ -20,6 +20,8 @@ import { cpeSearchMatch, effectiveCpe, legacyCpe, mappingFromApp, mappingWarning
 import { matchLifecycleRelease, normalizeLifecycleProduct, searchLifecycleProducts } from './lifecycle.mjs';
 import { appendFindingEvents, readFindingEvents, readFindingStore, reconcileFindingWorkflows, updateFindingWorkflow, writeFindingStore } from './findings.mjs';
 import { ensureNotificationPolicies, notificationPolicyOptions, previewNotificationPolicy, readNotificationPolicies, validateNotificationPolicies, validateNotificationPolicy, writeNotificationPolicies } from './notification-policy-store.mjs';
+import { createInventoryStore } from './inventory-store.mjs';
+import { sbomLimits } from './sbom.mjs';
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.dirname(sourceDirectory);
@@ -30,6 +32,7 @@ const PORT = Number(process.env.SERVER_PORT || process.env.PORT || 4173);
 const HOST = process.env.HOST || '127.0.0.1';
 const tlsConfiguration = await loadTlsConfiguration();
 const dataDirectory = process.env.DATA_DIR || path.join(projectDirectory, 'data');
+const inventoryStore = createInventoryStore(path.join(dataDirectory, 'inventories'));
 const configFiles = ['applications.yaml', 'workspaces.yaml', 'feeds.yaml', 'owners.yaml', 'smtp.yaml', 'general.yaml'];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const exists = file => access(file).then(() => true, () => false);
@@ -326,12 +329,15 @@ async function saveRelatedFiles(updates) {
     throw error;
   }
 }
-async function readBody(req) {
-  let body = '';
+async function readBody(req, limit = 50000) {
+  const chunks = [];
+  let bytes = 0;
   for await (const chunk of req) {
-    body += chunk;
-    if (body.length > 50000) throw new Error('Request is too large');
+    bytes += chunk.length;
+    if (bytes > limit) throw new Error('Request is too large');
+    chunks.push(chunk);
   }
+  const body = Buffer.concat(chunks).toString('utf8');
   try { return JSON.parse(body); } catch { throw new Error('Invalid JSON'); }
 }
 
@@ -427,6 +433,14 @@ async function realAuthorization(req, includeDisabled = true) {
 function forbidden(res, message = 'You do not have permission to perform this action') {
   res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify({ error: message }));
+}
+
+function visibleSnapshot(data, owners, access, req) {
+  const results = (data.results || []).filter(app => access.appView.has(app.id));
+  const workspaces = (data.workspaces || []).filter(group => access.workspaceView.has(group.id)).map(group => ({ ...group, applications: group.applications.filter(id => access.appView.has(id)) }));
+  const assignedOwnerIds = new Set(results.flatMap(app => app.ownerIds || []));
+  const visibleOwners = owners.filter(owner => assignedOwnerIds.has(owner.id));
+  return { ...data, results, workspaces, owners: visibleOwners, access: accessJson(access), groupOverage: req.permissionPreview ? false : Boolean(req.authUser?.groupOverage) };
 }
 
 function selectedPreviewConfig(config, grantIds) {
@@ -734,7 +748,7 @@ async function refresh() {
 
 async function refreshApplication(appId) {
   if (refreshPromise) await refreshPromise;
-  if (!snapshot) return refresh();
+  if (!snapshot) snapshot = { results: [], checkedAt: new Date().toISOString(), workspaces: [], owners: [], inventoryCount: 0 };
   refreshPromise = (async () => {
     const apps = parseInventory(await readFile(path.join(configDirectory, 'applications.yaml'), 'utf8'));
     const owners = await readOwners(ownerFile);
@@ -1277,12 +1291,32 @@ const requestHandler = async (req, res) => {
       await logger.audit('Application removed', auditActor(req), { type: 'application', id: app.id, name: app.name }, changes, `${app.name} (${app.id}); removed from ${affectedWorkspaces.length} workspaces and ${affectedFeeds.length} feeds; finding workflow records preserved`);
       res.writeHead(204); res.end(); return;
     }
+    const inventoryRoute = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/(inventory|images|sboms)$/i);
+    if (inventoryRoute && ['GET', 'PUT', 'POST'].includes(req.method)) {
+      const applicationId = inventoryRoute[1];
+      const { access, apps } = await authorization(req);
+      if (!access.appView.has(applicationId) || (req.method !== 'GET' && !access.appEdit.has(applicationId))) { forbidden(res, 'Application access required'); return; }
+      if (!apps.some(app => app.id === applicationId)) throw new Error('Application not found');
+      let result;
+      if (req.method === 'GET' && inventoryRoute[2] === 'inventory') result = await inventoryStore.read(applicationId);
+      else if (req.method === 'PUT' && inventoryRoute[2] === 'images') {
+        result = await inventoryStore.setImages(applicationId, (await readBody(req)).images);
+        await logger.audit('Application images updated', auditActor(req), { type: 'application', id: applicationId }, { images: result.images });
+      } else if (req.method === 'POST' && inventoryRoute[2] === 'sboms') {
+        if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') throw new Error('Compressed SBOM uploads are unsupported');
+        const body = await readBody(req, sbomLimits.bytes + 100000);
+        result = await inventoryStore.import(applicationId, body.sbom, body.imageId, auditActor(req));
+        await logger.audit('SBOM imported', auditActor(req), { type: 'application', id: applicationId }, result, 'Inventory awaiting vulnerability assessment');
+      } else { res.writeHead(405); res.end(); return; }
+      res.writeHead(req.method === 'POST' ? 201 : 200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(result)); return;
+    }
     const appRefresh = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/refresh$/i);
     if (appRefresh && req.method === 'POST') {
-      const { access } = await authorization(req);
-      if (!access.appEdit.has(appRefresh[1])) { forbidden(res, 'Application Editor role required'); return; }
+      await snapshotReady;
+      const { access, owners } = await authorization(req);
+      if (!canRefreshApplication(access, appRefresh[1])) { forbidden(res, 'Application Editor or Scan Operator access required'); return; }
       const data = await refreshApplication(appRefresh[1]);
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); return;
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(visibleSnapshot(data, owners, access, req))); return;
     }
     const workspaceEdit = url.pathname.match(/^\/api\/workspaces\/([A-Za-z0-9._-]+)$/);
     if ((url.pathname === '/api/workspaces' && req.method === 'POST') || (workspaceEdit && req.method === 'PUT')) {
@@ -1359,11 +1393,7 @@ const requestHandler = async (req, res) => {
       const { owners, access } = await authorization(req);
       if (url.searchParams.has('refresh') && !access.scan) { forbidden(res, 'Scan Operator role required'); return; }
       const data = !snapshot || Date.now() - new Date(snapshot.checkedAt).getTime() > refreshMs || url.searchParams.has('refresh') ? await refresh() : snapshot;
-      const results = (data.results || []).filter(app => access.appView.has(app.id));
-      const workspaces = (data.workspaces || []).filter(group => access.workspaceView.has(group.id)).map(group => ({ ...group, applications: group.applications.filter(id => access.appView.has(id)) }));
-      const assignedOwnerIds = new Set(results.flatMap(app => app.ownerIds || []));
-      const visibleOwners = owners.filter(owner => assignedOwnerIds.has(owner.id));
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ ...data, results, workspaces, owners: visibleOwners, access: accessJson(access), groupOverage: req.permissionPreview ? false : Boolean(req.authUser?.groupOverage) })); return;
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(visibleSnapshot(data, owners, access, req))); return;
     }
     const files = { '/': 'index.html', '/styles.css': 'styles.css', '/theme-init.js': 'theme-init.js', '/app.js': 'app.js', '/favicon.svg': 'favicon.svg' };
     const file = files[url.pathname];

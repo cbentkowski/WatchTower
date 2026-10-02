@@ -16,7 +16,7 @@ async function freePort() {
   return port;
 }
 
-test('new application refresh collects only associated feeds and preserves existing results', async () => {
+for (const cold of [false, true]) test(`application refresh collects only associated feeds (${cold ? 'no snapshot' : 'existing snapshot'})`, async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'watchtower-application-refresh-'));
   const data = path.join(directory, 'data');
   const fetchLog = path.join(directory, 'fetch.log');
@@ -28,7 +28,7 @@ test('new application refresh collects only associated feeds and preserves exist
   await writeFile(path.join(directory, 'applications.yaml'), `applications:\n  - id: ${existingId}\n    name: "Existing App"\n    version: "1.0.0"\n    cpeVendor: "example"\n    cpeProduct: "existing"\n    cpeName: "cpe:2.3:a:example:existing:*:*:*:*:*:*:*:*"\n    cpeMode: "product"\n    eolDate: "2030-01-01"\n    criticality: "unspecified"\n    environment: "unspecified"\n    exposure: "unknown"\n    ownerIds:\n    tags:\n`);
   await writeFile(path.join(directory, 'workspaces.yaml'), 'workspaces:\n');
   await writeFile(path.join(directory, 'feeds.yaml'), `version: 1\nfeeds:\n  - id: ${existingFeedId}\n    name: "Existing application feed"\n    url: "https://93.184.216.34/existing.xml"\n    format: "rss"\n    enabled: true\n    categories:\n      - "release"\n    productAliases:\n      - "Existing App"\n    applicationIds:\n      - ${existingId}\n  - id: ${newFeedId}\n    name: "New application feed"\n    url: "https://93.184.216.35/new.xml"\n    format: "rss"\n    enabled: true\n    categories:\n      - "release"\n    productAliases:\n      - "New App"\n    applicationIds:\n`);
-  await writeFile(path.join(data, 'status.json'), `${JSON.stringify({ checkedAt: new Date().toISOString(), results: [existingResult], workspaces: [], owners: [], feedSummary: { total: 2, errors: 0 }, warning: null, inventoryCount: 1 })}\n`);
+  if (!cold) await writeFile(path.join(data, 'status.json'), `${JSON.stringify({ checkedAt: new Date().toISOString(), results: [existingResult], workspaces: [], owners: [], feedSummary: { total: 2, errors: 0 }, warning: null, inventoryCount: 1 })}\n`);
   const port = await freePort();
   const fixture = pathToFileURL(path.resolve(import.meta.dirname, '..', 'test-support', 'mock-sources.mjs')).href;
   const child = spawn(process.execPath, ['--import', fixture, 'src/server.mjs'], {
@@ -54,11 +54,23 @@ test('new application refresh collects only associated feeds and preserves exist
     const refreshed = await fetch(`${origin}/api/applications/${newId}/refresh`, { method: 'POST' });
     assert.equal(refreshed.status, 200);
     const snapshot = await refreshed.json();
-    assert.deepEqual(snapshot.results.find(result => result.id === existingId), existingResult);
+    if (!cold) assert.deepEqual(snapshot.results.find(result => result.id === existingId), existingResult);
+    else assert.equal(snapshot.results.some(result => result.id === existingId), false);
     assert.equal(snapshot.results.some(result => result.id === newId), true);
     const requests = await readFile(fetchLog, 'utf8');
     assert.match(requests, /93\.184\.216\.35\/new\.xml/);
     assert.doesNotMatch(requests, /93\.184\.216\.34\/existing\.xml/);
+    const images = await fetch(`${origin}/api/applications/${newId}/images`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ images: [{ reference: 'docker.io/team/app:1' }] }) });
+    assert.equal(images.status, 200);
+    const imageState = await images.json();
+    const sbom = { bomFormat: 'CycloneDX', specVersion: '1.6', version: 1, components: [{ type: 'library', name: 'example', purl: 'pkg:npm/example@1.0.0' }] };
+    const imported = await fetch(`${origin}/api/applications/${newId}/sboms`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sbom: JSON.stringify(sbom), imageId: imageState.images[0].id }) });
+    assert.equal(imported.status, 201);
+    assert.equal((await imported.json()).assessmentState, 'awaiting-assessment');
+    const inventory = await (await fetch(`${origin}/api/applications/${newId}/inventory`)).json();
+    assert.equal(inventory.revisions[0].componentCount, 1);
+    const logs = await (await fetch(`${origin}/api/logs?type=audit`)).json();
+    assert.ok(logs.entries.some(entry => entry.message === 'SBOM imported'));
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill();

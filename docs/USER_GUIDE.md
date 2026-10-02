@@ -74,6 +74,23 @@ Review the CPE and lifecycle mappings whenever the product name, edition, releas
 
 ## Owners and application context
 
+### Refresh one application
+
+Open an application and choose **Refresh application** beside **Edit application**.
+This collects its associated feeds and updates its assessment without refreshing
+other applications. Administrators, Application Editors (including workspace
+grants), and Scan Operators with view access to that application can use it.
+View-only access and feed-edit access alone do not permit refresh. Permission
+Preview remains read-only. Review Assessment warnings after refresh for source
+failures or incomplete evidence.
+
+Application details start at the top when opened. Refreshing an already open
+dialog preserves its scroll position.
+
+Signal's intermediate SBOM ingestion APIs and supported formats are described in
+[SBOM imports](SBOM_IMPORTS.md); upload controls and package assessment follow in
+later work.
+
 Administrators manage reusable contacts from **Owners**. Each owner requires a name and unique email address and may include an escalation email. Editing an owner updates its contact information everywhere that owner is assigned. An owner cannot be removed while any application or workspace still references it.
 
 Application Editors and Workspace Notification Managers can create an owner from the owner-selection dialog and immediately assign it to the resource they are editing. They cannot edit or remove directory entries unless they are administrators. If the email already belongs to an owner, WatchTower prevents the duplicate and directs the user to select the existing owner.
