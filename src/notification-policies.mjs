@@ -28,7 +28,7 @@ export const defaultNotificationPolicies = Object.freeze([
 
 const severityFor = finding => {
   const supplied = String(finding.severity || finding.label || '').trim().toLowerCase();
-  if (supplied) return supplied;
+  if (supplied) return supplied === 'unrated' ? 'unknown' : supplied;
   const score = Number(finding.score);
   if (!Number.isFinite(score)) return 'unknown';
   if (score >= 9) return 'critical';
