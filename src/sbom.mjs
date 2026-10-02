@@ -6,13 +6,22 @@ import { PackageURL } from 'packageurl-js';
 import { canonicalImageReference } from './inventory.mjs';
 
 export const sbomLimits = Object.freeze({ bytes: 5 * 1024 * 1024, components: 10000, depth: 32, nodes: 200000, text: 8192 });
-const ajv = new Ajv({ strict: false, allErrors: false, validateFormats: true });
-addFormats(ajv);
-ajv.addFormat('iri-reference', value => { try { return !/[\s\x00-\x1f]/.test(value) && Boolean(new URL(value || '.', 'https://sbom.invalid/')); } catch { return false; } });
-ajv.addFormat('idn-email', /^[^\s@]+@[^\s@]+\.[^\s@]+$/u);
-const schemas = await Promise.all(['spdx-2.3', 'cyclonedx-1.6', 'cyclonedx-spdx', 'cyclonedx-jsf'].map(async name => JSON.parse(await readFile(new URL(`./schemas/${name}.json`, import.meta.url), 'utf8'))));
-for (const schema of schemas) ajv.addSchema(schema);
-const validators = { SPDX: ajv.getSchema(schemas[0].$id), CycloneDX: ajv.getSchema(schemas[1].$id) };
+async function schemaValidator(primary, dependencies = []) {
+  const ajv = new Ajv({ strict: false, allErrors: false, validateFormats: true });
+  addFormats(ajv);
+  ajv.addFormat('iri-reference', value => { try { return !/[\s\x00-\x1f]/.test(value) && Boolean(new URL(value || '.', 'https://sbom.invalid/')); } catch { return false; } });
+  ajv.addFormat('idn-email', /^[^\s@]+@[^\s@]+\.[^\s@]+$/u);
+  const schemas = await Promise.all([primary, ...dependencies].map(async name => JSON.parse(await readFile(new URL(`./schemas/${name}.json`, import.meta.url), 'utf8'))));
+  for (const schema of schemas) ajv.addSchema(schema);
+  return ajv.getSchema(schemas[0].$id);
+}
+// Supporting schema IDs are shared upstream; keep each version's vocabulary isolated.
+const [spdxValidator, cdx16Validator, cdx17Validator] = await Promise.all([
+  schemaValidator('spdx-2.3'),
+  schemaValidator('cyclonedx-1.6', ['cyclonedx-spdx', 'cyclonedx-jsf']),
+  schemaValidator('cyclonedx-1.7', ['cyclonedx-1.7-spdx', 'cyclonedx-1.7-jsf', 'cyclonedx-cryptography'])
+]);
+const validators = { SPDX: spdxValidator, '1.6': cdx16Validator, '1.7': cdx17Validator };
 const text = value => typeof value === 'string' ? value.slice(0, sbomLimits.text) : '';
 
 function boundDocument(document) {
@@ -54,8 +63,8 @@ export function normalizeSbom(raw) {
   let document;
   try { document = JSON.parse(raw); } catch { throw new Error('SBOM must be uncompressed JSON'); }
   boundDocument(document);
-  const format = document?.spdxVersion === 'SPDX-2.3' ? 'SPDX' : document?.bomFormat === 'CycloneDX' && document.specVersion === '1.6' ? 'CycloneDX' : null;
-  if (!format) throw new Error('Supported SBOM versions: SPDX JSON 2.3 and CycloneDX JSON 1.6');
+  const format = document?.spdxVersion === 'SPDX-2.3' ? 'SPDX' : document?.bomFormat === 'CycloneDX' && ['1.6', '1.7'].includes(document.specVersion) ? 'CycloneDX' : null;
+  if (!format) throw new Error('Supported SBOM versions: SPDX JSON 2.3 and CycloneDX JSON 1.6 or 1.7');
   const components = [];
   const pending = [...(format === 'SPDX' ? document.packages || [] : document.components || [])];
   // Include the described root application/container when supplied.
@@ -68,7 +77,8 @@ export function normalizeSbom(raw) {
   }
   const componentRefs = components.map(component => component.componentRef);
   if (new Set(componentRefs).size !== componentRefs.length) throw new Error('Duplicate SBOM component references');
-  if (!validators[format](document)) throw new Error(`Invalid ${format} SBOM: ${validators[format].errors?.[0]?.instancePath || '/'} ${validators[format].errors?.[0]?.message || ''}`);
+  const validate = validators[format === 'SPDX' ? 'SPDX' : document.specVersion];
+  if (!validate(document)) throw new Error(`Invalid ${format} ${document.specVersion || '2.3'} SBOM: ${validate.errors?.[0]?.instancePath || '/'} ${validate.errors?.[0]?.message || ''}`);
   const dependencies = format === 'SPDX' ? (document.relationships || []).map(item => ({ from: text(item.spdxElementId), to: text(item.relatedSpdxElement), relationship: text(item.relationshipType) })) : (document.dependencies || []).flatMap(item => (item.dependsOn || []).map(to => ({ from: text(item.ref), to: text(to), relationship: 'DEPENDS_ON' })));
   const supplierEvidence = format === 'CycloneDX' ? (document.vulnerabilities || []).map(item => ({ id: text(item.id), source: { name: text(item.source?.name), url: text(item.source?.url) }, affects: (item.affects || []).map(affect => ({ ref: text(affect.ref), versions: affect.versions || [] })), analysis: item.analysis || null, attribution: 'supplier', trustedForAssessment: false })) : [];
   const root = document.metadata?.component;

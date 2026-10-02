@@ -1522,6 +1522,14 @@ setInterval(() => { if (!document.hidden) load(false, true); }, 60_000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) load(false, true); });
 
 let inventoryApplicationId = null;
+function setSbomMessage(message, failed = false) {
+  const element = $('sbom-message');
+  element.textContent = failed ? `SBOM upload failed: ${message}` : message;
+  element.classList.toggle('form-error', failed);
+  element.setAttribute('role', failed ? 'alert' : 'status');
+  element.hidden = !message;
+  if (failed) element.scrollIntoView({ block: 'nearest' });
+}
 async function readInventory() {
   const response = await fetch('/api/applications/' + encodeURIComponent(inventoryApplicationId) + '/inventory', { cache: 'no-store' });
   const inventory = await response.json();
@@ -1533,7 +1541,7 @@ async function openInventory() {
   inventoryApplicationId = detailAppId;
   $('sbom-form').hidden = Boolean(activePreview) || !(isAdmin || permissions.applications.edit.includes(inventoryApplicationId));
   $('sbom-form').reset();
-  $('sbom-message').textContent = '';
+  setSbomMessage('');
   $('inventory-summary').textContent = 'Loading inventory…';
   $('sbom-submit').disabled = true;
   $('inventory-dialog').showModal();
@@ -1543,25 +1551,29 @@ async function openInventory() {
 }
 $('inventory-close').addEventListener('click', () => $('inventory-dialog').close());
 $('inventory-dialog').addEventListener('cancel', event => { if ($('sbom-submit').disabled) event.preventDefault(); });
-$('sbom-form').addEventListener('submit', async event => {
+async function importSbom(event) {
   event.preventDefault();
   const file = $('sbom-file').files[0];
   if (!file) return;
-  if (file.size > 5 * 1024 * 1024) { $('sbom-message').textContent = 'Choose an SBOM no larger than 5 MiB.'; return; }
+  if (file.size > 5 * 1024 * 1024) { setSbomMessage(`The file is ${(file.size / 1024 / 1024).toFixed(2)} MiB. The maximum upload size is 5 MiB.`, true); return; }
   $('sbom-submit').disabled = true;
   $('inventory-close').disabled = true;
   const applicationId = inventoryApplicationId;
   const imageId = $('sbom-scope').value || null;
   $('sbom-file').disabled = true;
   $('sbom-scope').disabled = true;
-  $('sbom-message').textContent = 'Importing SBOM…';
+  setSbomMessage('Importing SBOM…');
   try {
     const response = await fetch('/api/applications/' + encodeURIComponent(applicationId) + '/sboms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sbom: await file.text(), imageId }) });
-    const result = await response.json();
+    let result;
+    try { result = await response.json(); }
+    catch { throw new Error(`The server returned an unreadable upload response (HTTP ${response.status}). Check the upload limit on your server or proxy.`); }
     if (!response.ok) throw new Error(result.error || 'SBOM import failed');
-    $('sbom-message').textContent = 'SBOM imported. Refresh the application to assess its packages.';
+    setSbomMessage('SBOM imported. Refresh the application to assess its packages.');
     $('sbom-file').value = '';
-    await readInventory();
-  } catch (error) { $('sbom-message').textContent = error.message; }
+    try { await readInventory(); }
+    catch { setSbomMessage('SBOM imported, but inventory metadata could not be refreshed. Reopen inventory to check the import, then refresh the application.'); }
+  } catch (error) { setSbomMessage(error.message, true); }
   finally { $('sbom-submit').disabled = false; $('inventory-close').disabled = false; $('sbom-file').disabled = false; $('sbom-scope').disabled = false; }
-});
+}
+$('sbom-form').addEventListener('submit', importSbom);
