@@ -8,11 +8,13 @@ const text = value => typeof value === 'string' ? value.slice(0, 16000) : '';
 const safeLink = value => { try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password ? url.href : ''; } catch { return ''; } };
 
 export function osvPackage(component) {
+  if (['file', 'operating-system', 'container'].includes(component.componentType)) return { ignored: true, reason: 'non-package-inventory-entry' };
   if (component.identityIssue || !component.purl) return { reason: component.identityIssue || 'missing-purl' };
   try {
     const parsed = PackageURL.fromString(component.purl);
     if (!parsed.version || component.version !== parsed.version) return { reason: 'missing-or-conflicting-version' };
-    if (!ecosystems[parsed.type] || Object.keys(parsed.qualifiers || {}).length) return { reason: 'unsupported-ecosystem-or-qualifiers' };
+    if (!ecosystems[parsed.type]) return { reason: 'unsupported-ecosystem', ecosystem: parsed.type };
+    if (Object.keys(parsed.qualifiers || {}).length) return { reason: 'unsupported-qualifiers', ecosystem: parsed.type };
     if (parsed.type === 'maven' && !parsed.namespace) return { reason: 'incomplete-maven-identity' };
     const name = parsed.type === 'maven' ? `${parsed.namespace}:${parsed.name}` : [parsed.namespace, parsed.name].filter(Boolean).join('/');
     // Subpaths describe occurrences; the full original PURL stays in evidence.
@@ -123,15 +125,16 @@ export function createOsvClient({ fetchImpl = (...args) => fetch(...args), now =
     }
   }
   return {
-    async assess(inventory, kev = new Set()) {
+    async assess(inventory, kev = new Set(), { onEvent = () => {} } = {}) {
       const checkedAt = new Date(now()).toISOString();
       const budget = { requests: 0, deadline: now() + osvLimits.assessmentMs };
-      const errors = [], unsupported = [], findings = [];
+      const errors = [], unsupported = [], ignored = [], findings = [];
       const packages = new Map();
       for (const component of inventory.components) {
         const identity = osvPackage(component);
-        if (identity.reason) { unsupported.push({ componentRef: component.componentRef, name: component.name, reason: identity.reason }); continue; }
-        if (!packages.has(identity.queryPurl)) packages.set(identity.queryPurl, { identity, components: [], advisoryIds: new Map(), complete: false });
+        if (identity.ignored) { ignored.push({ componentRef: component.componentRef, name: component.name, componentType: component.componentType, reason: identity.reason }); continue; }
+        if (identity.reason) { unsupported.push({ componentRef: component.componentRef, name: component.name, purl: component.purl, ecosystem: identity.ecosystem || component.ecosystem || '', reason: identity.reason }); continue; }
+        if (!packages.has(identity.queryPurl)) packages.set(identity.queryPurl, { identity, components: [], advisoryIds: new Map(), complete: false, findingCount: 0 });
         packages.get(identity.queryPurl).components.push(component);
       }
       const entries = [...packages.values()];
@@ -182,12 +185,19 @@ export function createOsvClient({ fetchImpl = (...args) => fetch(...args), now =
           for (const location of locations) try {
             if (findings.length >= osvLimits.findings) { for (const remaining of entries) remaining.complete = false; errors.push({ message: 'OSV finding count limit exceeded' }); break build; }
             findings.push(packageFinding(detail.record, { ...component, location }, inventory.scope, inventory, entry.identity, checkedAt, kev));
+            entry.findingCount++;
           }
           catch (error) { entry.complete = false; errors.push({ purl: entry.identity.queryPurl, message: error.message }); }
         }
       }
-      return { checkedAt, lastSuccessfulLookup: entries.some(entry => entry.complete) ? checkedAt : null, supportedComponentCount: entries.reduce((sum, entry) => sum + entry.components.length, 0), assessedComponentCount: entries.filter(entry => entry.complete).reduce((sum, entry) => sum + entry.components.length, 0), unsupportedComponentCount: unsupported.length, unsupported, errors,
-        state: entries.length && entries.every(entry => entry.complete) && !unsupported.length ? 'assessed' : 'incomplete', findings: correlatePackageFindings(findings) };
+      const correlatedFindings = correlatePackageFindings(findings);
+      const countsByPurl = new Map();
+      for (const finding of correlatedFindings) countsByPurl.set(finding.package.purl, (countsByPurl.get(finding.package.purl) || 0) + 1);
+      for (const entry of entries) entry.findingCount = [...new Set(entry.components.map(component => component.purl))].reduce((count, purl) => count + (countsByPurl.get(purl) || 0), 0);
+      const lookups = entries.map(entry => ({ purl: entry.identity.queryPurl, ecosystem: entry.identity.ecosystem, name: entry.identity.name, componentCount: entry.components.length, state: entry.complete ? entry.findingCount ? 'findings' : 'no-known-matches' : 'incomplete', findingCount: entry.findingCount }));
+      for (const lookup of lookups) await onEvent(lookup.state === 'incomplete' ? 'warn' : 'info', 'SBOM package lookup', `${lookup.purl}: ${lookup.state}; ${lookup.findingCount} finding occurrence(s); ${lookup.componentCount} inventory occurrence(s)`);
+      return { checkedAt, ignoredComponentCount: ignored.length, ignored, lookups, packageComponentCount: inventory.components.length - ignored.length, typeMetadataMissing: inventory.components.some(component => !component.componentType), lastSuccessfulLookup: entries.some(entry => entry.complete) ? checkedAt : null, supportedComponentCount: entries.reduce((sum, entry) => sum + entry.components.length, 0), assessedComponentCount: entries.filter(entry => entry.complete).reduce((sum, entry) => sum + entry.components.length, 0), unsupportedComponentCount: unsupported.length, unsupported, errors,
+        state: entries.length && entries.every(entry => entry.complete) && !unsupported.length ? 'assessed' : 'incomplete', findings: correlatedFindings };
     },
   };
 }

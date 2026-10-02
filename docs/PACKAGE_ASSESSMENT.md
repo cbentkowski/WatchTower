@@ -102,7 +102,36 @@ Open an application and choose **Package inventory** in its Assessment section.
 The dialog shows active imports and lets Application Editors import a file at
 application level or into an already configured active image. Viewers can inspect
 metadata; Permission Preview cannot import. Image configuration, retirement,
-detailed component browsing, and attribution remain in the final interface part.
+and detailed component browsing remain in the final interface part. Schema
+attribution and license links are available in the import dialog.
+
+## Understanding coverage and feed logs
+
+Application Assessment and Package inventory show package entries checked,
+finding counts, unsupported/incomplete packages, source errors, and lookup time.
+Expand the lookup results to see each unique PURL query and whether it returned
+findings, no known matches, or incomplete results. Skipped entries show the
+package name, ecosystem when known, and reason. Large lists show the first 100
+entries; the complete assessment remains in the inventory API.
+
+CycloneDX files, container roots, and operating-system metadata are counted
+separately from package entries and do not trigger OSV package queries. An
+inventory containing only those entries still cannot establish complete coverage.
+Older imports without component types show a reimport instruction rather than
+assuming what their entries represent. Findings retained after incomplete
+lookups are explicitly counted as unverified.
+
+For the WatchTower 0.10.0 release SBOM, reimport yields 5 eligible npm entries,
+92 skipped Debian entries, 1 skipped generic entry, and 3,179 non-package entries.
+With successful npm lookups, coverage reads **5 of 98 package entries checked**.
+Zero source errors means the lookups succeeded, while the 93 skipped packages
+still prevent a complete assessment and a green status.
+
+**Logs → Feed** includes SBOM assessment start/completion, one outcome per unique
+package lookup (including PURL, finding count, and inventory occurrence count),
+and source errors. Every entry identifies its application and inventory revision.
+Existing log access controls apply. Findings are counted after advisory alias
+correlation; successful queries with no matches remain distinct from failed checks.
 
 ## Manual PR build checks
 
@@ -122,7 +151,15 @@ detailed component browsing, and attribution remain in the final interface part.
    produce incomplete evidence after refresh, never a false clean result.
 6. Viewer sessions can inspect inventory but cannot import. Permission Preview
    must not offer imports; the server also rejects mutations.
-7. Confirm existing product applications, CPE selection, edits, scoped refresh,
+7. Reimport the WatchTower 0.10.0 SBOM and refresh. Check the coverage counts
+   above, expand package outcomes and skip reasons, and confirm the application
+   remains Unknown when no findings are returned but Debian/generic coverage is missing.
+8. Open Logs → Feed and confirm the five npm lookup outcomes, application name,
+   inventory revision, and completion summary. No lookup should be claimed for a file.
+9. Import supported SPDX 2.2, 2.3, 3.0, and 3.0.1 documents; check package counts
+   and refresh results. Malformed documents must show a red upload error without
+   replacing the active inventory. SPDX 3 requires the compact JSON-LD profile.
+10. Confirm existing product applications, CPE selection, edits, scoped refresh,
    and dialog scrolling still work.
 
 The demo contains inventory data, not software to install. Image configuration

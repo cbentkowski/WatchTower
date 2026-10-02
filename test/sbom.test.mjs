@@ -106,3 +106,13 @@ for (const version of ['1.4', '1.5']) test('CycloneDX ' + version + ' preserves 
   document.components[0].licenses = [{ license: { id: 'SMAIL-GPL' } }];
   assert.throws(() => normalizeSbom(JSON.stringify(document)), /Invalid CycloneDX/);
 });
+
+for (const version of ['2.2', '2.3']) test('SPDX ' + version + ' preserves its declared version and package identity', () => {
+  const document = spdx(); document.spdxVersion = 'SPDX-' + version;
+  const result = normalizeSbom(JSON.stringify(document));
+  assert.equal(result.specificationVersion, version);
+  assert.equal(result.components[0].purl, normalizeSbom(JSON.stringify(cdx())).components[0].purl);
+  assert.equal(result.components[0].componentType, 'library');
+  delete document.creationInfo.created;
+  assert.throws(() => normalizeSbom(JSON.stringify(document)), /Invalid SPDX/);
+});

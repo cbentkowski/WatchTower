@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 
 const source = await readFile(new URL('../src/web/app.js', import.meta.url), 'utf8');
-const code = source.slice(source.indexOf('let inventoryApplicationId = null;'));
+const code = source.slice(source.indexOf('function packageCoverageMarkup('));
 function contextFor(file, fetch) {
   const elements = new Map();
   const element = id => {
@@ -45,6 +45,8 @@ test('server parsing errors remain prominent, keep the selected file, and a succ
   assert.equal(element('inventory-summary').innerHTML, 'previous active inventory');
   reject = false; await submit();
   assert.match(element('sbom-message').textContent, /^SBOM imported/);
+  assert.doesNotMatch(element('sbom-message').textContent, /metadata.*unavailable/);
+  assert.match(element('inventory-summary').innerHTML, /No SBOM imported/);
   assert.equal(element('sbom-message').classes.has('form-error'), false);
   assert.equal(element('sbom-message').attributes.role, 'status');
   assert.equal(element('sbom-file').value, '');

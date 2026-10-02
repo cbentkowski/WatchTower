@@ -60,6 +60,12 @@ test('CPE-less imports reassess new advisories, persist workflow, retain failure
     assert.equal(failed.vulnerabilities[0].workflow.state, 'investigating');
     const metadata = await (await request(`/api/applications/${id}/inventory`)).json();
     assert.equal(metadata.revisions[0].assessment.state, 'incomplete');
+    assert.equal(metadata.revisions[0].assessment.retainedFindingCount, 1);
+    assert.equal(metadata.revisions[0].assessment.lookups[0].state, 'incomplete');
+    const feedEvents = (await (await request('/api/logs?type=feed')).json()).entries;
+    assert.ok(feedEvents.some(event => event.message === 'SBOM package lookup' && event.detail.includes('Inventory App') && event.detail.includes('pkg:npm/example@1.0.0: no-known-matches')));
+    assert.ok(feedEvents.some(event => event.message === 'SBOM package lookup' && event.detail.includes('1 finding occurrence(s)')));
+    assert.ok(feedEvents.some(event => event.message === 'SBOM package source error' && event.detail.includes('OSV HTTP 503')));
     const log = await readFile(fetchLog, 'utf8');
     assert.match(log, /api\.osv\.dev\/v1\/querybatch/);
     assert.doesNotMatch(log, /services\.nvd\.nist/);

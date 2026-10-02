@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import { PackageURL } from 'packageurl-js';
+import { normalizeSpdx3, spdx3Version } from './spdx3.mjs';
 import { canonicalImageReference } from './inventory.mjs';
 
 export const sbomLimits = Object.freeze({ bytes: 5 * 1024 * 1024, components: 10000, depth: 32, nodes: 200000, text: 8192 });
@@ -16,15 +17,26 @@ async function schemaValidator(primary, dependencies = []) {
   return ajv.getSchema(schemas[0].$id);
 }
 // Supporting schema IDs are shared upstream; keep each version's vocabulary isolated.
-const [spdxValidator, cdx14Validator, cdx15Validator, cdx16Validator, cdx17Validator] = await Promise.all([
+const [spdx22Validator, spdxValidator, cdx14Validator, cdx15Validator, cdx16Validator, cdx17Validator] = await Promise.all([
+  schemaValidator('spdx-2.2'),
   schemaValidator('spdx-2.3'),
   schemaValidator('cyclonedx-1.4', ['cyclonedx-1.4-spdx', 'cyclonedx-1.4-jsf']),
   schemaValidator('cyclonedx-1.5', ['cyclonedx-1.5-spdx', 'cyclonedx-1.5-jsf']),
   schemaValidator('cyclonedx-1.6', ['cyclonedx-spdx', 'cyclonedx-jsf']),
   schemaValidator('cyclonedx-1.7', ['cyclonedx-1.7-spdx', 'cyclonedx-1.7-jsf', 'cyclonedx-cryptography'])
 ]);
-const validators = { SPDX: spdxValidator, '1.4': cdx14Validator, '1.5': cdx15Validator, '1.6': cdx16Validator, '1.7': cdx17Validator };
+const validators = { 'SPDX-2.2': spdx22Validator, 'SPDX-2.3': spdxValidator, '1.4': cdx14Validator, '1.5': cdx15Validator, '1.6': cdx16Validator, '1.7': cdx17Validator };
 const text = value => typeof value === 'string' ? value.slice(0, sbomLimits.text) : '';
+
+function spdxValidationInput(document) {
+  if (!Array.isArray(document.packages)) return document;
+  const category = value => document.spdxVersion === 'SPDX-2.2'
+    ? value === 'PACKAGE-MANAGER' ? 'PACKAGE_MANAGER' : value
+    : ['PACKAGE_MANAGER', 'PERSISTENT_ID'].includes(value) ? value.replace('_', '-') : value;
+  return { ...document, packages: document.packages.map(pkg => !Array.isArray(pkg?.externalRefs) ? pkg : {
+    ...pkg, externalRefs: pkg.externalRefs.map(ref => ({ ...ref, referenceCategory: category(ref.referenceCategory) }))
+  }) };
+}
 
 function boundDocument(document) {
   const pending = [[document, 0]];
@@ -54,7 +66,7 @@ function normalizedComponent(component, format, index) {
   } catch { issue = 'invalid-purl'; }
   const cpes = spdx ? refs.filter(ref => ['cpe23Type', 'cpe22Type'].includes(ref.referenceType)).map(ref => text(ref.referenceLocator)) : component.cpe ? [text(component.cpe)] : [];
   const locations = spdx ? [] : [...new Set((component.evidence?.occurrences || []).map(occurrence => text(occurrence.location)).filter(Boolean))];
-  return { componentRef: text(spdx ? component.SPDXID : component['bom-ref']) || `component-${index}`, name: text(component.name), version, purl, declaredPurl: text(rawPurl), ecosystem, identityIssue: issue, cpes,
+  return { componentType: spdx ? 'library' : text(component.type), componentRef: text(spdx ? component.SPDXID : component['bom-ref']) || `component-${index}`, name: text(component.name), version, purl, declaredPurl: text(rawPurl), ecosystem, identityIssue: issue, cpes,
     supplier: text(spdx ? component.supplier : component.supplier?.name), hashes: spdx ? (component.checksums || []).map(hash => ({ algorithm: text(hash.algorithm), value: text(hash.checksumValue) })) : (component.hashes || []).map(hash => ({ algorithm: text(hash.alg), value: text(hash.content) })),
     licenses: spdx ? [component.licenseConcluded, component.licenseDeclared].filter(Boolean).map(text) : (component.licenses || []).map(license => text(license.expression || license.license?.id || license.license?.name)),
     locations, location: locations.length === 1 ? locations[0] : '', packageFileName: text(component.packageFileName), identityState: issue ? 'incomplete' : 'awaiting-source-support' };
@@ -65,8 +77,10 @@ export function normalizeSbom(raw) {
   let document;
   try { document = JSON.parse(raw); } catch { throw new Error('SBOM must be uncompressed JSON'); }
   boundDocument(document);
-  const format = document?.spdxVersion === 'SPDX-2.3' ? 'SPDX' : document?.bomFormat === 'CycloneDX' && ['1.4', '1.5', '1.6', '1.7'].includes(document.specVersion) ? 'CycloneDX' : null;
-  if (!format) throw new Error('Supported SBOM versions: SPDX JSON 2.3 and CycloneDX JSON 1.4 through 1.7');
+  const version3 = spdx3Version(document);
+  if (version3) return normalizeSpdx3(document, raw, version3, normalizedComponent);
+  const format = ['SPDX-2.2', 'SPDX-2.3'].includes(document?.spdxVersion) ? 'SPDX' : document?.bomFormat === 'CycloneDX' && ['1.4', '1.5', '1.6', '1.7'].includes(document.specVersion) ? 'CycloneDX' : null;
+  if (!format) throw new Error('Supported SBOM versions: SPDX JSON 2.2, 2.3, 3.0, 3.0.1 and CycloneDX JSON 1.4 through 1.7');
   const components = [];
   const pending = [...(format === 'SPDX' ? document.packages || [] : document.components || [])];
   // Include the described root application/container when supplied.
@@ -79,8 +93,11 @@ export function normalizeSbom(raw) {
   }
   const componentRefs = components.map(component => component.componentRef);
   if (new Set(componentRefs).size !== componentRefs.length) throw new Error('Duplicate SBOM component references');
-  const validate = validators[format === 'SPDX' ? 'SPDX' : document.specVersion];
-  if (!validate(document)) throw new Error(`Invalid ${format} ${document.specVersion || '2.3'} SBOM: ${validate.errors?.[0]?.instancePath || '/'} ${validate.errors?.[0]?.message || ''}`);
+  const validate = validators[format === 'SPDX' ? document.spdxVersion : document.specVersion];
+  // SPDX generators use both historical category spellings (upstream issue #792).
+  // Adapt only those enum aliases for validation; preserve schemas and input bytes.
+  const validationInput = format === 'SPDX' ? spdxValidationInput(document) : document;
+  if (!validate(validationInput)) throw new Error(`Invalid ${format} ${document.specVersion || document.spdxVersion.replace('SPDX-', '')} SBOM: ${validate.errors?.[0]?.instancePath || '/'} ${validate.errors?.[0]?.message || ''}`);
   const dependencies = format === 'SPDX' ? (document.relationships || []).map(item => ({ from: text(item.spdxElementId), to: text(item.relatedSpdxElement), relationship: text(item.relationshipType) })) : (document.dependencies || []).flatMap(item => (item.dependsOn || []).map(to => ({ from: text(item.ref), to: text(to), relationship: 'DEPENDS_ON' })));
   const supplierEvidence = format === 'CycloneDX' ? (document.vulnerabilities || []).map(item => ({ id: text(item.id), source: { name: text(item.source?.name), url: text(item.source?.url) }, affects: (item.affects || []).map(affect => ({ ref: text(affect.ref), versions: affect.versions || [] })), analysis: item.analysis || null, attribution: 'supplier', trustedForAssessment: false })) : [];
   const root = document.metadata?.component;
@@ -92,7 +109,7 @@ export function normalizeSbom(raw) {
     const purl = PackageURL.fromString(value);
     if (purl.type === 'oci' && purl.qualifiers?.repository_url && /^sha256:[a-f0-9]{64}$/i.test(purl.version || '')) reportedImages.push(canonicalImageReference(`${purl.qualifiers.repository_url}@${purl.version}`));
   } catch { /* Unsupported PURLs remain incomplete component evidence. */ }
-  return { format, specificationVersion: format === 'SPDX' ? '2.3' : '1.6', documentIdentity: text(document.documentNamespace || document.serialNumber), documentVersion: document.version ?? null,
+  return { format, specificationVersion: format === 'SPDX' ? document.spdxVersion.replace('SPDX-', '') : document.specVersion, documentIdentity: text(document.documentNamespace || document.serialNumber), documentVersion: document.version ?? null,
     generator: format === 'SPDX' ? (document.creationInfo.creators || []).map(text) : [...(document.metadata?.tools?.components || []), ...(Array.isArray(document.metadata?.tools) ? document.metadata.tools : [])].map(tool => text([tool.vendor, tool.name, tool.version].filter(Boolean).join(' '))),
     generatedAt: text(format === 'SPDX' ? document.creationInfo.created : document.metadata?.timestamp), checksum: createHash('sha256').update(raw).digest('hex'), components, dependencies, supplierEvidence, reportedImages: [...new Set(reportedImages)],
     componentCount: components.length, incompleteComponentCount: components.filter(component => component.identityIssue).length, assessmentState: 'awaiting-assessment' };

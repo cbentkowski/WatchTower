@@ -719,7 +719,7 @@ async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
   if (feedErrors.length) sourceOk = false;
   result.vulnerabilities = [...new Map(result.vulnerabilities.map(item => [`${item.id}:${item.url}`, item])).values()].sort((a, b) => (b.score || 0) - (a.score || 0));
   try {
-    const packages = await assessApplicationInventory(app, inventoryStore, osvClient, kev, { maxAgeDays: sbomMaxAgeDays });
+    const packages = await assessApplicationInventory(app, inventoryStore, osvClient, kev, { maxAgeDays: sbomMaxAgeDays, onEvent: logger.feed });
     result.packageAssessment = { configured: packages.configured, state: packages.state, inventories: packages.inventories };
     result.vulnerabilities.push(...packages.findings);
     result.reasons.push(...packages.reasons);
