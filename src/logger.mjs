@@ -1,8 +1,8 @@
 import { appendFile, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-export const logTypes = Object.freeze(['system', 'feed', 'audit', 'auth']);
-const fileNames = Object.freeze({ system: 'system.jsonl', feed: 'feed.jsonl', audit: 'audit.jsonl', auth: 'auth.jsonl' });
+export const logTypes = Object.freeze(['system', 'feed', 'audit', 'auth', 'notification']);
+const fileNames = Object.freeze({ system: 'system.jsonl', feed: 'feed.jsonl', audit: 'audit.jsonl', auth: 'auth.jsonl', notification: 'notification.jsonl' });
 const maxSize = 5_000_000;
 
 export function createLogger(dataDirectory) {
@@ -40,6 +40,10 @@ export function createLogger(dataDirectory) {
     return append('auth', { at: new Date().toISOString(), level: context.outcome || 'info', message: action, actor, authentication: context });
   }
 
+  function notification(entry) {
+    return append('notification', { at: new Date().toISOString(), level: entry.outcome || 'info', message: entry.message || 'Notification delivery attempted', notification: entry });
+  }
+
   async function recent(type = 'system', limit = 200) {
     if (!logTypes.includes(type)) throw new Error('Unknown log type');
     await pending.get(type);
@@ -55,5 +59,5 @@ export function createLogger(dataDirectory) {
     return entries.sort((a, b) => String(a.at).localeCompare(String(b.at))).slice(-limit).reverse();
   }
 
-  return { log, feed, audit, authentication, recent };
+  return { log, feed, audit, authentication, notification, recent };
 }

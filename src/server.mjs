@@ -74,7 +74,7 @@ async function recordAuthenticationEvent(action, actor, context = {}) {
     ...describeIdentityClaims(config, claims, { administratorRole, protectedAdminClaim }),
   });
 }
-const notifier = createNotifier({ dataDirectory, settingsLoader: async () => ({ ...await readSmtpSettings(smtpFile), baseUrl: generalUrl(await readGeneralSettings(generalFile)) }), policyLoader: () => readNotificationPolicies(notificationPolicyFile) });
+const notifier = createNotifier({ dataDirectory, settingsLoader: async () => ({ ...await readSmtpSettings(smtpFile), baseUrl: generalUrl(await readGeneralSettings(generalFile)) }), policyLoader: () => readNotificationPolicies(notificationPolicyFile), deliveryLogger: entry => logger.notification(entry) });
 for (const [from, to] of resourceMigration.applications) await notifier.renameIdentifiers({ appFrom: from, appTo: to });
 for (const [from, to] of resourceMigration.workspaces) await notifier.renameIdentifiers({ workspaceFrom: from, workspaceTo: to });
 function detectedGeneral(req) {
@@ -804,7 +804,14 @@ const requestHandler = async (req, res) => {
     if (url.pathname === '/api/settings/test-email' && req.method === 'POST') {
       const body = await readBody(req);
       const smtp = validateSmtpSettings({ ...(body.smtp || {}), enabled: true });
-      const result = await sendTestEmail(smtp, body.recipient);
+      let result;
+      try {
+        result = await sendTestEmail(smtp, body.recipient);
+        await logger.notification({ outcome: 'accepted', message: 'Test email accepted', deliveryType: 'test', workspace: '', applications: [], policies: [], reasons: ['SMTP configuration test'], recipients: [{ name: 'Test recipient', email: String(body.recipient), route: 'test' }], accepted: result.accepted, rejected: [], messageId: result.messageId });
+      } catch (error) {
+        await logger.notification({ outcome: 'failed', message: 'Test email failed', deliveryType: 'test', workspace: '', applications: [], policies: [], reasons: ['SMTP configuration test'], recipients: [{ name: 'Test recipient', email: String(body.recipient || ''), route: 'test' }], accepted: [], rejected: [], error: String(error.message || 'Delivery failed').slice(0, 500) });
+        throw error;
+      }
       await logger.audit('Test email sent', auditActor(req), { type: 'settings', id: 'email-delivery' }, { transportSecurity: smtp.secure ? 'tls' : smtp.requireTls ? 'starttls' : 'none', unauthenticated: smtp.unauthenticated }, 'SMTP test completed successfully; settings were not saved');
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ sent: true, accepted: result.accepted })); return;
     }

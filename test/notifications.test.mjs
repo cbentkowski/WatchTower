@@ -162,10 +162,11 @@ test('policy routing adds selected owners and later escalation contacts without 
   const directory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-routing-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const sent = [];
+  const deliveries = [];
   let now = new Date('2026-09-20T09:00:00Z');
   const policy = { id: 'route', name: 'Route', conditions: { severities: ['critical'] }, delivery: { cadence: 'immediate', windowStartHour: 0, windowEndHour: 23, reminderDays: 1, workspaceRecipients: true, recipientOwnerIds: ['security'], includeEscalationContacts: true, escalationAfterDays: 2 } };
   const routedSnapshot = { owners: [{ id: 'owner', name: 'Team owner', email: 'team@example.com', escalationEmail: 'team-lead@example.com' }, { id: 'security', name: 'Security', email: 'security@example.com', escalationEmail: 'security-lead@example.com' }], workspaces: [{ id: 'team', name: 'Team', ownerIds: ['owner'], applications: ['app'] }], results: [app()] };
-  const makeNotifier = () => createNotifier({ dataDirectory: directory, settingsLoader: async () => settings, policyLoader: async () => [policy], clock: () => now, transport: { sendMail: async message => { sent.push(message); return { accepted: String(message.to).split(', '), rejected: [] }; } } });
+  const makeNotifier = () => createNotifier({ dataDirectory: directory, settingsLoader: async () => settings, policyLoader: async () => [policy], deliveryLogger: async entry => deliveries.push(entry), clock: () => now, transport: { sendMail: async message => { sent.push(message); return { accepted: String(message.to).split(', '), rejected: [], messageId: `message-${sent.length}` }; } } });
   await makeNotifier().onScan(routedSnapshot);
   assert.equal(sent.length, 1);
   assert.match(sent[0].to, /team@example.com/);
@@ -177,6 +178,30 @@ test('policy routing adds selected owners and later escalation contacts without 
   assert.equal(sent.length, 2);
   assert.match(sent[1].to, /team-lead@example.com/);
   assert.match(sent[1].to, /security-lead@example.com/);
+  assert.equal(deliveries[1].workspace, 'Team');
+  assert.deepEqual(deliveries[1].policies, ['Route']);
+  assert.ok(deliveries[1].recipients.some(item => item.name === 'Security' && item.email === 'security-lead@example.com' && item.route === 'escalation'));
+  assert.equal(deliveries[1].messageId, 'message-2');
+});
+
+test('notification delivery logging distinguishes partial acceptance and transport failure', async t => {
+  const partialDirectory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-partial-'));
+  t.after(() => rm(partialDirectory, { recursive: true, force: true }));
+  const partial = [];
+  const routed = { owners: [{ id: 'one', name: 'One', email: 'one@example.com' }, { id: 'two', name: 'Two', email: 'two@example.com' }], workspaces: [{ id: 'team', name: 'Team', ownerIds: ['one', 'two'], applications: ['app'] }], results: [app()] };
+  const policyLoader = async () => [{ id: 'route', name: 'Route', conditions: { severities: ['critical'] }, delivery: { cadence: 'immediate', windowStartHour: 0, windowEndHour: 23, reminderDays: 7, workspaceRecipients: true, recipientOwnerIds: [] } }];
+  const partialNotifier = createNotifier({ dataDirectory: partialDirectory, settingsLoader: async () => settings, policyLoader, deliveryLogger: async entry => partial.push(entry), clock: () => new Date('2026-09-20T09:00:00Z'), transport: { sendMail: async () => ({ accepted: ['one@example.com'], rejected: ['two@example.com'], messageId: 'partial-id' }) } });
+  await partialNotifier.onScan(routed);
+  assert.equal(partial[0].outcome, 'partial');
+  assert.deepEqual(partial[0].rejected, ['two@example.com']);
+
+  const failureDirectory = await mkdtemp(path.join(os.tmpdir(), 'watchtower-notify-failure-'));
+  t.after(() => rm(failureDirectory, { recursive: true, force: true }));
+  const failed = [];
+  const failedNotifier = createNotifier({ dataDirectory: failureDirectory, settingsLoader: async () => settings, policyLoader, deliveryLogger: async entry => failed.push(entry), clock: () => new Date('2026-09-20T09:00:00Z'), transport: { sendMail: async () => { throw new Error('Connection refused without credentials'); } } });
+  await failedNotifier.onScan(routed);
+  assert.equal(failed[0].outcome, 'failed');
+  assert.equal(failed[0].error, 'Connection refused without credentials');
 });
 
 test('legacy notification state migrates without resending an already delivered match', async t => {

@@ -95,7 +95,7 @@ function messageFor(group, alerts, baseUrl) {
   return { subject, text: lines.join('\n'), html: `<main style="font-family:Arial,sans-serif;max-width:680px;margin:auto;color:#203646"><h1>WatchTower · ${escape(group.name)}</h1><p>${alerts.length} application${alerts.length === 1 ? '' : 's'} need your attention.</p>${cards}<p style="font-size:12px;color:#647987">The acknowledgment link opens a confirmation page. Confirming stops reminders for that application in this workspace until the alert clears or its version changes.</p></main>` };
 }
 
-export function createNotifier({ dataDirectory, settingsLoader, policyLoader = async () => defaultNotificationPolicies, env = process.env, clock = () => new Date(), transport = null, transportFactory = createTransport, secretLoader = readFile }) {
+export function createNotifier({ dataDirectory, settingsLoader, policyLoader = async () => defaultNotificationPolicies, deliveryLogger = null, env = process.env, clock = () => new Date(), transport = null, transportFactory = createTransport, secretLoader = readFile }) {
   const file = path.join(dataDirectory, 'notifications.json');
   let state = null;
   let pending = Promise.resolve();
@@ -171,14 +171,19 @@ export function createNotifier({ dataDirectory, settingsLoader, policyLoader = a
           if (reasons.length) alerts.push({ app, entry, flags, urgentChanged, reasons, token: entry.token });
         }
         const escalationDue = delivery.includeEscalationContacts && delivery.escalationAfterDays !== null && alerts.some(({ entry }) => daysSince(entry.firstMatchedOn, day) >= delivery.escalationAfterDays);
-        const recipients = [...new Set([...routeOwners.map(owner => owner.email), ...(escalationDue ? routeOwners.map(owner => owner.escalationEmail) : [])].filter(Boolean))];
+        const recipientDetails = [...new Map([...routeOwners.map(owner => ({ name: owner.name, email: owner.email, route: 'primary' })), ...(escalationDue ? routeOwners.filter(owner => owner.escalationEmail).map(owner => ({ name: owner.name, email: owner.escalationEmail, route: 'escalation' })) : [])].map(item => [item.email, item])).values()];
+        const recipients = recipientDetails.map(item => item.email);
         if (!alerts.length || !recipients.length || !mailer || !baseUrl) continue;
         await save(); // Persist acknowledgment tokens before sending their links.
         const message = messageFor(group, alerts, baseUrl);
         if (policy) message.subject = `${message.subject} · ${policy.name}`;
         try {
           const response = await mailer.sendMail({ from: settings.from || 'WatchTower <watchtower@localhost>', to: recipients.join(', '), ...message });
-          if (response?.rejected?.length) throw new Error(`Recipients rejected: ${response.rejected.join(', ')}`);
+          const accepted = (response?.accepted || []).map(String);
+          const rejected = (response?.rejected || []).map(String);
+          const outcome = rejected.length ? accepted.length ? 'partial' : 'rejected' : 'accepted';
+          await deliveryLogger?.({ outcome, message: `${policy ? policy.name : 'Lifecycle'} ${delivery.cadence === 'immediate' ? 'notification' : 'digest'} ${outcome}`, deliveryType: policy ? delivery.cadence : 'lifecycle', workspace: group.name, applications: alerts.map(item => item.app.name), policies: policy ? [policy.name] : [], reasons: [...new Set(alerts.flatMap(item => item.reasons))], recipients: recipientDetails, accepted, rejected, messageId: String(response?.messageId || '') });
+          if (rejected.length) throw new Error(`Recipients rejected: ${rejected.join(', ')}`);
           for (const { entry, flags, urgentChanged, reasons } of alerts) {
             if (flags.vulnerable && (urgentChanged || reasons.some(reason => reason.startsWith('Needs action')))) entry.redLastSentOn = day;
             if (urgentChanged) entry.urgentFingerprint = flags.urgentFingerprint;
@@ -187,7 +192,10 @@ export function createNotifier({ dataDirectory, settingsLoader, policyLoader = a
           }
           await save();
           console.log(`Sent ${alerts.length} notification(s) for workspace ${group.id}${policy ? ` using policy ${policy.id}` : ''}`);
-        } catch (error) { console.error(`Could not email workspace ${group.id}: ${error.message}`); }
+        } catch (error) {
+          if (!String(error.message).startsWith('Recipients rejected:')) await deliveryLogger?.({ outcome: 'failed', message: `${policy ? policy.name : 'Lifecycle'} delivery failed`, deliveryType: policy ? delivery.cadence : 'lifecycle', workspace: group.name, applications: alerts.map(item => item.app.name), policies: policy ? [policy.name] : [], reasons: [...new Set(alerts.flatMap(item => item.reasons))], recipients: recipientDetails, accepted: [], rejected: [], error: String(error.message || 'Delivery failed').slice(0, 500) });
+          console.error(`Could not email workspace ${group.id}: ${error.message}`);
+        }
       }
     }
     for (const key of Object.keys(state.entries)) if (!active.has(key)) { delete state.entries[key]; changed = true; }

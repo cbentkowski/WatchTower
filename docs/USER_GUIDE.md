@@ -193,6 +193,8 @@ Each policy also controls delivery and routing:
 
 The required preview shows the timing rule, resolved recipient names and email addresses for each matching workspace, escalation routes, and matching findings. Use it to confirm both who will receive a message and when it can be sent before saving.
 
+For every multi-select field, use **Clear selection · use Any** to remove an existing restriction. Selecting every listed value is not equivalent to clearing the field because future values may be added.
+
 Disabling a policy preserves it without allowing it to match. Removing every policy prevents vulnerability findings from entering notification delivery; lifecycle notifications continue to follow their existing behavior.
 
 Each workspace receives its own message containing alerts due for its applications. An application in several workspaces can generate a message for each workspace. Initial Critical and known-exploited findings can send immediately; scheduled High, lifecycle, and reminder messages wait for the configured local delivery window.
@@ -258,6 +260,7 @@ The browser checks for updated results while open. Large inventories without an 
 Open **Logs** and select **System**, **Feeds**, **Audit**, or **Authentication** to inspect each activity stream. Newest entries appear first.
 
 - System entries cover scans, notifications, server activity, and general runtime errors.
+- Notification entries record each delivery or test-email attempt with its workspace, applications, matched policies, reasons, intended recipient names and exact email addresses, escalation route, SMTP acceptance or rejection, message ID, and sanitized failure details. SMTP acceptance confirms only that the configured server accepted the address; it does not prove inbox delivery or that the message was read.
 - Feed entries cover source requests, collection outcomes, failures, and recovery.
 - Audit entries identify configuration and access-control changes, including the time, action, resource, changed fields, and signed-in identity. Notification recipient changes do not record addresses.
 - Authentication entries cover sign-ins, sign-outs, rejected callbacks, and expired sessions. Successful sign-ins show the received group count, WatchTower identity-mapping names and roles for matched claims, and the provider values for unmatched claims. Group-overage responses are identified explicitly.
