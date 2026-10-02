@@ -95,35 +95,38 @@ default behavior and may independently add SBOM scopes. Before a usable import,
 an inventory application remains awaiting assessment. Existing lifecycle
 configuration is still required and its uncertainty remains visible.
 
-The application editor preserves this mode for API-created applications, but
-creating/selecting inventory-only mode and uploading files through the UI belongs
-to the final interface part. Existing application details show package advisory
-IDs and exact package context; inventory grouping and management views follow.
+In Add/Edit application, select **Package inventory (SBOM)** as the assessment
+source to save without a CPE. A lifecycle product or manual end-of-life date is
+still required. Existing product applications can also import package inventory.
+Open an application and choose **Package inventory** in its Assessment section.
+The dialog shows active imports and lets Application Editors import a file at
+application level or into an already configured active image. Viewers can inspect
+metadata; Permission Preview cannot import. Image configuration, retirement,
+detailed component browsing, and attribution remain in the final interface part.
 
 ## Manual PR build checks
 
-1. Open existing CPE-backed applications, refresh them, and confirm findings,
-   responses, application edits, and the scoped refresh/dialog behavior still work.
-2. For package testing, create a disposable application via the API with inventory
-   mode and a future end-of-life date. Before importing, refresh: it must be Unknown.
-3. Import the [test SBOM](../test/fixtures/package-assessment-demo.cdx.json) at
-   application level, then refresh. Its deliberately old lodash version should
-   produce source-backed package findings. The package/version/PURL and source
-   advisory must be shown; numeric severity must not be fabricated.
-4. Assign a finding, add notes/ticket, refresh again, and restart. Its UUID and
-   response should remain stable. Review inventory metadata for lookup timestamps
-   and assessment counts.
-5. Optionally import against two configured images; the same package/advisory must
-   keep independent findings per image. Import incomplete/unsupported components
-   or an old generation timestamp and verify incomplete/Unknown evidence is visible.
-6. If testing an OSV network outage, refresh and verify incomplete source evidence
-   and retained unverified findings rather than a false clean result. Restore
-   connectivity and refresh to recover.
-7. Viewer and Permission Preview sessions must not permit uploads or response
-   changes. Scoped refresh retains its existing RBAC rules.
+1. Add an application with **Package inventory (SBOM)** as its assessment source,
+   an installed version, and a future manual end-of-life date. Save without a CPE.
+   It should be Unknown before import. Existing applications can also import SBOMs.
+2. Open **Package inventory** in the application's Assessment section. Download
+   the demo SBOM from this dialog, choose it with the file picker, select Application,
+   and click **Import SBOM**. The import time and component count should appear.
+3. Close the inventory dialog and click **Refresh application**. The deliberately
+   old lodash version should produce source-backed package findings with exact
+   package/version/PURL context. Numeric severity must not be fabricated.
+4. Update a package finding's response, add notes/ticket, refresh, and restart.
+   Its UUID and response should remain stable. Reopen inventory to verify persistence.
+5. Try importing invalid JSON: an error should appear and the previous active
+   inventory should remain. Unsupported components and stale inventories should
+   produce incomplete evidence after refresh, never a false clean result.
+6. Viewer sessions can inspect inventory but cannot import. Permission Preview
+   must not offer imports; the server also rejects mutations.
+7. Confirm existing product applications, CPE selection, edits, scoped refresh,
+   and dialog scrolling still work.
 
-The demonstration fixture is intentionally vulnerable and is for a disposable
-test application only; it is inventory data, not software to install.
+The demo contains inventory data, not software to install. Image configuration
+and full inventory management follow in the interface slice.
 
 Sources: [OSV batch API](https://google.github.io/osv.dev/post-v1-querybatch/),
 [OSV advisory retrieval](https://google.github.io/osv.dev/get-v1-vulns/).

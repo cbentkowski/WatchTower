@@ -8,8 +8,8 @@ const detailCode = source.slice(source.indexOf('function showDetails(a)'), sourc
 const application = { id: 'app', name: 'Example', version: '1', status: 'green', vulnerabilities: [], reasons: [], sources: [], ownerIds: [], tags: [] };
 function displayContext(permissions) {
   const elements = new Map();
-  const element = id => { if (!elements.has(id)) elements.set(id, { hidden: false, scrollTop: 0, open: false, showModal() { this.open = true; this.scrollTop = 900; } }); return elements.get(id); };
-  const context = vm.createContext({ $: element, requestAnimationFrame: callback => callback(), detailAppId: null, isAdmin: false, permissions, labels: { green: 'Clear' }, escape: value => String(value), safeUrl: value => value, workspaces: [], owners: [], allResults: [application], encodeURIComponent, render(data) { context.allResults = data.results; } });
+  const element = id => { if (!elements.has(id)) elements.set(id, { addEventListener() {}, hidden: false, scrollTop: 0, open: false, showModal() { this.open = true; this.scrollTop = 900; } }); return elements.get(id); };
+  const context = vm.createContext({ $: element, requestAnimationFrame: callback => callback(), detailAppId: null, isAdmin: false, permissions, openInventory() {}, packageContext: () => '', labels: { green: 'Clear' }, escape: value => String(value), safeUrl: value => value, workspaces: [], owners: [], allResults: [application], encodeURIComponent, render(data) { context.allResults = data.results; } });
   vm.runInContext(detailCode, context);
   return { context, element };
 }
@@ -47,4 +47,12 @@ test('scan operator can refresh without edit, posts the selected ID, and preserv
   assert.equal(element('detail-body').scrollTop, 600);
   assert.equal(element('refresh-app').disabled, false);
   assert.match(element('detail-refresh-message').textContent, /complete/);
+});
+
+test('package finding response controls retain the finding UUID while displaying the advisory', () => {
+  const { context, element } = displayContext({ scan: false, applications: { view: ['app'], edit: ['app'] } });
+  context.showDetails({ ...application, vulnerabilities: [{ id: 'finding-uuid', advisoryId: 'GHSA-package-advisory', label: 'HIGH', package: { name: 'lodash' }, workflow: { state: 'new' } }] });
+  assert.match(element('detail-body').innerHTML, /data-finding-id="finding-uuid"/);
+  assert.match(element('detail-body').innerHTML, /GHSA-package-advisory/);
+  assert.match(element('detail-body').innerHTML, /Update response/);
 });

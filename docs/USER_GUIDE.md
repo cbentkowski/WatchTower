@@ -302,3 +302,13 @@ When investigating a problem:
 WatchTower stores configuration as YAML and detects external changes, but direct editing is discouraged. The UI validates values and relationships, preserves immutable identifiers, applies permission checks, and creates attributable audit records.
 
 Use the interface for normal administration. Direct file editing should be limited to recovery or carefully controlled maintenance with a current backup and a clear understanding of the stored schema.
+
+### Package inventory assessment
+
+Select **Package inventory (SBOM)** in Add/Edit application to assess an application
+without a CPE. Supply a lifecycle source or manual end-of-life date. Open the
+application and choose **Package inventory** under Assessment to import SPDX JSON
+2.3 or CycloneDX JSON 1.6, then use **Refresh application** to assess its packages.
+Application Editors can import; viewers can inspect active inventory metadata.
+The dialog provides a downloadable demo SBOM for testing. See
+[package assessment](PACKAGE_ASSESSMENT.md) for coverage, privacy, and testing details.

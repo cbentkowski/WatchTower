@@ -1,7 +1,8 @@
 # SBOM ingestion in Signal
 
 API-based image configuration and SBOM ingestion are part 2 of issue #90.
-Upload controls and inventory views follow in the interface part. Newly imported
+Basic file import and active inventory metadata are available in application details.
+Image configuration and detailed inventory views follow in the interface part. Newly imported
 inventory is explicitly **awaiting assessment** and does not prove an application
 is clean. The [package assessment implementation](PACKAGE_ASSESSMENT.md) connects
 OSV queries and explicit inventory-only application configuration through the API.
@@ -88,7 +89,8 @@ this intermediate build is stored here rather than in `applications.yaml`.
    should retain prior revision metadata. Malformed documents and mismatched images
    should fail without replacing the active inventory.
 7. Existing application edits and finding responses should still persist through
-   refresh and restart. No SBOM upload controls or package findings are expected yet.
+   refresh and restart. The current package assessment slice adds file import controls and package findings.
+   See the [current UI testing checklist](PACKAGE_ASSESSMENT.md#manual-pr-build-checks).
 
 ## Schema provenance
 
