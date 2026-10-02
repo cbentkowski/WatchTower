@@ -97,3 +97,12 @@ test('CycloneDX 1.7 validates newer license identifiers without changing the 1.6
   document.specVersion = '1.7'; document.components[0].type = 'invalid';
   assert.throws(() => normalizeSbom(JSON.stringify(document)), /Invalid CycloneDX 1.7/);
 });
+
+for (const version of ['1.4', '1.5']) test('CycloneDX ' + version + ' preserves identities and validates its own vocabulary', () => {
+  const document = cdx(); document.specVersion = version;
+  const inventory = normalizeSbom(JSON.stringify(document));
+  assert.equal(inventory.components[0].purl, 'pkg:npm/example@1.0.0');
+  assert.equal(inventory.dependencies[0].to, 'missing');
+  document.components[0].licenses = [{ license: { id: 'SMAIL-GPL' } }];
+  assert.throws(() => normalizeSbom(JSON.stringify(document)), /Invalid CycloneDX/);
+});

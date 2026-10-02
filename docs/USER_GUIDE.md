@@ -308,7 +308,7 @@ Use the interface for normal administration. Direct file editing should be limit
 Select **Package inventory (SBOM)** in Add/Edit application to assess an application
 without a CPE. Supply a lifecycle source or manual end-of-life date. Open the
 application and choose **Package inventory** under Assessment to import SPDX JSON
-2.3 or CycloneDX JSON 1.6 or 1.7, then use **Refresh application** to assess its packages.
+2.3 or CycloneDX JSON 1.4 through 1.7, then use **Refresh application** to assess its packages.
 Application Editors can import; viewers can inspect active inventory metadata.
 The dialog provides a downloadable demo SBOM for testing. See
 [package assessment](PACKAGE_ASSESSMENT.md) for coverage, privacy, and testing details.

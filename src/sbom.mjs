@@ -16,12 +16,14 @@ async function schemaValidator(primary, dependencies = []) {
   return ajv.getSchema(schemas[0].$id);
 }
 // Supporting schema IDs are shared upstream; keep each version's vocabulary isolated.
-const [spdxValidator, cdx16Validator, cdx17Validator] = await Promise.all([
+const [spdxValidator, cdx14Validator, cdx15Validator, cdx16Validator, cdx17Validator] = await Promise.all([
   schemaValidator('spdx-2.3'),
+  schemaValidator('cyclonedx-1.4', ['cyclonedx-1.4-spdx', 'cyclonedx-1.4-jsf']),
+  schemaValidator('cyclonedx-1.5', ['cyclonedx-1.5-spdx', 'cyclonedx-1.5-jsf']),
   schemaValidator('cyclonedx-1.6', ['cyclonedx-spdx', 'cyclonedx-jsf']),
   schemaValidator('cyclonedx-1.7', ['cyclonedx-1.7-spdx', 'cyclonedx-1.7-jsf', 'cyclonedx-cryptography'])
 ]);
-const validators = { SPDX: spdxValidator, '1.6': cdx16Validator, '1.7': cdx17Validator };
+const validators = { SPDX: spdxValidator, '1.4': cdx14Validator, '1.5': cdx15Validator, '1.6': cdx16Validator, '1.7': cdx17Validator };
 const text = value => typeof value === 'string' ? value.slice(0, sbomLimits.text) : '';
 
 function boundDocument(document) {
@@ -63,8 +65,8 @@ export function normalizeSbom(raw) {
   let document;
   try { document = JSON.parse(raw); } catch { throw new Error('SBOM must be uncompressed JSON'); }
   boundDocument(document);
-  const format = document?.spdxVersion === 'SPDX-2.3' ? 'SPDX' : document?.bomFormat === 'CycloneDX' && ['1.6', '1.7'].includes(document.specVersion) ? 'CycloneDX' : null;
-  if (!format) throw new Error('Supported SBOM versions: SPDX JSON 2.3 and CycloneDX JSON 1.6 or 1.7');
+  const format = document?.spdxVersion === 'SPDX-2.3' ? 'SPDX' : document?.bomFormat === 'CycloneDX' && ['1.4', '1.5', '1.6', '1.7'].includes(document.specVersion) ? 'CycloneDX' : null;
+  if (!format) throw new Error('Supported SBOM versions: SPDX JSON 2.3 and CycloneDX JSON 1.4 through 1.7');
   const components = [];
   const pending = [...(format === 'SPDX' ? document.packages || [] : document.components || [])];
   // Include the described root application/container when supplied.

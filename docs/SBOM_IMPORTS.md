@@ -10,7 +10,7 @@ The ingestion contracts below remain applicable.
 
 ## Supported import profile
 
-The supported versions are SPDX JSON 2.3 and CycloneDX JSON 1.6 or 1.7. Format is
+The supported versions are SPDX JSON 2.3 and CycloneDX JSON 1.4 through 1.7. Format is
 detected from document content and validated against the bundled official schemas.
 Other versions, compressed documents, and scanner-result formats are rejected.
 This import profile applies additional conservative limits: 5 MiB raw document,
@@ -102,3 +102,5 @@ Bundled schemas were obtained from these versioned upstream sources:
 The associated schema notices are retained in the schemas directory.
 
 CycloneDX 1.7 uses its [versioned upstream schemas](https://github.com/CycloneDX/specification/tree/1.7/schema), including the matching SPDX license, signature, and cryptography vocabularies. Version-specific supporting schemas remain isolated during validation.
+
+CycloneDX [1.4](https://github.com/CycloneDX/specification/tree/1.4/schema) and [1.5](https://github.com/CycloneDX/specification/tree/1.5/schema) likewise use their unmodified version-specific schemas and supporting vocabularies.
