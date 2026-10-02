@@ -267,6 +267,51 @@ function changedFields(before, after, fields) {
 function describeFields(changes) {
   return Object.entries(changes).map(([field, value]) => `${field}: ${JSON.stringify(value.from)} → ${JSON.stringify(value.to)}`).join('; ') || 'No values changed';
 }
+const policyAuditLabels = Object.freeze({
+  name: 'Name', enabled: 'Enabled', severities: 'Severities', knownExploited: 'Known exploitation', criticalities: 'Application criticalities', environments: 'Environments', exposures: 'Exposures', findingStates: 'Finding states', workspaceIds: 'Workspaces', ownerIds: 'Owners', minimumAgeDays: 'Minimum finding age', maximumAgeDays: 'Maximum finding age', cadence: 'Cadence', sendHour: 'Delivery hour', weeklyDay: 'Weekly delivery day', windowStartHour: 'Allowed window start', windowEndHour: 'Allowed window end', reminderDays: 'Reminder interval', workspaceRecipients: 'Include workspace owners', recipientOwnerIds: 'Additional delivery owners', includeEscalationContacts: 'Include escalation contacts', escalationAfterDays: 'Escalation age',
+});
+const policyAuditDays = Object.freeze(['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']);
+function policyAuditView(policy, { workspaces = [], owners = [] } = {}) {
+  const conditions = policy.conditions || {};
+  const delivery = policy.delivery || {};
+  const workspaceNames = new Map(workspaces.map(item => [item.id, item.name]));
+  const ownerNames = new Map(owners.map(item => [item.id, `${item.name}${item.email ? ` <${item.email}>` : ''}`]));
+  const title = value => String(value).split('-').map(part => part ? part[0].toUpperCase() + part.slice(1) : part).join(' ');
+  const list = (values, names) => (values || []).map(value => names?.get(value) || title(value)).join(', ') || 'Any';
+  const hour = value => value === null || value === undefined ? 'Global' : `${String(value).padStart(2, '0')}:00`;
+  return {
+    name: policy.name,
+    enabled: policy.enabled === false ? 'No' : 'Yes',
+    severities: list(conditions.severities),
+    knownExploited: conditions.knownExploited === undefined ? 'Any' : conditions.knownExploited ? 'Yes' : 'No',
+    criticalities: list(conditions.criticalities),
+    environments: list(conditions.environments),
+    exposures: list(conditions.exposures),
+    findingStates: list(conditions.findingStates),
+    workspaceIds: list(conditions.workspaceIds, workspaceNames),
+    ownerIds: list(conditions.ownerIds, ownerNames),
+    minimumAgeDays: conditions.minimumAgeDays === undefined ? 'Any' : `${conditions.minimumAgeDays} days`,
+    maximumAgeDays: conditions.maximumAgeDays === undefined ? 'Any' : `${conditions.maximumAgeDays} days`,
+    cadence: title(delivery.cadence || 'adaptive'),
+    sendHour: hour(delivery.sendHour),
+    weeklyDay: policyAuditDays[delivery.weeklyDay ?? 1],
+    windowStartHour: hour(delivery.windowStartHour ?? 0),
+    windowEndHour: hour(delivery.windowEndHour ?? 23),
+    reminderDays: `${delivery.reminderDays ?? 7} days`,
+    workspaceRecipients: delivery.workspaceRecipients === false ? 'No' : 'Yes',
+    recipientOwnerIds: list(delivery.recipientOwnerIds, ownerNames).replace(/^Any$/, 'None'),
+    includeEscalationContacts: delivery.includeEscalationContacts === true ? 'Yes' : 'No',
+    escalationAfterDays: delivery.escalationAfterDays == null ? 'Not configured' : `${delivery.escalationAfterDays} days`,
+  };
+}
+function policyAuditChanges(before, after, resources) {
+  const previous = policyAuditView(before, resources);
+  const current = policyAuditView(after, resources);
+  return changedFields(previous, current, Object.keys(policyAuditLabels));
+}
+function describePolicyAuditChanges(changes) {
+  return Object.entries(changes).map(([field, value]) => `${policyAuditLabels[field]}: ${value.from || 'empty'} → ${value.to || 'empty'}`).join('; ');
+}
 async function saveAtomic(file, content) {
   const temporary = `${file}.tmp`;
   await writeFile(temporary, content, 'utf8');
@@ -833,7 +878,25 @@ const requestHandler = async (req, res) => {
       const previous = await readNotificationPolicies(notificationPolicyFile);
       const policies = validateNotificationPolicies(body.policies, { workspaces, owners });
       await writeNotificationPolicies(notificationPolicyFile, policies);
-      await logger.audit('Notification policies updated', auditActor(req), { type: 'notification-policies', id: 'relay' }, { policies: { from: previous.map(policy => policy.name), to: policies.map(policy => policy.name) } }, `${policies.length} notification ${policies.length === 1 ? 'policy' : 'policies'} configured`);
+      const actor = auditActor(req);
+      const resources = { workspaces, owners };
+      const previousById = new Map(previous.map(policy => [policy.id, policy]));
+      const currentById = new Map(policies.map(policy => [policy.id, policy]));
+      for (const policy of policies) {
+        const oldPolicy = previousById.get(policy.id);
+        if (!oldPolicy) {
+          const configured = policyAuditView(policy, resources);
+          await logger.audit('Notification policy added', actor, { type: 'notification-policy', id: policy.id, name: policy.name }, configured, `${policy.name}; ${Object.entries(configured).filter(([field]) => field !== 'name').map(([field, value]) => `${policyAuditLabels[field]}: ${value}`).join('; ')}`);
+          continue;
+        }
+        const changes = policyAuditChanges(oldPolicy, policy, resources);
+        if (Object.keys(changes).length) await logger.audit('Notification policy updated', actor, { type: 'notification-policy', id: policy.id, name: policy.name }, changes, `${policy.name}; ${describePolicyAuditChanges(changes)}`);
+      }
+      for (const policy of previous) {
+        if (currentById.has(policy.id)) continue;
+        const configured = policyAuditView(policy, resources);
+        await logger.audit('Notification policy removed', actor, { type: 'notification-policy', id: policy.id, name: policy.name }, configured, `${policy.name}; removed policy configuration: ${Object.entries(configured).filter(([field]) => field !== 'name').map(([field, value]) => `${policyAuditLabels[field]}: ${value}`).join('; ')}`);
+      }
       if (snapshot) notifier.onScan(snapshot).catch(error => logger.log('error', 'Notification check after policy update failed', error.message));
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ policies })); return;
     }
