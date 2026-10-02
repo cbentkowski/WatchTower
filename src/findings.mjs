@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { reconcilePackageFinding } from './package-findings.mjs';
 
 export const findingStates = Object.freeze(['new', 'investigating', 'remediation-planned', 'mitigated', 'resolved', 'risk-accepted', 'not-affected', 'false-positive']);
 export const findingStateLabels = Object.freeze({ new: 'New', investigating: 'Investigating', 'remediation-planned': 'Remediation planned', mitigated: 'Mitigated', resolved: 'Resolved', 'risk-accepted': 'Risk accepted', 'not-affected': 'Not affected', 'false-positive': 'False positive' });
@@ -42,7 +43,7 @@ export function validateFindingUpdate(input = {}) {
 export async function readFindingStore(file) {
   try {
     const parsed = JSON.parse(await readFile(file, 'utf8'));
-    return { version: 1, records: parsed?.records && typeof parsed.records === 'object' ? parsed.records : {} };
+    return { version: 1, records: parsed?.records && typeof parsed.records === 'object' ? parsed.records : {}, packageFindings: Array.isArray(parsed?.packageFindings) ? parsed.packageFindings : [] };
   } catch (error) { if (error.code === 'ENOENT') return { version: 1, records: {} }; throw error; }
 }
 export async function writeFindingStore(file, store) {
@@ -78,6 +79,16 @@ export function reconcileFindingWorkflows(store, results, actor = { issuer: 'sca
   const events = [];
   let changed = false;
   for (const application of results) for (const finding of application.vulnerabilities || []) {
+    if (finding.package) {
+      const identity = reconcilePackageFinding(store, { ...finding.package, applicationId: application.id, advisoryId: finding.advisoryId, aliases: finding.aliases });
+      if (identity.status === 'ambiguous') {
+        finding.identity = identity;
+        delete finding.workflow;
+        continue;
+      }
+      finding.id = identity.findingId;
+      changed ||= identity.changed;
+    }
     const key = findingKey(application.id, finding.id);
     const fingerprint = evidenceFingerprint(finding);
     let record = store.records[key];
