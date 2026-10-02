@@ -1,7 +1,7 @@
 import { PackageURL } from 'packageurl-js';
 
 const ecosystems = Object.freeze({ npm: 'npm', pypi: 'PyPI', maven: 'Maven', golang: 'Go', cargo: 'crates.io', gem: 'RubyGems', composer: 'Packagist', nuget: 'NuGet', hex: 'Hex', pub: 'Pub' });
-export const osvLimits = Object.freeze({ batch: 100, pages: 10, requests: 200, advisories: 1000, findings: 10000, bytes: 2 * 1024 * 1024, timeoutMs: 15000, cacheEntries: 500, cacheMs: 6 * 60 * 60 * 1000 });
+export const osvLimits = Object.freeze({ batch: 100, pages: 10, requests: 200, advisories: 1000, findings: 10000, bytes: 2 * 1024 * 1024, timeoutMs: 15000, assessmentMs: 60000, cacheEntries: 500, cacheMs: 6 * 60 * 60 * 1000 });
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const text = value => typeof value === 'string' ? value.slice(0, 16000) : '';
@@ -93,10 +93,12 @@ export function createOsvClient({ fetchImpl = (...args) => fetch(...args), now =
   async function request(route, body, budget) {
     for (let attempt = 0; attempt < 3; attempt++) {
       if (++budget.requests > osvLimits.requests) throw new Error('OSV request budget exceeded');
+      const remaining = budget.deadline - now();
+      if (remaining <= 0) throw new Error('OSV assessment time budget exceeded');
       const permit = requestChain.then(async () => { await pause(Math.max(0, 100 - (now() - lastRequest))); lastRequest = now(); });
       requestChain = permit.catch(() => {});
       await permit;
-      const response = await fetchImpl(`https://api.osv.dev/v1/${route}`, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, redirect: 'error', signal: AbortSignal.timeout(osvLimits.timeoutMs) });
+      const response = await fetchImpl(`https://api.osv.dev/v1/${route}`, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, redirect: 'error', signal: AbortSignal.timeout(Math.min(osvLimits.timeoutMs, remaining)) });
       if ([429, 500, 502, 503, 504].includes(response.status) && attempt < 2) {
         const retry = response.headers.get('retry-after');
         const seconds = retry ? Number.isFinite(Number(retry)) ? Number(retry) : (Date.parse(retry) - now()) / 1000 : attempt + 1;
@@ -123,7 +125,7 @@ export function createOsvClient({ fetchImpl = (...args) => fetch(...args), now =
   return {
     async assess(inventory, kev = new Set()) {
       const checkedAt = new Date(now()).toISOString();
-      const budget = { requests: 0 };
+      const budget = { requests: 0, deadline: now() + osvLimits.assessmentMs };
       const errors = [], unsupported = [], findings = [];
       const packages = new Map();
       for (const component of inventory.components) {

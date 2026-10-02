@@ -60,6 +60,8 @@ Each inventory is limited to 200 HTTP attempts (including retries), 1,000 distin
 advisories, and 10,000 candidate finding occurrences. Requests are paced at least
 100 ms apart; the current assessment loop uses serial bounded requests. A request
 has a 15-second timeout and a 2 MiB response limit.
+Each inventory also has a 60-second network-work budget; exceeding it produces
+incomplete evidence while preserving findings already retrieved.
 Record processing is limited to depth 24, 100,000 values, and 16,000 characters
 per string; records exceeding these limits remain incomplete evidence.
 

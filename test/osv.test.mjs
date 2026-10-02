@@ -70,6 +70,15 @@ test('fresh queries observe new advisories while detail caching respects modifie
   assert.equal(detailCalls, 2);
 });
 
+test('an overall time budget prevents a long source outage from consuming every request allowance', async () => {
+  let time = Date.parse('2026-10-02T12:00:00Z'), calls = 0;
+  const api = createOsvClient({ now: () => time, pause: async () => {}, fetchImpl: async () => { calls++; time += osvLimits.assessmentMs + 1; return json({ results: [{}] }); } });
+  const result = await api.assess(inventory(Array.from({ length: 101 }, (_, index) => component(`package${index}`))));
+  assert.equal(calls, 1);
+  assert.equal(result.state, 'incomplete');
+  assert.ok(result.errors.some(error => /time budget/.test(error.message)));
+});
+
 test('package mismatch and related identifiers cannot silently merge applicability', async () => {
   const api = client(async url => url.endsWith('querybatch') ? json({ results: [{ vulns: [{ id: 'GHSA-xxxx-yyyy-zzzz' }] }] }) : json(record('GHSA-xxxx-yyyy-zzzz', 'different')));
   const result = await api.assess(inventory());
