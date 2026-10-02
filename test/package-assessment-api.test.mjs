@@ -26,6 +26,10 @@ test('CPE-less imports reassess new advisories, persist workflow, retain failure
     let ready = false;
     for (let attempt = 0; attempt < 50; attempt++) { try { ready = (await request('/api/session')).ok; if (ready) break; } catch { await new Promise(resolve => setTimeout(resolve, 100)); } }
     assert.equal(ready, true, errors);
+    const demoResponse = await request('/api/sboms/demo');
+    assert.equal(demoResponse.status, 200);
+    assert.match(demoResponse.headers.get('content-disposition'), /attachment/);
+    assert.deepEqual(await demoResponse.json(), JSON.parse(await readFile('test/fixtures/package-assessment-demo.cdx.json', 'utf8')));
     const created = await request('/api/applications', 'POST', { name: 'Inventory App', version: '1.0.0', assessmentMode: 'inventory', eolDate: '2030-01-01' });
     assert.equal(created.status, 201, await created.clone().text());
     const { id } = await created.json();

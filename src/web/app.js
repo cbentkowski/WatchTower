@@ -1565,15 +1565,3 @@ $('sbom-form').addEventListener('submit', async event => {
   } catch (error) { $('sbom-message').textContent = error.message; }
   finally { $('sbom-submit').disabled = false; $('inventory-close').disabled = false; $('sbom-file').disabled = false; $('sbom-scope').disabled = false; }
 });
-
-$('download-demo-sbom').addEventListener('click', () => {
-  const demo = { bomFormat: 'CycloneDX', specVersion: '1.6', version: 1, components: [{ type: 'library', 'bom-ref': 'lodash', name: 'lodash', version: '4.17.20', purl: 'pkg:npm/lodash@4.17.20' }] };
-  const url = URL.createObjectURL(new Blob([JSON.stringify(demo, null, 2)], { type: 'application/json' }));
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = 'demo-sbom.cdx.json';
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-});

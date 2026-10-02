@@ -1424,6 +1424,11 @@ const requestHandler = async (req, res) => {
       const data = !snapshot || Date.now() - new Date(snapshot.checkedAt).getTime() > refreshMs || url.searchParams.has('refresh') ? await refresh() : snapshot;
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(visibleSnapshot(data, owners, access, req))); return;
     }
+    if (url.pathname === '/api/sboms/demo' && req.method === 'GET') {
+      const demo = { bomFormat: 'CycloneDX', specVersion: '1.6', version: 1, components: [{ type: 'library', 'bom-ref': 'lodash', name: 'lodash', version: '4.17.20', purl: 'pkg:npm/lodash@4.17.20' }] };
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': 'attachment; filename="demo-sbom.cdx.json"', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(demo, null, 2)); return;
+    }
     const files = { '/': 'index.html', '/styles.css': 'styles.css', '/theme-init.js': 'theme-init.js', '/app.js': 'app.js', '/favicon.svg': 'favicon.svg' };
     const file = files[url.pathname];
     if (!file) { res.writeHead(404); res.end('Not found'); return; }
