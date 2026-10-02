@@ -81,3 +81,38 @@ test('concurrent imports preserve revisions, scopes, attribution and restart sta
     await assert.rejects(() => createInventoryStore(directory).read('../escape'));
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test('CycloneDX 1.7 validates newer license identifiers without changing the 1.6 vocabulary', () => {
+  const document = cdx(); document.specVersion = '1.7';
+  document.metadata = { component: { type: 'container', name: '/scan/watchtower.tar', 'bom-ref': 'root' } };
+  document.components[0].licenses = [{ license: { id: 'SMAIL-GPL' } }];
+  const inventory = normalizeSbom(JSON.stringify(document));
+  assert.equal(inventory.componentCount, 2);
+  assert.deepEqual(inventory.reportedImages, []);
+  assert.ok(inventory.components.some(component => component.licenses.includes('SMAIL-GPL')));
+  document.specVersion = '1.6';
+  assert.throws(() => normalizeSbom(JSON.stringify(document)), /Invalid CycloneDX 1.6/);
+  document.specVersion = '1.8';
+  assert.throws(() => normalizeSbom(JSON.stringify(document)), /Supported SBOM versions/);
+  document.specVersion = '1.7'; document.components[0].type = 'invalid';
+  assert.throws(() => normalizeSbom(JSON.stringify(document)), /Invalid CycloneDX 1.7/);
+});
+
+for (const version of ['1.4', '1.5']) test('CycloneDX ' + version + ' preserves identities and validates its own vocabulary', () => {
+  const document = cdx(); document.specVersion = version;
+  const inventory = normalizeSbom(JSON.stringify(document));
+  assert.equal(inventory.components[0].purl, 'pkg:npm/example@1.0.0');
+  assert.equal(inventory.dependencies[0].to, 'missing');
+  document.components[0].licenses = [{ license: { id: 'SMAIL-GPL' } }];
+  assert.throws(() => normalizeSbom(JSON.stringify(document)), /Invalid CycloneDX/);
+});
+
+for (const version of ['2.2', '2.3']) test('SPDX ' + version + ' preserves its declared version and package identity', () => {
+  const document = spdx(); document.spdxVersion = 'SPDX-' + version;
+  const result = normalizeSbom(JSON.stringify(document));
+  assert.equal(result.specificationVersion, version);
+  assert.equal(result.components[0].purl, normalizeSbom(JSON.stringify(cdx())).components[0].purl);
+  assert.equal(result.components[0].componentType, 'library');
+  delete document.creationInfo.created;
+  assert.throws(() => normalizeSbom(JSON.stringify(document)), /Invalid SPDX/);
+});

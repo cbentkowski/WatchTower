@@ -1,15 +1,17 @@
 # SBOM ingestion in Signal
 
-This intermediate implementation provides API-based image configuration and SBOM
-ingestion. Upload controls and inventory views will follow in the interface part
-of issue #90. Package vulnerability lookups are the next part. Imported inventory
-is explicitly **awaiting assessment** and does not prove an application is clean.
-Applications still require their existing CPE and lifecycle configuration in this
-build; CPE-less application behavior will be connected with assessment support.
+API-based image configuration and SBOM ingestion are part 2 of issue #90.
+Basic file import and active inventory metadata are available in application details.
+Image configuration and detailed inventory views follow in the interface part. Newly imported
+inventory is explicitly **awaiting assessment** and does not prove an application
+is clean. The [package assessment implementation](PACKAGE_ASSESSMENT.md) connects
+OSV queries and explicit inventory-only application configuration through the API.
+The ingestion contracts below remain applicable.
 
 ## Supported import profile
 
-The initial supported versions are SPDX JSON 2.3 and CycloneDX JSON 1.6. Format is
+The supported versions are SPDX JSON 2.2 and 2.3, SPDX JSON-LD 3.0 and 3.0.1,
+and CycloneDX JSON 1.4 through 1.7. Format is
 detected from document content and validated against the bundled official schemas.
 Other versions, compressed documents, and scanner-result formats are rejected.
 This import profile applies additional conservative limits: 5 MiB raw document,
@@ -24,12 +26,29 @@ relationships. No CPE is guessed. Missing/invalid/unversioned PURLs and conflict
 versions remain explicit incomplete identities. Ecosystem support is determined
 in the subsequent assessment part, not assumed from a valid PURL.
 
-CycloneDX supplier vulnerability and VEX assertions retain attribution and are
+CycloneDX and SPDX 3 supplier vulnerability and VEX assertions retain attribution and are
 not trusted assessment results. They cannot resolve or suppress WatchTower findings.
 Embedded content, URLs, annotations, and paths are never executed or fetched.
 The importer retains selected normalized data, not raw source documents or
 unnecessary embedded content. Missing dependency targets remain references rather
 than fabricated components.
+
+SPDX 3 imports use the standard compact JSON-LD profile with the official
+`https://spdx.org/rdf/3.0.0/spdx-context.jsonld` or
+`https://spdx.org/rdf/3.0.1/spdx-context.jsonld` context. The legacy `3.0` context
+URL is accepted as a 3.0 alias. Graph and nested elements are resolved locally;
+unknown/custom contexts, expanded RDF, and future versions are rejected.
+Package elements, package URLs, creation information, supplier references, hashes,
+license relationships, dependencies, and attributed security assertions are normalized.
+JSON Schema structural validation and local reference checks are performed; this
+is not full RDF/SHACL semantic validation. SPDX file elements are not imported as
+packages. CycloneDX file/container/OS entries retain their component types for
+separate coverage counts. Older CycloneDX revisions require reimport to capture types.
+
+For SPDX 2.x interoperability, the historical `PACKAGE_MANAGER` and
+`PACKAGE-MANAGER` category spellings are accepted, as are `PERSISTENT_ID` and
+`PERSISTENT-ID` in 2.3. Only these aliases are adapted in a validation copy;
+upstream schemas and document checksums retain their original bytes.
 
 ## API contracts
 
@@ -88,13 +107,28 @@ this intermediate build is stored here rather than in `applications.yaml`.
    should retain prior revision metadata. Malformed documents and mismatched images
    should fail without replacing the active inventory.
 7. Existing application edits and finding responses should still persist through
-   refresh and restart. No SBOM upload controls or package findings are expected yet.
+   refresh and restart. The current package assessment slice adds file import controls and package findings.
+   See the [current UI testing checklist](PACKAGE_ASSESSMENT.md#manual-pr-build-checks).
 
 ## Schema provenance
 
 Bundled schemas were obtained from these versioned upstream sources:
 
+- [SPDX 2.2 JSON schema](https://github.com/spdx/spdx-spec/blob/v2.2.2/schemas/spdx-schema.json)
+- [SPDX 3.0.0 JSON schema](https://spdx.org/schema/3.0.0/spdx-json-schema.json)
+- [SPDX 3.0.1 JSON schema](https://spdx.org/schema/3.0.1/spdx-json-schema.json)
 - [SPDX 2.3 JSON schema](https://github.com/spdx/spdx-spec/blob/v2.3/schemas/spdx-schema.json)
 - [CycloneDX 1.6 schema and supporting schemas](https://github.com/CycloneDX/specification/tree/1.6/schema)
 
 The associated schema notices are retained in the schemas directory.
+
+CycloneDX 1.7 uses its [versioned upstream schemas](https://github.com/CycloneDX/specification/tree/1.7/schema), including the matching SPDX license, signature, and cryptography vocabularies. Version-specific supporting schemas remain isolated during validation.
+
+CycloneDX [1.4](https://github.com/CycloneDX/specification/tree/1.4/schema) and [1.5](https://github.com/CycloneDX/specification/tree/1.5/schema) likewise use their unmodified version-specific schemas and supporting vocabularies.
+
+SPDX 3 schemas use their version-specific 3.0.0 and 3.0.1 sources. The legacy
+3.0 context alias is adapted only in the validation copy. SPDX 3 license and
+preexisting-material notices are retained in `src/schemas/LICENSE-SPDX-3`.
+The import dialog exposes schema attribution and upstream license links.
+The category compatibility rule follows the upstream
+[SPDX interoperability discussion](https://github.com/spdx/spdx-spec/issues/792).

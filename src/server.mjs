@@ -22,6 +22,8 @@ import { appendFindingEvents, readFindingEvents, readFindingStore, reconcileFind
 import { ensureNotificationPolicies, notificationPolicyOptions, previewNotificationPolicy, readNotificationPolicies, validateNotificationPolicies, validateNotificationPolicy, writeNotificationPolicies } from './notification-policy-store.mjs';
 import { createInventoryStore } from './inventory-store.mjs';
 import { sbomLimits } from './sbom.mjs';
+import { createOsvClient } from './osv.mjs';
+import { assessApplicationInventory } from './package-assessment.mjs';
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.dirname(sourceDirectory);
@@ -33,6 +35,9 @@ const HOST = process.env.HOST || '127.0.0.1';
 const tlsConfiguration = await loadTlsConfiguration();
 const dataDirectory = process.env.DATA_DIR || path.join(projectDirectory, 'data');
 const inventoryStore = createInventoryStore(path.join(dataDirectory, 'inventories'));
+const osvClient = createOsvClient();
+const sbomMaxAgeDays = Number(process.env.SBOM_MAX_AGE_DAYS || 30);
+if (!Number.isInteger(sbomMaxAgeDays) || sbomMaxAgeDays < 1 || sbomMaxAgeDays > 3650) throw new Error('SBOM_MAX_AGE_DAYS must be an integer from 1 to 3650');
 const configFiles = ['applications.yaml', 'workspaces.yaml', 'feeds.yaml', 'owners.yaml', 'smtp.yaml', 'general.yaml'];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const exists = file => access(file).then(() => true, () => false);
@@ -185,7 +190,7 @@ function parseInventory(source, includeDisabled = false, allowLegacyIds = false)
   }
   for (const app of apps) {
     const hadContext = ['criticality', 'environment', 'exposure', 'ownerIds', 'tags'].every(key => Object.hasOwn(app, key));
-    for (const key of ['id', 'name', 'version', 'cpeVendor', 'cpeProduct']) {
+    for (const key of ['id', 'name', 'version']) {
       if (!app[key] || typeof app[key] !== 'string') throw new Error(`Application is missing ${key}`);
     }
     if (!allowLegacyIds && !uuidPattern.test(app.id)) throw new Error(`Invalid immutable application ID for ${app.name}`);
@@ -194,9 +199,13 @@ function parseInventory(source, includeDisabled = false, allowLegacyIds = false)
     }
     if (app.cpeMode && !['product', 'exact'].includes(app.cpeMode)) throw new Error(`Invalid cpeMode for ${app.name}`);
     const hadCanonicalCpe = Boolean(app.cpeName);
-    const mapping = mappingFromApp(app);
-    app.cpeName = mapping.cpeName;
-    app.cpeMode = mapping.mode;
+    app.assessmentMode ||= 'cpe';
+    if (!['cpe', 'inventory'].includes(app.assessmentMode)) throw new Error('Invalid assessmentMode');
+    if (app.cpeName || app.cpeVendor && app.cpeProduct || app.assessmentMode === 'cpe') {
+      const mapping = mappingFromApp(app);
+      app.cpeName = mapping.cpeName;
+      app.cpeMode = mapping.mode;
+    }
     app.cpeTitle ||= app.name;
     app.criticality ||= 'unspecified';
     app.environment ||= 'unspecified';
@@ -208,14 +217,14 @@ function parseInventory(source, includeDisabled = false, allowLegacyIds = false)
     if (!['unspecified', 'low', 'medium', 'high', 'critical'].includes(app.criticality)) throw new Error(`Invalid criticality for ${app.name}`);
     if (!['unspecified', 'production', 'staging', 'development', 'test', 'disaster-recovery'].includes(app.environment)) throw new Error(`Invalid environment for ${app.name}`);
     if (!['unknown', 'internal', 'external', 'internet'].includes(app.exposure)) throw new Error(`Invalid exposure for ${app.name}`);
-    Object.defineProperty(app, '_needsCpeMigration', { value: !hadCanonicalCpe, enumerable: false });
+    Object.defineProperty(app, '_needsCpeMigration', { value: !hadCanonicalCpe && Boolean(app.cpeName), enumerable: false });
     Object.defineProperty(app, '_needsContextMigration', { value: !hadContext, enumerable: false });
   }
   if (new Set(apps.map(a => a.id)).size !== apps.length) throw new Error('Application IDs must be unique');
   return includeDisabled ? apps : apps.filter(a => a.enabled !== false);
 }
 
-const appFields = ['id', 'legacyId', 'name', 'vendor', 'version', 'cpeName', 'cpeMode', 'cpeTitle', 'cpeDeprecated', 'cpeLastTestedAt', 'cpeTestCandidateCount', 'cpeTestApplicableCount', 'cpeVendor', 'cpeProduct', 'cpeEdition', 'lifecycleProduct', 'eolDate', 'lifecycleUrl', 'vendorBulletinUrl', 'releaseUrl', 'latestVersion', 'latestBranchVersion', 'latestLtsVersion', 'criticality', 'environment', 'exposure', 'ownerIds', 'tags'];
+const appFields = ['assessmentMode', 'id', 'legacyId', 'name', 'vendor', 'version', 'cpeName', 'cpeMode', 'cpeTitle', 'cpeDeprecated', 'cpeLastTestedAt', 'cpeTestCandidateCount', 'cpeTestApplicableCount', 'cpeVendor', 'cpeProduct', 'cpeEdition', 'lifecycleProduct', 'eolDate', 'lifecycleUrl', 'vendorBulletinUrl', 'releaseUrl', 'latestVersion', 'latestBranchVersion', 'latestLtsVersion', 'criticality', 'environment', 'exposure', 'ownerIds', 'tags'];
 const scalarAppFields = appFields.filter(key => !['ownerIds', 'tags'].includes(key));
 const idPattern = /^[A-Za-z0-9._-]+$/;
 function cleanApp(input, existingId = '') {
@@ -231,8 +240,12 @@ function cleanApp(input, existingId = '') {
     app.cpeMode = app.cpeEdition ? 'exact' : 'product';
     app.cpeTitle ||= app.name;
   }
-  for (const key of ['id', 'name', 'version', 'cpeName']) if (!app[key]) throw new Error(`${key} is required`);
+  app.assessmentMode ||= 'cpe';
+  if (!['cpe', 'inventory'].includes(app.assessmentMode)) throw new Error('Invalid assessmentMode');
+  for (const key of ['id', 'name', 'version']) if (!app[key]) throw new Error(`${key} is required`);
+  if (!app.cpeName && app.assessmentMode !== 'inventory') throw new Error('cpeName is required');
   if (!uuidPattern.test(app.id)) throw new Error('Application ID must be an immutable UUID');
+  if (app.cpeName) {
   if (!['product', 'exact'].includes(app.cpeMode)) throw new Error('cpeMode must be product or exact');
   const mapping = parseCpe23(app.cpeName);
   app.cpeVendor = mapping.vendor;
@@ -240,6 +253,7 @@ function cleanApp(input, existingId = '') {
   app.cpeEdition = mapping.edition === '*' || mapping.edition === '-' ? '' : mapping.edition;
   const blocking = mappingWarnings({ ...mapping, mode: app.cpeMode, deprecated: app.cpeDeprecated === 'true' }, app.version).filter(item => item.code === 'version-conflict');
   if (blocking.length) throw new Error(blocking[0].message);
+  }
   // CPE-derived fields have already been validated as part of the canonical CPE.
   // They may legitimately contain escaped punctuation such as Notepad++'s `notepad\+\+`.
   for (const key of ['version', 'lifecycleProduct']) if (app[key] && !idPattern.test(app[key])) throw new Error(`${key} may contain only letters, numbers, dots, underscores, and hyphens`);
@@ -626,12 +640,12 @@ async function checkGitlab(app, kev) {
 }
 
 async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
-  const mapping = mappingFromApp(app);
-  const cpe = mapping.mode === 'exact' ? mapping.cpeName : `cpe:2.3:${mapping.part}:${mapping.vendor}:${mapping.product}:${app.version}:*:*:*:*:*:*:*`;
+  const mapping = app.cpeName ? mappingFromApp(app) : null;
+  const cpe = mapping ? mapping.mode === 'exact' ? mapping.cpeName : `cpe:2.3:${mapping.part}:${mapping.vendor}:${mapping.product}:${app.version}:*:*:*:*:*:*:*` : '';
   const result = { ...app, cpe, status: 'unknown', reasons: [], vulnerabilities: [], sources: [], checkedAt: new Date().toISOString() };
   let sourceOk = false;
-  let sourceLabel = 'NVD';
-  try {
+  let sourceLabel = mapping ? 'NVD' : 'Package inventory';
+  if (mapping) try {
     const vendor = app.cpeVendor === 'atlassian' ? await checkAtlassian(app, kev) : await checkGitlab(app, kev);
     if (vendor) {
       result.vulnerabilities = vendor.vulnerabilities;
@@ -641,7 +655,7 @@ async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
       result.vendorConfirmed = true;
     }
   } catch (error) { logger.feed('warn', 'Vendor assessment unavailable', `${app.name}: ${error.message}; using NVD fallback`); result.reasons.push(`Vendor check unavailable: ${error.message}; using NVD fallback`); }
-  if (!sourceOk) try {
+  if (mapping && !sourceOk) try {
     const api = new URL('https://services.nvd.nist.gov/rest/json/cves/2.0');
     api.searchParams.set('virtualMatchString', wildcardApplicationCpe(app));
     api.searchParams.set('resultsPerPage', '2000');
@@ -704,11 +718,26 @@ async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
   for (const error of feedErrors) result.reasons.push(`Vendor feed unavailable: ${error}`);
   if (feedErrors.length) sourceOk = false;
   result.vulnerabilities = [...new Map(result.vulnerabilities.map(item => [`${item.id}:${item.url}`, item])).values()].sort((a, b) => (b.score || 0) - (a.score || 0));
-  const urgent = result.vulnerabilities.some(v => v.score >= 7 || v.knownExploited);
+  try {
+    const packages = await assessApplicationInventory(app, inventoryStore, osvClient, kev, { maxAgeDays: sbomMaxAgeDays, onEvent: logger.feed });
+    result.packageAssessment = { configured: packages.configured, state: packages.state, inventories: packages.inventories };
+    result.vulnerabilities.push(...packages.findings);
+    result.reasons.push(...packages.reasons);
+    if (packages.configured) {
+      result.sources.push({ name: 'OSV package assessment', url: 'https://osv.dev/' });
+      if (packages.state !== 'assessed') sourceOk = false;
+      else if (!mapping && !feedErrors.length && !reviewAdvisories.length) { sourceOk = true; sourceLabel = 'OSV'; }
+    }
+  } catch (error) { sourceOk = false; result.packageAssessment = { configured: true, state: 'incomplete', inventories: [] }; result.reasons.push(`Package assessment unavailable: ${error.message}`); }
+  const urgent = result.vulnerabilities.some(v => v.score >= 7 || v.knownExploited || ['HIGH', 'CRITICAL'].includes(v.severity));
   result.status = urgent || life.state === 'expired' ? 'red' : !sourceOk || life.state === 'unknown' ? 'unknown' : life.state === 'approaching' ? 'yellow' : 'green';
-  if (urgent) result.reasons.push(`${result.vulnerabilities.length} ${result.vendorConfirmed ? 'vendor-confirmed' : 'possible'} high/critical or known exploited CVE${result.vulnerabilities.length === 1 ? '' : 's'}${result.vendorConfirmed ? '' : '; confirm vendor applicability'}`);
+  if (result.status === 'green' && result.vulnerabilities.some(finding => finding.package)) result.status = result.vulnerabilities.some(finding => finding.package && finding.severity === 'UNKNOWN') ? 'unknown' : 'yellow';
+  const unknownSeverity = result.vulnerabilities.filter(finding => finding.package && finding.severity === 'UNKNOWN').length;
+  if (unknownSeverity) result.reasons.push(`${unknownSeverity} package findings have no interpreted severity label; review retained source severity evidence`);
+  if (urgent) result.reasons.push(`${result.vulnerabilities.filter(v => v.score >= 7 || v.knownExploited || ['HIGH', 'CRITICAL'].includes(v.severity)).length} high/critical or known-exploited findings; review linked applicability evidence`);
   if (life.state !== 'supported') result.reasons.push(life.note);
   if (result.status === 'green') result.reasons.push(`Supported; no high or critical CVEs found in ${sourceLabel}`);
+  result.assessmentSource = sourceLabel;
   return result;
 }
 
@@ -1394,6 +1423,11 @@ const requestHandler = async (req, res) => {
       if (url.searchParams.has('refresh') && !access.scan) { forbidden(res, 'Scan Operator role required'); return; }
       const data = !snapshot || Date.now() - new Date(snapshot.checkedAt).getTime() > refreshMs || url.searchParams.has('refresh') ? await refresh() : snapshot;
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(visibleSnapshot(data, owners, access, req))); return;
+    }
+    if (url.pathname === '/api/sboms/demo' && req.method === 'GET') {
+      const demo = { bomFormat: 'CycloneDX', specVersion: '1.6', version: 1, components: [{ type: 'library', 'bom-ref': 'lodash', name: 'lodash', version: '4.17.20', purl: 'pkg:npm/lodash@4.17.20' }] };
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': 'attachment; filename="demo-sbom.cdx.json"', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(demo, null, 2)); return;
     }
     const files = { '/': 'index.html', '/styles.css': 'styles.css', '/theme-init.js': 'theme-init.js', '/app.js': 'app.js', '/favicon.svg': 'favicon.svg' };
     const file = files[url.pathname];

@@ -91,6 +91,11 @@ Signal's intermediate SBOM ingestion APIs and supported formats are described in
 [SBOM imports](SBOM_IMPORTS.md); upload controls and package assessment follow in
 later work.
 
+[Package assessment](PACKAGE_ASSESSMENT.md) now connects imported inventories to
+OSV on refresh. Package findings show the exact installed component and advisory;
+unsupported or failed evidence remains incomplete. Upload/management controls
+will follow in the final interface part.
+
 Administrators manage reusable contacts from **Owners**. Each owner requires a name and unique email address and may include an escalation email. Editing an owner updates its contact information everywhere that owner is assigned. An owner cannot be removed while any application or workspace still references it.
 
 Application Editors and Workspace Notification Managers can create an owner from the owner-selection dialog and immediately assign it to the resource they are editing. They cannot edit or remove directory entries unless they are administrators. If the email already belongs to an owner, WatchTower prevents the duplicate and directs the user to select the existing owner.
@@ -297,3 +302,13 @@ When investigating a problem:
 WatchTower stores configuration as YAML and detects external changes, but direct editing is discouraged. The UI validates values and relationships, preserves immutable identifiers, applies permission checks, and creates attributable audit records.
 
 Use the interface for normal administration. Direct file editing should be limited to recovery or carefully controlled maintenance with a current backup and a clear understanding of the stored schema.
+
+### Package inventory assessment
+
+Select **Package inventory (SBOM)** in Add/Edit application to assess an application
+without a CPE. Supply a lifecycle source or manual end-of-life date. Open the
+application and choose **Package inventory** under Assessment to import SPDX JSON
+2.2 or 2.3, SPDX JSON-LD 3.0 or 3.0.1, or CycloneDX JSON 1.4 through 1.7, then use **Refresh application** to assess its packages.
+Application Editors can import; viewers can inspect active inventory metadata.
+The dialog provides a downloadable demo SBOM for testing. See
+[package assessment](PACKAGE_ASSESSMENT.md) for coverage, privacy, and testing details.
