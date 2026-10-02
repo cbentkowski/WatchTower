@@ -53,6 +53,13 @@ const safeUrl = (url) => { try { const u = new URL(url); return u.protocol === '
 const safeTicketUrl = value => { try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password ? url.href : '#'; } catch { return '#'; } };
 const ticketReferenceMarkup = reference => { const href = safeTicketUrl(reference); const value = href === '#' ? `<strong>${escape(reference)}</strong>` : `<a href="${href}" target="_blank" rel="noopener noreferrer">Open external ticket ↗</a>`; return `<div class="finding-ticket-display"><span>TICKET</span>${value}</div>`; };
 const labels = { red: 'Needs action', yellow: 'Approaching EOL', green: 'Clear', unknown: 'Unknown' };
+function dashboardStatus(app) {
+  const checkedPackages = app.packageAssessment?.inventories?.some(inventory => inventory.assessedComponentCount > 0);
+  if (app.status === 'unknown' && !app.vulnerabilities.length && checkedPackages) {
+    return '<span class="badge unknown"><i></i>No findings</span><span class="vendor">' + (app.packageAssessment.state === 'assessed' ? 'Assessment incomplete' : 'Partial coverage') + '</span>';
+  }
+  return '<span class="badge ' + escape(app.status) + '"><i></i>' + escape(labels[app.status] || 'Unknown') + '</span>';
+}
 function setTheme(theme) {
   document.documentElement.dataset.theme = theme;
   try { localStorage.setItem('dashboard-theme', theme); } catch {}
@@ -164,7 +171,7 @@ function renderView() {
     $('rows').innerHTML = group ? activeFilters ? '<tr><td colspan="6" class="empty"><div class="empty-mark">◇</div><strong>No applications match</strong><p>Select Monitored Applications to show the full workspace.</p></td></tr>' : '<tr><td colspan="6" class="empty"><div class="empty-mark">◇</div><strong>No applications in this workspace</strong><p>Add application IDs to this group in <code>config/workspaces.yaml</code>, then refresh.</p></td></tr>' : '<tr><td colspan="6" class="empty"><div class="empty-mark">◇</div><strong>Nothing needs action</strong><p>Applications with high risk findings or past end of life will appear here.</p></td></tr>';
     return;
   }
-  $('rows').innerHTML = results.map((a, i) => `<tr data-index="${i}" tabindex="0" aria-label="Review ${escape(a.name)}"><td><strong>${escape(a.name)}</strong><span class="vendor">${escape(a.vendor || a.cpeVendor)}</span></td><td class="mono">${escape(a.version)}</td><td>${escape(a.lifecycle?.note || 'Unknown')}</td><td>${a.vulnerabilities.length ? `<strong class="finding">${a.vulnerabilities.length} ${a.vendorConfirmed ? 'vendor' : 'possible'} finding${a.vulnerabilities.length === 1 ? '' : 's'}</strong>` : '<span class="muted">None found</span>'}<span class="vendor">${escape(a.assessmentSource || 'NVD')}</span></td><td><span class="badge ${a.status}"><i></i>${labels[a.status]}</span></td><td class="chevron">›</td></tr>`).join('');
+  $('rows').innerHTML = results.map((a, i) => `<tr data-index="${i}" tabindex="0" aria-label="Review ${escape(a.name)}"><td><strong>${escape(a.name)}</strong><span class="vendor">${escape(a.vendor || a.cpeVendor)}</span></td><td class="mono">${escape(a.version)}</td><td>${escape(a.lifecycle?.note || 'Unknown')}</td><td>${a.vulnerabilities.length ? `<strong class="finding">${a.vulnerabilities.length} ${a.vendorConfirmed ? 'vendor' : 'possible'} finding${a.vulnerabilities.length === 1 ? '' : 's'}</strong>` : '<span class="muted">None found</span>'}<span class="vendor">${escape(a.assessmentSource || 'NVD')}</span></td><td>${dashboardStatus(a)}</td><td class="chevron">›</td></tr>`).join('');
   for (const row of $('rows').querySelectorAll('[data-index]')) {
     const open = () => showDetails(results[Number(row.dataset.index)]);
     row.addEventListener('click', open);

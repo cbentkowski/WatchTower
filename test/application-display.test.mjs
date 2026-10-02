@@ -56,3 +56,16 @@ test('package finding response controls retain the finding UUID while displaying
   assert.match(element('detail-body').innerHTML, /GHSA-package-advisory/);
   assert.match(element('detail-body').innerHTML, /Update response/);
 });
+
+const statusCode = source.slice(source.indexOf('function dashboardStatus('), source.indexOf('function setTheme('));
+test('dashboard distinguishes checked no-findings from unknown without promoting partial evidence or findings', () => {
+  const context = vm.createContext({ labels: { unknown: 'Unknown', red: 'Needs action', yellow: 'Approaching EOL', green: 'Clear' }, escape: String });
+  vm.runInContext(statusCode, context);
+  const app = { status: 'unknown', vulnerabilities: [], packageAssessment: { state: 'incomplete', inventories: [{ assessedComponentCount: 5 }] } };
+  assert.match(context.dashboardStatus(app), /badge unknown.*No findings.*Partial coverage/);
+  assert.match(context.dashboardStatus({ ...app, packageAssessment: { state: 'incomplete', inventories: [{ assessedComponentCount: 0 }] } }), />Unknown</);
+  assert.match(context.dashboardStatus({ ...app, packageAssessment: { state: 'assessed', inventories: [{ assessedComponentCount: 5 }] } }), /No findings.*Assessment incomplete/);
+  assert.doesNotMatch(context.dashboardStatus({ ...app, vulnerabilities: [{ id: 'finding' }] }), /No findings/);
+  assert.match(context.dashboardStatus({ ...app, status: 'red' }), /Needs action/);
+  assert.match(context.dashboardStatus({ ...app, status: 'yellow' }), /Approaching EOL/);
+});

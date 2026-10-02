@@ -124,6 +124,13 @@ lookups are explicitly counted as unverified.
 For the WatchTower 0.10.0 release SBOM, reimport yields 5 eligible npm entries,
 92 skipped Debian entries, 1 skipped generic entry, and 3,179 non-package entries.
 With successful npm lookups, coverage reads **5 of 98 package entries checked**.
+The dashboard status badge reads **No findings**, with **Partial coverage** beneath
+it, when completed package checks return no findings and coverage is incomplete.
+It uses the neutral Unknown color. An inventory with no completed package checks
+keeps the Unknown label; findings and lifecycle action states keep their existing
+labels. Complete package coverage with another unresolved assessment requirement
+uses **No findings / Assessment incomplete**.
+
 Zero source errors means the lookups succeeded, while the 93 skipped packages
 still prevent a complete assessment and a green status.
 
