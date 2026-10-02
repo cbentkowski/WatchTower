@@ -758,10 +758,15 @@ function render(data) {
 }
 
 function showDetails(a) {
+  const opening = !$('details').open || detailAppId !== a.id;
+  const scroll = $('details').scrollTop;
+  const bodyScroll = $('detail-body').scrollTop;
   detailAppId = a.id;
   $('detail-name').textContent = a.name;
   $('detail-kicker').textContent = `${a.version} · ${labels[a.status].toUpperCase()}`;
   $('edit-app').hidden = !(isAdmin || permissions.applications.edit.includes(a.id));
+  $('refresh-app').hidden = !(isAdmin || permissions.applications.edit.includes(a.id) || (permissions.scan && permissions.applications.view.includes(a.id)));
+  if (opening) $('detail-refresh-message').hidden = true;
   const canEditFindings = isAdmin || permissions.applications.edit.includes(a.id);
   const findings = a.vulnerabilities.length ? a.vulnerabilities.map(v => { const workflow = v.workflow || { state: 'new', stateLabel: 'New' }; return `<article class="vuln finding-card" data-finding-id="${escape(v.id)}"><div class="vuln-top"><div><a href="${safeUrl(v.url)}" target="_blank" rel="noopener noreferrer">${escape(v.id)} ↗</a><span class="finding-state state-${escape(workflow.state)}">${escape(workflow.stateLabel)}</span></div><span class="badge ${v.knownExploited ? 'red' : 'yellow'}">${v.knownExploited ? 'Known exploited' : `${v.label} · ${v.score}`}</span></div><div class="finding-card-grid"><div class="finding-evidence"><p>${escape(v.description)}</p>${(v.advisories || []).map(url => `<a class="source" href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer">Vendor advisory ↗</a>`).join('')}</div><div class="finding-workflow-summary"><span>ASSIGNEE<strong>${escape(workflow.assignee || 'Unassigned')}</strong></span><span>DUE DATE<strong>${escape(workflow.dueDate || 'Not set')}</strong></span>${workflow.riskExpiration ? `<span>RISK EXPIRES<strong>${escape(workflow.riskExpiration)}</strong></span>` : ''}${workflow.ticketReference ? ticketReferenceMarkup(workflow.ticketReference) : ''}${workflow.notes ? `<p>${escape(workflow.notes)}</p>` : ''}${workflow.reopenedReason ? `<p class="form-error">Reopened: ${escape(workflow.reopenedReason)}</p>` : ''}${canEditFindings ? `<button type="button" class="finding-edit">Update response</button>` : ''}</div></div></article>`; }).join('') : `<p class="muted">No high or critical CVEs found for this version in ${escape(a.assessmentSource || 'the current source')}.</p>`;
   const upgrade = a.upgrades || {};
@@ -773,7 +778,45 @@ function showDetails(a) {
   const context = `<div class="detail-grid context-grid"><div><span>CRITICALITY</span><strong>${escape(a.criticality || 'unspecified')}</strong></div><div><span>ENVIRONMENT</span><strong>${escape(a.environment || 'unspecified')}</strong></div><div><span>EXPOSURE</span><strong>${escape(a.exposure || 'unknown')}</strong></div><div><span>TAGS</span><strong>${escape((a.tags || []).join(', ') || 'None')}</strong></div></div><h3>Ownership</h3><div class="owner-contacts">${ownership}</div>`;
   const feedEvidence = (a.feedEvents || []).length ? `<h3>Feed evidence</h3>${a.feedEvents.map(event => `<div class="feed-evidence"><a href="${safeUrl(event.url)}" target="_blank" rel="noopener noreferrer">${escape(event.title)} ↗</a><span class="vendor">${escape(event.type)} · ${escape(event.confidence)} confidence${event.severity && event.severity !== 'UNKNOWN' ? ` · ${escape(event.severity)}` : ''}</span></div>`).join('')}` : '';
   $('detail-body').innerHTML = `${sharedWarning}<div class="application-overview"><section><h3>Version and lifecycle</h3><div class="detail-grid"><div><span>INSTALLED VERSION</span><strong>${escape(a.version)}</strong></div><div><span>LATEST AVAILABLE</span><strong>${escape(upgrade.latest || 'Unavailable')}</strong>${releaseLink}</div><div><span>LATEST ON INSTALLED LINE</span><strong>${escape(upgrade.currentLine || 'Unavailable')}</strong></div><div><span>LATEST LTS VERSION</span><strong>${escape(upgrade.latestLts || 'No designated LTS')}</strong></div><div><span>SUPPORT</span><strong>${escape(a.lifecycle?.note || 'Unknown')}</strong></div></div></section><section><h3>Application context</h3>${context}</section></div><section class="assessment-section"><h3>Assessment</h3><ul class="reasons">${a.reasons.map(r => `<li>${escape(r)}</li>`).join('')}</ul></section><section class="findings-section"><h3>Vulnerability findings</h3>${findings}</section>${feedEvidence}<h3>Sources</h3><div class="sources">${a.sources.map(s => `<a href="${safeUrl(s.url)}" target="_blank" rel="noopener noreferrer">${escape(s.name)} ↗</a>`).join('') || '<span class="muted">No source links available</span>'}</div><p class="detail-note">CPE: <code>${escape(a.cpe)}</code>. Confirm product identity and affected version ranges in the linked advisories before remediation decisions.</p>`;
-  $('details').showModal();
+  if (!$('details').open) $('details').showModal();
+  $('details').scrollTop = opening ? 0 : scroll;
+  $('detail-body').scrollTop = opening ? 0 : bodyScroll;
+  if (opening) requestAnimationFrame(() => {
+    if ($('details').open && detailAppId === a.id) {
+      $('details').scrollTop = 0;
+      $('detail-body').scrollTop = 0;
+    }
+  });
+}
+
+let refreshingApplication = false;
+async function refreshDisplayedApplication() {
+  if (refreshingApplication || !detailAppId) return;
+  const applicationId = detailAppId;
+  const button = $('refresh-app');
+  const message = $('detail-refresh-message');
+  refreshingApplication = true;
+  button.disabled = true;
+  button.textContent = 'Refreshing…';
+  message.hidden = false;
+  message.textContent = 'Refreshing this application and its associated feeds…';
+  try {
+    const response = await fetch(`/api/applications/${encodeURIComponent(applicationId)}/refresh`, { method: 'POST' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Application refresh failed');
+    render(data);
+    if (detailAppId === applicationId && $('details').open) {
+      const application = allResults.find(item => item.id === applicationId);
+      if (application) showDetails(application);
+      message.textContent = 'Application refresh complete. Review source warnings in Assessment.';
+    }
+  } catch (error) {
+    if (detailAppId === applicationId && $('details').open) message.textContent = `Refresh failed: ${error.message}`;
+  } finally {
+    refreshingApplication = false;
+    button.disabled = false;
+    button.textContent = '↻ Refresh application';
+  }
 }
 
 async function openFindingEditor(findingId) {
@@ -1305,6 +1348,7 @@ $('add-app').addEventListener('click', () => openEditor('app'));
 $('manage-workspaces').addEventListener('click', () => openEditor('workspace'));
 $('edit-workspace').addEventListener('click', () => { const group = activeWorkspace(); if (group && group.id !== 'all') openEditor('workspace', group.id); });
 $('edit-app').addEventListener('click', () => { const id = detailAppId; $('details').close(); if (id) openEditor('app', id); });
+$('refresh-app').addEventListener('click', refreshDisplayedApplication);
 $('editor-form').addEventListener('submit', saveEditor);
 $('editor-delete').addEventListener('click', openDeleteConfirmation);
 $('delete-confirmation-form').addEventListener('submit', deleteEditorResource);

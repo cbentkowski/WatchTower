@@ -71,6 +71,13 @@ test('Permission Preview enforces selected access, blocks mutations, and preserv
     const mutation = await fetch(`${origin}/api/settings`, { method: 'POST', headers: { cookie, 'Content-Type': 'application/json' }, body: '{}' });
     assert.equal(mutation.status, 403);
     assert.match((await mutation.json()).error, /read-only/);
+    assert.equal((await fetch(`${origin}/api/applications/${appA}/inventory`, { headers: { cookie } })).status, 200);
+    assert.equal((await fetch(`${origin}/api/applications/${appB}/inventory`, { headers: { cookie } })).status, 403);
+    for (const suffix of ['sboms', 'refresh']) {
+      const response = await fetch(`${origin}/api/applications/${appA}/${suffix}`, { method: 'POST', headers: { cookie, 'Content-Type': 'application/json' }, body: '{}' });
+      assert.equal(response.status, 403);
+      assert.match((await response.json()).error, /read-only/);
+    }
 
     const exited = await fetch(`${origin}/api/rbac/preview`, { method: 'DELETE', headers: { cookie } });
     assert.equal(exited.status, 200);

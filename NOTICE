@@ -3,3 +3,10 @@ Copyright 2026 Christopher Bentkowski
 
 Licensed under the Apache License, Version 2.0. See LICENSE for the full
 license terms.
+
+Bundled SBOM schemas in src/schemas are from the SPDX Specification 2.3
+(SPDX Workgroup, Creative Commons Attribution 3.0 Unported) and CycloneDX
+Specification 1.6 (OWASP Foundation, Apache License 2.0). Upstream source
+links are recorded in docs/SBOM_IMPORTS.md; their license texts are retained
+in src/schemas/LICENSE-SPDX and src/schemas/LICENSE-CycloneDX. Schema files
+are distributed without changes.

@@ -39,6 +39,8 @@
     "test": "node --test"
   },
   "dependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "nodemailer": "^10.0.10",
     "openid-client": "6.8.8",
     "packageurl-js": "2.0.1"
