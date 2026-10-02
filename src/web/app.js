@@ -760,6 +760,7 @@ function render(data) {
 function showDetails(a) {
   const opening = !$('details').open || detailAppId !== a.id;
   const scroll = $('details').scrollTop;
+  const bodyScroll = $('detail-body').scrollTop;
   detailAppId = a.id;
   $('detail-name').textContent = a.name;
   $('detail-kicker').textContent = `${a.version} · ${labels[a.status].toUpperCase()}`;
@@ -779,6 +780,13 @@ function showDetails(a) {
   $('detail-body').innerHTML = `${sharedWarning}<div class="application-overview"><section><h3>Version and lifecycle</h3><div class="detail-grid"><div><span>INSTALLED VERSION</span><strong>${escape(a.version)}</strong></div><div><span>LATEST AVAILABLE</span><strong>${escape(upgrade.latest || 'Unavailable')}</strong>${releaseLink}</div><div><span>LATEST ON INSTALLED LINE</span><strong>${escape(upgrade.currentLine || 'Unavailable')}</strong></div><div><span>LATEST LTS VERSION</span><strong>${escape(upgrade.latestLts || 'No designated LTS')}</strong></div><div><span>SUPPORT</span><strong>${escape(a.lifecycle?.note || 'Unknown')}</strong></div></div></section><section><h3>Application context</h3>${context}</section></div><section class="assessment-section"><h3>Assessment</h3><ul class="reasons">${a.reasons.map(r => `<li>${escape(r)}</li>`).join('')}</ul></section><section class="findings-section"><h3>Vulnerability findings</h3>${findings}</section>${feedEvidence}<h3>Sources</h3><div class="sources">${a.sources.map(s => `<a href="${safeUrl(s.url)}" target="_blank" rel="noopener noreferrer">${escape(s.name)} ↗</a>`).join('') || '<span class="muted">No source links available</span>'}</div><p class="detail-note">CPE: <code>${escape(a.cpe)}</code>. Confirm product identity and affected version ranges in the linked advisories before remediation decisions.</p>`;
   if (!$('details').open) $('details').showModal();
   $('details').scrollTop = opening ? 0 : scroll;
+  $('detail-body').scrollTop = opening ? 0 : bodyScroll;
+  if (opening) requestAnimationFrame(() => {
+    if ($('details').open && detailAppId === a.id) {
+      $('details').scrollTop = 0;
+      $('detail-body').scrollTop = 0;
+    }
+  });
 }
 
 let refreshingApplication = false;
