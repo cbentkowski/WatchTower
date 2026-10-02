@@ -40,6 +40,7 @@
   },
   "dependencies": {
     "nodemailer": "^10.0.10",
-    "openid-client": "6.8.8"
+    "openid-client": "6.8.8",
+    "packageurl-js": "2.0.1"
   }
 }
