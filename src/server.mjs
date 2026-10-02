@@ -19,6 +19,7 @@ import { loadTlsConfiguration } from './tls.mjs';
 import { cpeSearchMatch, effectiveCpe, legacyCpe, mappingFromApp, mappingWarnings, parseCpe23, productCpe } from './cpe.mjs';
 import { matchLifecycleRelease, normalizeLifecycleProduct, searchLifecycleProducts } from './lifecycle.mjs';
 import { appendFindingEvents, readFindingEvents, readFindingStore, reconcileFindingWorkflows, updateFindingWorkflow, writeFindingStore } from './findings.mjs';
+import { ensureNotificationPolicies, notificationPolicyOptions, previewNotificationPolicy, readNotificationPolicies, validateNotificationPolicies, validateNotificationPolicy, writeNotificationPolicies } from './notification-policy-store.mjs';
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.dirname(sourceDirectory);
@@ -58,8 +59,10 @@ const snapshotFile = path.join(dataDirectory, 'status.json');
 const feedCacheFile = path.join(dataDirectory, 'feeds.json');
 const smtpFile = path.join(configDirectory, 'smtp.yaml');
 const generalFile = path.join(configDirectory, 'general.yaml');
+const notificationPolicyFile = path.join(configDirectory, 'notification-policies.json');
 const findingStoreFile = path.join(dataDirectory, 'finding-workflows.json');
 const findingHistoryFile = path.join(dataDirectory, 'finding-history.jsonl');
+await ensureNotificationPolicies(notificationPolicyFile);
 
 async function recordAuthenticationEvent(action, actor, context = {}) {
   const { claims = {}, protectedAdminClaim = '', ...event } = context;
@@ -71,7 +74,7 @@ async function recordAuthenticationEvent(action, actor, context = {}) {
     ...describeIdentityClaims(config, claims, { administratorRole, protectedAdminClaim }),
   });
 }
-const notifier = createNotifier({ dataDirectory, settingsLoader: async () => ({ ...await readSmtpSettings(smtpFile), baseUrl: generalUrl(await readGeneralSettings(generalFile)) }) });
+const notifier = createNotifier({ dataDirectory, settingsLoader: async () => ({ ...await readSmtpSettings(smtpFile), baseUrl: generalUrl(await readGeneralSettings(generalFile)) }), policyLoader: () => readNotificationPolicies(notificationPolicyFile), deliveryLogger: entry => logger.notification(entry) });
 for (const [from, to] of resourceMigration.applications) await notifier.renameIdentifiers({ appFrom: from, appTo: to });
 for (const [from, to] of resourceMigration.workspaces) await notifier.renameIdentifiers({ workspaceFrom: from, workspaceTo: to });
 function detectedGeneral(req) {
@@ -263,6 +266,51 @@ function changedFields(before, after, fields) {
 }
 function describeFields(changes) {
   return Object.entries(changes).map(([field, value]) => `${field}: ${JSON.stringify(value.from)} → ${JSON.stringify(value.to)}`).join('; ') || 'No values changed';
+}
+const policyAuditLabels = Object.freeze({
+  name: 'Name', enabled: 'Enabled', severities: 'Severities', knownExploited: 'Known exploitation', criticalities: 'Application criticalities', environments: 'Environments', exposures: 'Exposures', findingStates: 'Finding states', workspaceIds: 'Workspaces', ownerIds: 'Owners', minimumAgeDays: 'Minimum finding age', maximumAgeDays: 'Maximum finding age', cadence: 'Cadence', sendHour: 'Delivery hour', weeklyDay: 'Weekly delivery day', windowStartHour: 'Allowed window start', windowEndHour: 'Allowed window end', reminderDays: 'Reminder interval', workspaceRecipients: 'Include workspace owners', recipientOwnerIds: 'Additional delivery owners', includeEscalationContacts: 'Include escalation contacts', escalationAfterDays: 'Escalation age',
+});
+const policyAuditDays = Object.freeze(['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']);
+function policyAuditView(policy, { workspaces = [], owners = [] } = {}) {
+  const conditions = policy.conditions || {};
+  const delivery = policy.delivery || {};
+  const workspaceNames = new Map(workspaces.map(item => [item.id, item.name]));
+  const ownerNames = new Map(owners.map(item => [item.id, `${item.name}${item.email ? ` <${item.email}>` : ''}`]));
+  const title = value => String(value).split('-').map(part => part ? part[0].toUpperCase() + part.slice(1) : part).join(' ');
+  const list = (values, names) => (values || []).map(value => names?.get(value) || title(value)).join(', ') || 'Any';
+  const hour = value => value === null || value === undefined ? 'Global' : `${String(value).padStart(2, '0')}:00`;
+  return {
+    name: policy.name,
+    enabled: policy.enabled === false ? 'No' : 'Yes',
+    severities: list(conditions.severities),
+    knownExploited: conditions.knownExploited === undefined ? 'Any' : conditions.knownExploited ? 'Yes' : 'No',
+    criticalities: list(conditions.criticalities),
+    environments: list(conditions.environments),
+    exposures: list(conditions.exposures),
+    findingStates: list(conditions.findingStates),
+    workspaceIds: list(conditions.workspaceIds, workspaceNames),
+    ownerIds: list(conditions.ownerIds, ownerNames),
+    minimumAgeDays: conditions.minimumAgeDays === undefined ? 'Any' : `${conditions.minimumAgeDays} days`,
+    maximumAgeDays: conditions.maximumAgeDays === undefined ? 'Any' : `${conditions.maximumAgeDays} days`,
+    cadence: title(delivery.cadence || 'adaptive'),
+    sendHour: hour(delivery.sendHour),
+    weeklyDay: policyAuditDays[delivery.weeklyDay ?? 1],
+    windowStartHour: hour(delivery.windowStartHour ?? 0),
+    windowEndHour: hour(delivery.windowEndHour ?? 23),
+    reminderDays: `${delivery.reminderDays ?? 7} days`,
+    workspaceRecipients: delivery.workspaceRecipients === false ? 'No' : 'Yes',
+    recipientOwnerIds: list(delivery.recipientOwnerIds, ownerNames).replace(/^Any$/, 'None'),
+    includeEscalationContacts: delivery.includeEscalationContacts === true ? 'Yes' : 'No',
+    escalationAfterDays: delivery.escalationAfterDays == null ? 'Not configured' : `${delivery.escalationAfterDays} days`,
+  };
+}
+function policyAuditChanges(before, after, resources) {
+  const previous = policyAuditView(before, resources);
+  const current = policyAuditView(after, resources);
+  return changedFields(previous, current, Object.keys(policyAuditLabels));
+}
+function describePolicyAuditChanges(changes) {
+  return Object.entries(changes).map(([field, value]) => `${policyAuditLabels[field]}: ${value.from || 'empty'} → ${value.to || 'empty'}`).join('; ');
 }
 async function saveAtomic(file, content) {
   const temporary = `${file}.tmp`;
@@ -757,7 +805,7 @@ const requestHandler = async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify({ enabled: Boolean(auth), user: req.authUser?.name || 'Local development session', isAdmin: access.isAdmin, canManageAccess: access.accessManage, claims: real.access.isAdmin ? req.authUser?.claims : undefined, groupOverage: Boolean(req.authUser?.groupOverage), preview: req.permissionPreview ? { name: req.permissionPreview.name, mappingIds: req.permissionPreview.mappingIds, expires: new Date(req.permissionPreview.expires).toISOString() } : null })); return;
     }
-    if ((url.pathname.startsWith('/api/settings') || url.pathname === '/api/logs') && !(await authorization(req)).access.isAdmin) { forbidden(res, 'Administrator role required'); return; }
+    if ((url.pathname.startsWith('/api/settings') || url.pathname.startsWith('/api/notification-policies') || url.pathname === '/api/logs') && !(await authorization(req)).access.isAdmin) { forbidden(res, 'Administrator role required'); return; }
     if (url.pathname === '/api/rbac/preview' && req.method === 'DELETE') {
       const preview = req.permissionPreview;
       if (req.permissionPreviewToken) permissionPreviews.delete(req.permissionPreviewToken);
@@ -801,9 +849,56 @@ const requestHandler = async (req, res) => {
     if (url.pathname === '/api/settings/test-email' && req.method === 'POST') {
       const body = await readBody(req);
       const smtp = validateSmtpSettings({ ...(body.smtp || {}), enabled: true });
-      const result = await sendTestEmail(smtp, body.recipient);
+      let result;
+      try {
+        result = await sendTestEmail(smtp, body.recipient);
+        await logger.notification({ outcome: 'accepted', message: 'Test email accepted', deliveryType: 'test', workspace: '', applications: [], policies: [], reasons: ['SMTP configuration test'], recipients: [{ name: 'Test recipient', email: String(body.recipient), route: 'test' }], accepted: result.accepted, rejected: [], messageId: result.messageId });
+      } catch (error) {
+        await logger.notification({ outcome: 'failed', message: 'Test email failed', deliveryType: 'test', workspace: '', applications: [], policies: [], reasons: ['SMTP configuration test'], recipients: [{ name: 'Test recipient', email: String(body.recipient || ''), route: 'test' }], accepted: [], rejected: [], error: String(error.message || 'Delivery failed').slice(0, 500) });
+        throw error;
+      }
       await logger.audit('Test email sent', auditActor(req), { type: 'settings', id: 'email-delivery' }, { transportSecurity: smtp.secure ? 'tls' : smtp.requireTls ? 'starttls' : 'none', unauthenticated: smtp.unauthenticated }, 'SMTP test completed successfully; settings were not saved');
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ sent: true, accepted: result.accepted })); return;
+    }
+    if (url.pathname === '/api/notification-policies' && req.method === 'GET') {
+      const { apps, workspaces, owners } = await authorizationResources();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ policies: await readNotificationPolicies(notificationPolicyFile), options: notificationPolicyOptions, workspaces: workspaces.map(({ id, name }) => ({ id, name })), owners: owners.map(({ id, name, email }) => ({ id, name, email })), applications: apps.map(({ id, name }) => ({ id, name })) })); return;
+    }
+    if (url.pathname === '/api/notification-policies/preview' && req.method === 'POST') {
+      const body = await readBody(req);
+      const { workspaces, owners } = await authorizationResources();
+      const policy = validateNotificationPolicy(body.policy, { workspaces, owners });
+      const preview = previewNotificationPolicy(policy, snapshot);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ policy, ...preview })); return;
+    }
+    if (url.pathname === '/api/notification-policies' && req.method === 'PUT') {
+      const body = await readBody(req);
+      const { workspaces, owners } = await authorizationResources();
+      const previous = await readNotificationPolicies(notificationPolicyFile);
+      const policies = validateNotificationPolicies(body.policies, { workspaces, owners });
+      await writeNotificationPolicies(notificationPolicyFile, policies);
+      const actor = auditActor(req);
+      const resources = { workspaces, owners };
+      const previousById = new Map(previous.map(policy => [policy.id, policy]));
+      const currentById = new Map(policies.map(policy => [policy.id, policy]));
+      for (const policy of policies) {
+        const oldPolicy = previousById.get(policy.id);
+        if (!oldPolicy) {
+          const configured = policyAuditView(policy, resources);
+          await logger.audit('Notification policy added', actor, { type: 'notification-policy', id: policy.id, name: policy.name }, configured, `${policy.name}; ${Object.entries(configured).filter(([field]) => field !== 'name').map(([field, value]) => `${policyAuditLabels[field]}: ${value}`).join('; ')}`);
+          continue;
+        }
+        const changes = policyAuditChanges(oldPolicy, policy, resources);
+        if (Object.keys(changes).length) await logger.audit('Notification policy updated', actor, { type: 'notification-policy', id: policy.id, name: policy.name }, changes, `${policy.name}; ${describePolicyAuditChanges(changes)}`);
+      }
+      for (const policy of previous) {
+        if (currentById.has(policy.id)) continue;
+        const configured = policyAuditView(policy, resources);
+        await logger.audit('Notification policy removed', actor, { type: 'notification-policy', id: policy.id, name: policy.name }, configured, `${policy.name}; removed policy configuration: ${Object.entries(configured).filter(([field]) => field !== 'name').map(([field, value]) => `${policyAuditLabels[field]}: ${value}`).join('; ')}`);
+      }
+      if (snapshot) notifier.onScan(snapshot).catch(error => logger.log('error', 'Notification check after policy update failed', error.message));
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ policies })); return;
     }
     if (url.pathname === '/api/config' && req.method === 'GET') {
       const { apps, workspaces, feeds, owners, access } = await authorization(req);

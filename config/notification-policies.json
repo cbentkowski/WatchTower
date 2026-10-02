@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "policies": [
+    {
+      "id": "default-high-severity",
+      "name": "High and Critical findings",
+      "enabled": true,
+      "conditions": {
+        "severities": [
+          "critical",
+          "high"
+        ]
+      },
+      "delivery": {
+        "cadence": "adaptive",
+        "sendHour": null,
+        "weeklyDay": 1,
+        "windowStartHour": 0,
+        "windowEndHour": 23,
+        "reminderDays": 7,
+        "workspaceRecipients": true,
+        "recipientOwnerIds": [],
+        "includeEscalationContacts": false,
+        "escalationAfterDays": null
+      }
+    },
+    {
+      "id": "default-known-exploited",
+      "name": "Known-exploited findings",
+      "enabled": true,
+      "conditions": {
+        "knownExploited": true
+      },
+      "delivery": {
+        "cadence": "adaptive",
+        "sendHour": null,
+        "weeklyDay": 1,
+        "windowStartHour": 0,
+        "windowEndHour": 23,
+        "reminderDays": 7,
+        "workspaceRecipients": true,
+        "recipientOwnerIds": [],
+        "includeEscalationContacts": false,
+        "escalationAfterDays": null
+      }
+    }
+  ]
+}
