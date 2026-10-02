@@ -463,7 +463,11 @@ function policyDraft() {
 
 function ensurePolicyDeliveryFields() {
   if ($('policy-delivery-fields')) return;
+  const conditionGrid = $('notification-policy-form').querySelector('.policy-condition-grid');
+  conditionGrid.insertAdjacentHTML('beforebegin', '<div class="policy-section-head"><h3>Match conditions</h3><p>Choose the finding and application context this policy should match.</p></div>');
   $('notification-policy-preview').closest('.policy-preview-section').insertAdjacentHTML('beforebegin', `<section id="policy-delivery-fields" class="policy-delivery-section"><h3>Delivery and routing</h3><div class="policy-condition-grid"><label>Cadence<small>Adaptive preserves the existing urgent-immediate and daily behavior.</small><select name="deliveryCadence"><option value="adaptive">Adaptive</option><option value="immediate">Immediate</option><option value="daily">Daily digest</option><option value="weekly">Weekly digest</option></select></label><label>Delivery hour<small>Blank uses the global email delivery hour.</small><input name="deliveryHour" type="number" min="0" max="23" placeholder="Global"></label><label>Weekly delivery day<select name="weeklyDay"><option value="0">Sunday</option><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option></select></label><label>Reminder interval in days<input name="reminderDays" type="number" min="1" max="365" value="7" required></label><label>Allowed window starts<input name="windowStartHour" type="number" min="0" max="23" value="0" required></label><label>Allowed window ends<input name="windowEndHour" type="number" min="0" max="23" value="23" required></label><label class="setting-enabled"><input name="workspaceRecipients" type="checkbox" checked> Include workspace owners</label><label>Additional delivery owners<small>No selection adds no policy-specific owners.</small><select name="recipientOwnerIds" multiple size="6"></select></label><label class="setting-enabled"><input name="includeEscalationContacts" type="checkbox"> Add escalation contacts after</label><label>Escalation age in days<small>Required when escalation contacts are enabled.</small><input name="escalationAfterDays" type="number" min="1" max="365" placeholder="Days"></label></div></section>`);
+  const help = { weeklyDay: 'Used for weekly digests.', reminderDays: 'Days between unresolved reminders.', windowStartHour: 'First allowed local delivery hour.', windowEndHour: 'Last allowed local delivery hour.' };
+  for (const [name, text] of Object.entries(help)) $('notification-policy-form').elements[name].insertAdjacentHTML('beforebegin', `<small>${text}</small>`);
 }
 
 function updatePolicyClearButtons() {
@@ -511,7 +515,10 @@ function openNotificationPolicyEditor(id = null) {
   $('notification-policy-save').disabled = true;
   $('notification-policy-error').hidden = true;
   $('notification-policy-preview').innerHTML = '<p class="muted">Preview the draft against the latest assessment before saving.</p>';
-  $('notification-policy-editor').showModal();
+  const dialog = $('notification-policy-editor');
+  form.scrollTop = 0;
+  dialog.showModal();
+  requestAnimationFrame(() => { form.scrollTop = 0; dialog.scrollTop = 0; form.elements.name.focus({ preventScroll: true }); });
 }
 
 async function previewNotificationPolicyDraft() {
