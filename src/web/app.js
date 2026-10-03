@@ -1560,8 +1560,10 @@ function setSbomMessage(message, failed = false) {
   if (failed) element.scrollIntoView({ block: 'nearest' });
 }
 async function readInventory() {
-  const response = await fetch('/api/applications/' + encodeURIComponent(inventoryApplicationId) + '/inventory', { cache: 'no-store' });
+  const applicationId = inventoryApplicationId;
+  const response = await fetch('/api/applications/' + encodeURIComponent(applicationId) + '/inventory', { cache: 'no-store' });
   const inventory = await response.json();
+  if (applicationId !== inventoryApplicationId) return;
   if (!response.ok) throw new Error(inventory.error || 'Could not load inventory');
   const previousScope = $('sbom-scope').value;
   $('sbom-scope').innerHTML = '<option value="">Application</option>' + inventory.images.filter(image => image.enabled && !image.retired).map(image => '<option value="' + escape(image.id) + '">' + escape(image.label || image.reference) + '</option>').join('');
@@ -1579,7 +1581,7 @@ async function openInventory(applicationId = detailAppId) {
   $('image-retire-form').hidden = true;
   $('image-message').textContent = '';
   $('inventory-images').textContent = 'Loading images…';
-  $('image-add').hidden = !canManageInventory();
+  $('image-add').hidden = true;
   $('sbom-form').hidden = Boolean(activePreview) || !(isAdmin || permissions.applications.edit.includes(inventoryApplicationId));
   $('sbom-form').reset();
   setSbomMessage('');
@@ -1588,8 +1590,8 @@ async function openInventory(applicationId = detailAppId) {
   $('inventory-dialog').showModal();
   $('inventory-dialog').scrollTop = 0;
   try { await readInventory(); }
-  catch (error) { $('inventory-summary').textContent = error.message; $('sbom-form').hidden = true; $('image-add').hidden = true; }
-  finally { $('sbom-submit').disabled = false; }
+  catch (error) { if (inventoryApplicationId === applicationId) { $('inventory-summary').textContent = error.message; $('sbom-form').hidden = true; $('image-add').hidden = true; } }
+  finally { if (inventoryApplicationId === applicationId) $('sbom-submit').disabled = false; }
 }
 $('inventory-close').addEventListener('click', () => $('inventory-dialog').close());
 $('inventory-dialog').addEventListener('cancel', event => { if ($('sbom-submit').disabled || inventoryBusy) event.preventDefault(); });

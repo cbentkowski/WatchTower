@@ -6,6 +6,16 @@ const source = await readFile(new URL('../src/web/app.js', import.meta.url), 'ut
 const escapeCode = source.slice(source.indexOf('const escape ='), source.indexOf('const safeUrl ='));
 const image = { id: 'image-one', reference: 'docker.io/test/app:1', label: '<SCRIPT>', enabled: true, retired: false };
 const revision = { id: 'revision', scope: { imageId: image.id }, active: true, imageReferenceAtImport: image.reference, format: 'CycloneDX', specificationVersion: '1.7', generator: ['<IMG>'], generatedAt: '', importedAt: '2026-10-02', checksum: 'hash', componentCount: 2, assessmentState: 'assessed', assessment: { assessedComponentCount: 2, unsupportedComponentCount: 0, lastSuccessfulLookup: '2026-10-02' } };
+test('late inventory responses cannot overwrite a different application dialog', async () => {
+  let finish;
+  const data = new Promise(resolve => { finish = resolve; });
+  const context = vm.createContext({ inventoryApplicationId: 'first', encodeURIComponent, fetch: async () => ({ ok: true, json: () => data }), renderInventory: () => assert.fail('A stale response must not repaint the new application') });
+  vm.runInContext(source.slice(source.indexOf('async function readInventory()'), source.indexOf('async function openInventory(')), context);
+  const pending = context.readInventory();
+  context.inventoryApplicationId = 'second';
+  finish({ images: [], revisions: [] });
+  await pending;
+});
 function setup({ admin = true, preview = null, fetch = async () => ({ ok: true, json: async () => ({ images: [image], revisions: [revision] }) }) } = {}) {
   const elements = new Map();
   const element = id => { if (!elements.has(id)) elements.set(id, { value: '', checked: false, hidden: false, disabled: false, textContent: '', innerHTML: '', listeners: {}, addEventListener(type, handler) { this.listeners[type] = handler; }, focus() {}, querySelectorAll() { return []; }, classList: { toggle() {} }, setAttribute() {} }); return elements.get(id); };
