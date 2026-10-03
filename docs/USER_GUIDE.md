@@ -73,6 +73,16 @@ Application Editors can select **Update response** on a finding to record its st
 
 ![Finding response dialog with disposition and tracking fields](images/0.10.0/finding-response-dark.jpg)
 
+### CISA Known Exploited Vulnerabilities
+
+Each finding shows its CISA KEV assessment, last successful check, and catalog link. Confirmed entries include **Date added**, **Required action**, and **CISA remediation due date** when published. CISA dates are separate from your finding response's **Due date**. Missing catalog fields show **Not published** and do not remove the Known exploited badge.
+
+Package findings match every CVE alias associated with the advisory; more than one matching CVE can appear. The KEV catalog does not establish whether a package/version is affected: the product or package assessment still supplies applicability evidence.
+
+Full and single-application refreshes check KEV. If the feed fails, the last successful catalog is retained across restarts and labeled stale; a failed check cannot establish that a vulnerability left the catalog. With no retained catalog, the latest check is unavailable. Successful changes in KEV membership are recorded in finding history, and existing response behavior reopens completed findings when exploitation evidence changes. The original last-success time remains visible during failures.
+
+The normalized catalog is stored in `state/kev-cache.json` inside persistent storage (or the configured `DATA_DIR`). Include it in backups. Fields follow the [official CISA KEV schema](https://github.com/cisagov/kev-data/blob/develop/known_exploited_vulnerabilities_schema.json).
+
 ## Applications
 
 ![Application editor with product mappings and risk context](images/0.10.0/application-editor-dark.jpg)

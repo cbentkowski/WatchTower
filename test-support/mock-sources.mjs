@@ -26,6 +26,10 @@ globalThis.fetch = async (input, options) => {
     return new Response(JSON.stringify({ id: 'GHSA-xxxx-yyyy-zzzz', modified: mode, aliases: ['CVE-2026-1234'], summary: 'Fixture package vulnerability', database_specific: { severity: 'CRITICAL' }, affected: [{ package: { ecosystem: 'npm', name: 'example' }, ranges: [{ type: 'SEMVER', events: [{ introduced: '0' }, { fixed: '2.0.0' }] }] }] }));
   }
   if (url.includes('known_exploited_vulnerabilities.json')) {
+    if (process.env.WATCHTOWER_TEST_KEV_FILE) {
+      const contents = readFileSync(process.env.WATCHTOWER_TEST_KEV_FILE, 'utf8');
+      return contents.trim() === 'offline' ? new Response('', { status: 503 }) : new Response(contents, { headers: { 'content-type': 'application/json' } });
+    }
     return new Response(JSON.stringify({ vulnerabilities: [] }), { headers: { 'content-type': 'application/json' } });
   }
   if (url.includes('services.nvd.nist.gov/rest/json/cves/2.0')) {

@@ -30,6 +30,7 @@ function displayContext(permissions) {
   const elements = new Map();
   const element = id => { if (!elements.has(id)) elements.set(id, { addEventListener() {}, hidden: false, scrollTop: 0, open: false, showModal() { this.open = true; this.scrollTop = 900; } }); return elements.get(id); };
   const context = vm.createContext({ $: element, requestAnimationFrame: callback => callback(), detailAppId: null, isAdmin: false, permissions, openInventory() {}, packageContext: () => '', packageCoverageMarkup: () => '', resolvedPackagesMarkup: () => '', labels: { green: 'Clear' }, escape: value => String(value), safeUrl: value => value, workspaces: [], owners: [], allResults: [application], encodeURIComponent, render(data) { context.allResults = data.results; } });
+  context.kevMarkup = () => '';
   vm.runInContext(detailCode, context);
   return { context, element };
 }

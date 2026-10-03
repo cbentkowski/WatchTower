@@ -1,0 +1,14 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "components": [
+    {
+      "type": "library",
+      "name": "log4j-core",
+      "version": "2.14.1",
+      "bom-ref": "log4j-core",
+      "purl": "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1"
+    }
+  ]
+}
