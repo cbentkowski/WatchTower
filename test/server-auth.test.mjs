@@ -96,7 +96,7 @@ test('native HTTPS serves the health endpoint from mounted certificate files', a
     assert.deepEqual(JSON.parse(health.body), { status: 'ok' });
     const settings = await httpsGet(`https://localhost:${port}/api/settings`, certificateAuthority);
     assert.equal(settings.status, 200);
-    assert.deepEqual(JSON.parse(settings.body).general, { protocol: 'http', host: 'public.example', port: 80 });
+    assert.deepEqual(JSON.parse(settings.body).general, { protocol: 'http', host: 'public.example', port: 80, sbomUploadLimitMiB: 35 });
   } finally { child.kill(); }
 });
 

@@ -30,7 +30,10 @@ Image retirement currently uses `PUT /api/applications/<uuid>/images`, with the
 existing Application Editor permission. Include the managed image ID and set
 `retired: true`, retaining the other entries. Retirement records its actor and
 time and cannot be reversed; refresh the application to reconcile findings.
-The image management interface follows in part 5. Viewers can read resolved
+The Package inventory dialog provides Add image, Edit image (including enable/disable),
+Import image SBOM, and Retire image controls. Retirement requires typing the exact
+OCI reference. The editor also links to Manage images and SBOMs. Changing an image
+reference invalidates its current SBOM assessment until a replacement is imported. Viewers can read resolved
 history for applications they can view; Permission Preview rejects mutations.
 
 ## Manual PR build checks

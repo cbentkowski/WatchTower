@@ -51,7 +51,7 @@ test('malformed schemas, formats, duplicate references, hostile properties and l
   const deep = cdx(); let current = deep;
   for (let index = 0; index < 40; index++) { current.nested = {}; current = current.nested; }
   assert.throws(() => normalizeSbom(JSON.stringify(deep)), /processing/);
-  const many = cdx(); many.components = Array.from({ length: 10001 }, (_, index) => ({ type: 'library', name: 'a', 'bom-ref': `ref-${index}` }));
+  const many = cdx(); many.components = Array.from({ length: sbomLimits.components + 1 }, (_, index) => ({ type: 'library', name: 'a', 'bom-ref': `ref-${index}` }));
   assert.throws(() => normalizeSbom(JSON.stringify(many)), /component count/);
 });
 
@@ -115,4 +115,14 @@ for (const version of ['2.2', '2.3']) test('SPDX ' + version + ' preserves its d
   assert.equal(result.components[0].componentType, 'library');
   delete document.creationInfo.created;
   assert.throws(() => normalizeSbom(JSON.stringify(document)), /Invalid SPDX/);
+});
+
+
+test('large nested CycloneDX inventories retain every component beyond the old 10000 cap', () => {
+  const document = cdx();
+  document.metadata = { component: { type: 'application', name: 'Large application', 'bom-ref': 'root' } };
+  document.components = [{ type: 'application', name: 'Module', 'bom-ref': 'module', components: Array.from({ length: 13300 }, (_, index) => ({ type: 'library', name: `package-${index}`, version: '1', 'bom-ref': `ref-${index}` })) }];
+  const inventory = normalizeSbom(JSON.stringify(document));
+  assert.equal(inventory.componentCount, 13302);
+  assert.equal(new Set(inventory.components.map(component => component.componentRef)).size, 13302);
 });

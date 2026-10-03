@@ -6,7 +6,8 @@ import { PackageURL } from 'packageurl-js';
 import { normalizeSpdx3, spdx3Version } from './spdx3.mjs';
 import { canonicalImageReference } from './inventory.mjs';
 
-export const sbomLimits = Object.freeze({ bytes: 5 * 1024 * 1024, components: 10000, depth: 32, nodes: 200000, text: 8192 });
+import { sbomLimits } from './sbom-limits.mjs';
+export { sbomLimits } from './sbom-limits.mjs';
 async function schemaValidator(primary, dependencies = []) {
   const ajv = new Ajv({ strict: false, allErrors: false, validateFormats: true });
   addFormats(ajv);
@@ -72,8 +73,8 @@ function normalizedComponent(component, format, index) {
     locations, location: locations.length === 1 ? locations[0] : '', packageFileName: text(component.packageFileName), identityState: issue ? 'incomplete' : 'awaiting-source-support' };
 }
 
-export function normalizeSbom(raw) {
-  if (typeof raw !== 'string' || Buffer.byteLength(raw) > sbomLimits.bytes) throw new Error('SBOM exceeds upload size limit');
+export function normalizeSbom(raw, { maxBytes = sbomLimits.bytes } = {}) {
+  if (typeof raw !== 'string' || Buffer.byteLength(raw) > maxBytes) throw new Error('SBOM exceeds upload size limit');
   let document;
   try { document = JSON.parse(raw); } catch { throw new Error('SBOM must be uncompressed JSON'); }
   boundDocument(document);
@@ -87,7 +88,7 @@ export function normalizeSbom(raw) {
   if (format === 'CycloneDX' && document.metadata?.component) pending.unshift(document.metadata.component);
   while (pending.length) {
     const component = pending.pop();
-    if (components.length >= sbomLimits.components) throw new Error('SBOM component count limit exceeded');
+    if (components.length >= sbomLimits.components) throw new Error(`SBOM component count limit exceeded (maximum ${sbomLimits.components.toLocaleString('en-US')} components)`);
     components.push(normalizedComponent(component, format, components.length));
     if (format === 'CycloneDX') pending.push(...(component.components || []));
   }

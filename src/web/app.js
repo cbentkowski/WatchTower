@@ -589,6 +589,7 @@ async function loadSettings() {
     form.querySelector('[name="protocol"]').value = general.protocol;
     form.querySelector('[name="publicHost"]').value = general.host;
     form.querySelector('[name="publicPort"]').value = general.port;
+    form.querySelector('[name="sbomUploadLimitMiB"]').value = data.general?.sbomUploadLimitMiB ?? 35;
     form.querySelector(`[name="transportSecurity"][value="${data.smtp.secure ? 'tls' : data.smtp.requireTls ? 'starttls' : 'none'}"]`).checked = true;
     updateCredentialFields();
     showEnvironmentStatus(data);
@@ -602,10 +603,11 @@ async function saveSettings(event) {
   const fields = new FormData(form);
   const payload = Object.fromEntries(fields);
   delete payload.testRecipient;
-  const general = { protocol: payload.protocol, host: payload.publicHost, port: Number(payload.publicPort) };
+  const general = { protocol: payload.protocol, host: payload.publicHost, port: Number(payload.publicPort), sbomUploadLimitMiB: Number(payload.sbomUploadLimitMiB) };
   delete payload.protocol;
   delete payload.publicHost;
   delete payload.publicPort;
+  delete payload.sbomUploadLimitMiB;
   delete payload.transportSecurity;
   const security = form.querySelector('[name="transportSecurity"]:checked')?.value;
   payload.secure = security === 'tls';
@@ -780,7 +782,9 @@ function showDetails(a) {
   $('refresh-app').hidden = !(isAdmin || permissions.applications.edit.includes(a.id) || (permissions.scan && permissions.applications.view.includes(a.id)));
   if (opening) $('detail-refresh-message').hidden = true;
   const canEditFindings = isAdmin || permissions.applications.edit.includes(a.id);
-  const findings = a.vulnerabilities.length ? a.vulnerabilities.map(v => { const workflow = v.workflow || { state: 'new', stateLabel: 'New' }; return `<article class="vuln finding-card" data-finding-id="${escape(v.id)}"><div class="vuln-top"><div><a href="${safeUrl(v.url)}" target="_blank" rel="noopener noreferrer">${escape(v.advisoryId || v.id)} ↗</a><span class="finding-state state-${escape(workflow.state)}">${escape(workflow.stateLabel)}</span></div><span class="badge ${v.knownExploited ? 'red' : 'yellow'}">${v.knownExploited ? 'Known exploited' : `${v.label} · ${v.score ?? "Not scored"}`}</span></div><div class="finding-card-grid"><div class="finding-evidence">${v.package ? packageContext(v) : ""}<p>${escape(v.description)}</p>${(v.advisories || []).map(url => `<a class="source" href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer">Vendor advisory ↗</a>`).join('')}</div><div class="finding-workflow-summary"><span>ASSIGNEE<strong>${escape(workflow.assignee || 'Unassigned')}</strong></span><span>DUE DATE<strong>${escape(workflow.dueDate || 'Not set')}</strong></span>${workflow.riskExpiration ? `<span>RISK EXPIRES<strong>${escape(workflow.riskExpiration)}</strong></span>` : ''}${workflow.ticketReference ? ticketReferenceMarkup(workflow.ticketReference) : ''}${workflow.notes ? `<p>${escape(workflow.notes)}</p>` : ''}${workflow.reopenedReason ? `<p class="form-error">Reopened: ${escape(workflow.reopenedReason)}</p>` : ''}${canEditFindings && !v.identity ? `<button type="button" class="finding-edit">Update response</button>` : ''}</div></div></article>`; }).join('') : `<p class="muted">No findings reported by ${escape(a.assessmentSource || 'the current source')}. Review assessment warnings for coverage and incomplete evidence.</p>`;
+  const findingScope = v => !v.package ? 'Product findings' : v.package.imageId || 'Application inventory';
+  let lastFindingScope = null;
+  const findings = a.vulnerabilities.length ? [...a.vulnerabilities].sort((left, right) => findingScope(left).localeCompare(findingScope(right))).map(v => { const scope = findingScope(v); const heading = scope !== lastFindingScope ? '<h4>' + escape(v.package?.imageId ? a.packageAssessment?.inventories?.find(item => item.imageId === v.package.imageId)?.scopeLabel || 'Image ' + v.package.imageId : scope) + '</h4>' : ''; lastFindingScope = scope; const workflow = v.workflow || { state: 'new', stateLabel: 'New' }; return heading + `<article class="vuln finding-card" data-finding-id="${escape(v.id)}"><div class="vuln-top"><div><a href="${safeUrl(v.url)}" target="_blank" rel="noopener noreferrer">${escape(v.advisoryId || v.id)} ↗</a><span class="finding-state state-${escape(workflow.state)}">${escape(workflow.stateLabel)}</span></div><span class="badge ${v.knownExploited ? 'red' : 'yellow'}">${v.knownExploited ? 'Known exploited' : `${v.label} · ${v.score ?? "Not scored"}`}</span></div><div class="finding-card-grid"><div class="finding-evidence">${v.package ? packageContext(v) : ""}<p>${escape(v.description)}</p>${(v.advisories || []).map(url => `<a class="source" href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer">Vendor advisory ↗</a>`).join('')}</div><div class="finding-workflow-summary"><span>ASSIGNEE<strong>${escape(workflow.assignee || 'Unassigned')}</strong></span><span>DUE DATE<strong>${escape(workflow.dueDate || 'Not set')}</strong></span>${workflow.riskExpiration ? `<span>RISK EXPIRES<strong>${escape(workflow.riskExpiration)}</strong></span>` : ''}${workflow.ticketReference ? ticketReferenceMarkup(workflow.ticketReference) : ''}${workflow.notes ? `<p>${escape(workflow.notes)}</p>` : ''}${workflow.reopenedReason ? `<p class="form-error">Reopened: ${escape(workflow.reopenedReason)}</p>` : ''}${canEditFindings && !v.identity ? `<button type="button" class="finding-edit">Update response</button>` : ''}</div></div></article>`; }).join('') : `<p class="muted">No findings reported by ${escape(a.assessmentSource || 'the current source')}. Review assessment warnings for coverage and incomplete evidence.</p>`;
   const upgrade = a.upgrades || {};
   const releaseLink = upgrade.sourceUrl ? `<a href="${safeUrl(upgrade.sourceUrl)}" target="_blank" rel="noopener noreferrer">Release source ↗</a>` : '';
   const containing = workspaces.filter(group => group.applications.includes(a.id));
@@ -790,7 +794,7 @@ function showDetails(a) {
   const context = `<div class="detail-grid context-grid"><div><span>CRITICALITY</span><strong>${escape(a.criticality || 'unspecified')}</strong></div><div><span>ENVIRONMENT</span><strong>${escape(a.environment || 'unspecified')}</strong></div><div><span>EXPOSURE</span><strong>${escape(a.exposure || 'unknown')}</strong></div><div><span>TAGS</span><strong>${escape((a.tags || []).join(', ') || 'None')}</strong></div></div><h3>Ownership</h3><div class="owner-contacts">${ownership}</div>`;
   const feedEvidence = (a.feedEvents || []).length ? `<h3>Feed evidence</h3>${a.feedEvents.map(event => `<div class="feed-evidence"><a href="${safeUrl(event.url)}" target="_blank" rel="noopener noreferrer">${escape(event.title)} ↗</a><span class="vendor">${escape(event.type)} · ${escape(event.confidence)} confidence${event.severity && event.severity !== 'UNKNOWN' ? ` · ${escape(event.severity)}` : ''}</span></div>`).join('')}` : '';
   $('detail-body').innerHTML = `${sharedWarning}<div class="application-overview"><section><h3>Version and lifecycle</h3><div class="detail-grid"><div><span>INSTALLED VERSION</span><strong>${escape(a.version)}</strong></div><div><span>LATEST AVAILABLE</span><strong>${escape(upgrade.latest || 'Unavailable')}</strong>${releaseLink}</div><div><span>LATEST ON INSTALLED LINE</span><strong>${escape(upgrade.currentLine || 'Unavailable')}</strong></div><div><span>LATEST LTS VERSION</span><strong>${escape(upgrade.latestLts || 'No designated LTS')}</strong></div><div><span>SUPPORT</span><strong>${escape(a.lifecycle?.note || 'Unknown')}</strong></div></div></section><section><h3>Application context</h3>${context}</section></div><section class="assessment-section"><h3>Assessment</h3><button id="open-inventory" type="button">Package inventory</button><ul class="reasons">${a.reasons.map(r => `<li>${escape(r)}</li>`).join('')}</ul>${packageCoverageMarkup(a.packageAssessment)}</section><section class="findings-section"><h3>Vulnerability findings</h3>${findings}</section>${resolvedPackagesMarkup(a.resolvedPackageFindings)}${feedEvidence}<h3>Sources</h3><div class="sources">${a.sources.map(s => `<a href="${safeUrl(s.url)}" target="_blank" rel="noopener noreferrer">${escape(s.name)} ↗</a>`).join('') || '<span class="muted">No source links available</span>'}</div><p class="detail-note">${a.cpe ? `CPE: <code>${escape(a.cpe)}</code>. ` : ""}Confirm product identity and affected version ranges in the linked advisories before remediation decisions.</p>`;
-  $('open-inventory').addEventListener('click', openInventory);
+  $('open-inventory').addEventListener('click', () => openInventory());
   for (const button of $('detail-body').querySelectorAll?.('[data-resolved-history]') || []) button.addEventListener('click', () => openResolvedHistory(button.dataset.resolvedHistory));
   if (!$('details').open) $('details').showModal();
   $('details').scrollTop = opening ? 0 : scroll;
@@ -960,7 +964,8 @@ async function openEditor(mode, targetId = null) {
         <label>Latest version override <input name="latestVersion" placeholder="Optional"></label>
         <label>Latest installed-line override <input name="latestBranchVersion" placeholder="Optional"></label>
         <label>Latest LTS override <input name="latestLtsVersion" placeholder="Optional"></label>
-      </div>${targetId ? `<p class="form-hint">Application ID: <code>${escape(targetId)}</code> (immutable)</p>` : ''}<p class="form-hint">Provide a lifecycle product or a manual end-of-life date. Product assessment requires a CPE. Package inventory assessment uses an imported SBOM; you can import it after saving.</p><div class="association-summaries">${associationRow('ownerIds', 'Owners', 'None selected')}${associationRow('workspaceIds', 'Workspaces', 'None selected')}${associationRow('feedIds', 'Feeds', 'None selected')}</div>`;
+      </div>${targetId ? `<button id="editor-inventory" class="secondary-action" type="button">Manage images and SBOMs</button><p class="form-hint">Image changes and SBOM imports save independently of this application form.</p><p class="form-hint">Application ID: <code>${escape(targetId)}</code> (immutable)</p>` : ''}<p class="form-hint">Provide a lifecycle product or a manual end-of-life date. Product assessment requires a CPE. Package inventory assessment uses an imported SBOM; you can import it after saving.</p><div class="association-summaries">${associationRow('ownerIds', 'Owners', 'None selected')}${associationRow('workspaceIds', 'Workspaces', 'None selected')}${associationRow('feedIds', 'Feeds', 'None selected')}</div>`;
+      if (targetId) $('editor-inventory').addEventListener('click', () => openInventory(targetId));
       $('change-cpe').addEventListener('click', openCpeDialog);
       $('change-lifecycle').addEventListener('click', openLifecycleDialog);
       cpeMapping = null;
@@ -1548,6 +1553,7 @@ function packageCoverageMarkup(assessment) {
 }
 
 let inventoryApplicationId = null;
+let sbomUploadLimitMiB = 35;
 function setSbomMessage(message, failed = false) {
   const element = $('sbom-message');
   element.textContent = failed ? `SBOM upload failed: ${message}` : message;
@@ -1557,31 +1563,53 @@ function setSbomMessage(message, failed = false) {
   if (failed) element.scrollIntoView({ block: 'nearest' });
 }
 async function readInventory() {
-  const response = await fetch('/api/applications/' + encodeURIComponent(inventoryApplicationId) + '/inventory', { cache: 'no-store' });
+  const applicationId = inventoryApplicationId;
+  const response = await fetch('/api/applications/' + encodeURIComponent(applicationId) + '/inventory', { cache: 'no-store' });
   const inventory = await response.json();
+  if (applicationId !== inventoryApplicationId) return;
   if (!response.ok) throw new Error(inventory.error || 'Could not load inventory');
+  sbomUploadLimitMiB = inventory.uploadLimitMiB ?? 35;
+  $('sbom-upload-limit').textContent = sbomUploadLimitMiB + ' MiB';
+  const previousScope = $('sbom-scope').value;
   $('sbom-scope').innerHTML = '<option value="">Application</option>' + inventory.images.filter(image => image.enabled && !image.retired).map(image => '<option value="' + escape(image.id) + '">' + escape(image.label || image.reference) + '</option>').join('');
-  $('inventory-summary').innerHTML = '<h3>Active inventories</h3>' + (inventory.revisions.filter(revision => revision.active).map(revision => '<p><strong>' + escape(revision.scope.imageId ? inventory.images.find(image => image.id === revision.scope.imageId)?.label || inventory.images.find(image => image.id === revision.scope.imageId)?.reference || 'Image' : 'Application') + '</strong> · Imported ' + escape(new Date(revision.importedAt).toLocaleString()) + ' · ' + escape((revision.assessmentState || 'Awaiting assessment').replaceAll('-', ' ')) + ' · ' + escape(revision.componentCount ?? 0) + ' component(s)</p>').join('') || '<p class="muted">No SBOM imported. Inventory assessment remains incomplete.</p>') + packageCoverageMarkup({ inventories: inventory.revisions.filter(revision => revision.active && revision.assessment).map(revision => ({ componentCount: revision.componentCount, ...revision.assessment })) });
+  if (inventory.images.some(image => image.id === previousScope && image.enabled && !image.retired)) $('sbom-scope').value = previousScope;
+  else if (previousScope) $('sbom-file').value = '';
+  inventoryData = inventory;
+  renderInventory();
+
 }
-async function openInventory() {
-  inventoryApplicationId = detailAppId;
+async function openInventory(applicationId = detailAppId) {
+  inventoryApplicationId = applicationId;
+  inventoryData = { images: [], revisions: [] };
+  inventoryBusy = false;
+  $('image-form').hidden = true;
+  $('image-retire-form').hidden = true;
+  $('image-message').textContent = '';
+  $('inventory-images').textContent = 'Loading images…';
+  $('image-add').hidden = true;
   $('sbom-form').hidden = Boolean(activePreview) || !(isAdmin || permissions.applications.edit.includes(inventoryApplicationId));
   $('sbom-form').reset();
   setSbomMessage('');
   $('inventory-summary').textContent = 'Loading inventory…';
   $('sbom-submit').disabled = true;
   $('inventory-dialog').showModal();
+  $('inventory-dialog').scrollTop = 0;
   try { await readInventory(); }
-  catch (error) { $('inventory-summary').textContent = error.message; $('sbom-form').hidden = true; }
-  finally { $('sbom-submit').disabled = false; }
+  catch (error) { if (inventoryApplicationId === applicationId) { $('inventory-summary').textContent = error.message; $('sbom-form').hidden = true; $('image-add').hidden = true; } }
+  finally { if (inventoryApplicationId === applicationId) $('sbom-submit').disabled = false; }
 }
 $('inventory-close').addEventListener('click', () => $('inventory-dialog').close());
-$('inventory-dialog').addEventListener('cancel', event => { if ($('sbom-submit').disabled) event.preventDefault(); });
+$('inventory-dialog').addEventListener('cancel', event => { if ($('sbom-submit').disabled || inventoryBusy) event.preventDefault(); });
 async function importSbom(event) {
   event.preventDefault();
+  if (inventoryBusy) return;
   const file = $('sbom-file').files[0];
   if (!file) return;
-  if (file.size > 5 * 1024 * 1024) { setSbomMessage(`The file is ${(file.size / 1024 / 1024).toFixed(2)} MiB. The maximum upload size is 5 MiB.`, true); return; }
+  if (file.size > sbomUploadLimitMiB * 1024 * 1024) { setSbomMessage(`The file is ${(file.size / 1024 / 1024).toFixed(2)} MiB. The maximum upload size is ${sbomUploadLimitMiB} MiB.`, true); return; }
+  inventoryBusy = true;
+  $('image-add').disabled = true;
+  $('image-save').disabled = true;
+  $('image-retire-submit').disabled = true;
   $('sbom-submit').disabled = true;
   $('inventory-close').disabled = true;
   const applicationId = inventoryApplicationId;
@@ -1600,7 +1628,7 @@ async function importSbom(event) {
     try { await readInventory(); }
     catch { setSbomMessage('SBOM imported, but inventory metadata could not be refreshed. Reopen inventory to check the import, then refresh the application.'); }
   } catch (error) { setSbomMessage(error.message, true); }
-  finally { $('sbom-submit').disabled = false; $('inventory-close').disabled = false; $('sbom-file').disabled = false; $('sbom-scope').disabled = false; }
+  finally { inventoryBusy = false; $('image-add').disabled = false; $('image-save').disabled = false; $('image-retire-submit').disabled = false; $('sbom-submit').disabled = false; $('inventory-close').disabled = false; $('sbom-file').disabled = false; $('sbom-scope').disabled = false; }
 }
 $('sbom-form').addEventListener('submit', importSbom);
 
@@ -1620,3 +1648,124 @@ async function openResolvedHistory(findingId) {
   } catch (error) { body.textContent = error.message; }
 }
 $('resolved-history-close').addEventListener('click', () => $('resolved-history-dialog').close());
+
+let inventoryData = { images: [], revisions: [] };
+let inventoryBusy = false;
+let retiringImageId = null;
+let componentRevisionId = null;
+let componentApplicationId = null;
+let componentOffset = 0;
+let componentQuery = '';
+let componentRequest = 0;
+const canManageInventory = () => !activePreview && (isAdmin || permissions.applications.edit.includes(inventoryApplicationId));
+const inventoryTime = value => value ? new Date(value).toLocaleString() : 'Not reported';
+function renderInventory() {
+  const { images, revisions } = inventoryData;
+  const canEdit = canManageInventory();
+  $('image-add').hidden = !canEdit;
+  $('inventory-images').innerHTML = images.map(image => '<article class="inventory-card"><h4>' + escape(image.label || image.reference) + '</h4><code>' + escape(image.reference) + '</code><p>' + (image.retired ? 'Retired · ' + escape(inventoryTime(image.retiredAt)) : image.enabled ? 'Enabled' : 'Disabled; findings remain unverified') + '</p>' + (canEdit && !image.retired ? '<div class="form-actions"><button type="button" data-image-edit="' + escape(image.id) + '">Edit image</button><button type="button" data-image-import="' + escape(image.id) + '"' + (!image.enabled ? ' disabled' : '') + '>Import image SBOM</button><button type="button" data-image-retire="' + escape(image.id) + '">Retire image</button></div>' : '') + '</article>').join('') || '<p class="muted">No container images configured. Application-level SBOMs are available below.</p>';
+  $('inventory-images').querySelectorAll?.('[data-image-edit]').forEach(button => button.addEventListener('click', () => editInventoryImage(button.dataset.imageEdit)));
+  $('inventory-images').querySelectorAll?.('[data-image-retire]').forEach(button => button.addEventListener('click', () => beginImageRetirement(button.dataset.imageRetire)));
+  $('inventory-images').querySelectorAll?.('[data-image-import]').forEach(button => button.addEventListener('click', () => { if (inventoryBusy) return; $('sbom-scope').value = button.dataset.imageImport; $('sbom-file').focus(); }));
+  const scopeName = revision => revision.scope.imageId ? images.find(image => image.id === revision.scope.imageId)?.label || images.find(image => image.id === revision.scope.imageId)?.reference || 'Image' : 'Application';
+  const revisionMarkup = revision => {
+    const image = images.find(image => image.id === revision.scope.imageId);
+    const mismatch = image && revision.imageReferenceAtImport && image.reference !== revision.imageReferenceAtImport;
+    const inactive = image && (!image.enabled || image.retired);
+    const assessment = revision.assessment;
+    const state = mismatch ? 'Image mismatch; replacement SBOM required' : inactive ? image.retired ? 'Retired image; history only' : 'Disabled image; not assessed' : revision.assessmentState || 'awaiting-assessment';
+    return '<article class="inventory-card"><h4>' + escape(scopeName(revision)) + '</h4><p>' + escape(state.replaceAll('-', ' ')) + (assessment?.stale ? ' · Stale' : '') + '</p><dl class="inventory-metadata"><dt>Format</dt><dd>' + escape(revision.format + ' ' + revision.specificationVersion) + '</dd><dt>Generator</dt><dd>' + escape((revision.generator || []).join(', ') || 'Not reported') + '</dd><dt>Generated</dt><dd>' + escape(inventoryTime(revision.generatedAt)) + '</dd><dt>Imported</dt><dd>' + escape(inventoryTime(revision.importedAt)) + ' · ' + escape(revision.uploader?.name || 'Unknown uploader') + '</dd><dt>Components</dt><dd>' + escape(revision.componentCount) + ' · ' + escape(assessment?.assessedComponentCount ?? 0) + ' checked · ' + escape(assessment?.unsupportedComponentCount ?? revision.incompleteComponentCount ?? 0) + ' unsupported/incomplete</dd><dt>Last successful lookup</dt><dd>' + escape(inventoryTime(assessment?.lastSuccessfulLookup)) + '</dd><dt>Reported image</dt><dd>' + escape((revision.reportedImages || []).join(', ') || 'Not reported') + '</dd><dt>Revision</dt><dd><code>' + escape(revision.id) + '</code></dd><dt>Document identity / version</dt><dd>' + escape(revision.documentIdentity || 'Not reported') + ' / ' + escape(revision.documentVersion ?? 'Not reported') + '</dd><dt>Checksum (SHA-256)</dt><dd><code>' + escape(revision.checksum) + '</code></dd>' + (revision.replacesRevisionId ? '<dt>Replaces revision</dt><dd><code>' + escape(revision.replacesRevisionId) + '</code></dd>' : '') + (revision.supersededBy ? '<dt>Superseded by</dt><dd><code>' + escape(revision.supersededBy) + '</code> · ' + escape(inventoryTime(revision.supersededAt)) + '</dd>' : '') + '</dl><button type="button" data-revision-components="' + escape(revision.id) + '">Browse components</button></article>';
+  };
+  const active = revisions.filter(revision => revision.active);
+  $('inventory-summary').innerHTML = '<h3>Active inventories</h3>' + (active.map(revisionMarkup).join('') || '<p class="muted">No SBOM imported. Inventory assessment remains incomplete.</p>') + packageCoverageMarkup({ inventories: active.filter(revision => revision.assessment && (!revision.scope.imageId || images.some(image => image.id === revision.scope.imageId && image.enabled && !image.retired && (!revision.imageReferenceAtImport || image.reference === revision.imageReferenceAtImport)))).map(revision => ({ componentCount: revision.componentCount, ...revision.assessment })) }) + '<details><summary>Previous revisions (' + revisions.filter(revision => !revision.active).length + ')</summary>' + '<p class="form-hint">Showing the most recent 50 previous revisions.</p>' + revisions.filter(revision => !revision.active).slice(-50).reverse().map(revisionMarkup).join('') + '</details>';
+  $('inventory-summary').querySelectorAll?.('[data-revision-components]').forEach(button => button.addEventListener('click', () => openComponents(button.dataset.revisionComponents)));
+}
+function editInventoryImage(id = '') {
+  if (!canManageInventory() || inventoryBusy) return;
+  const image = inventoryData.images.find(image => image.id === id);
+  if (image?.retired) return;
+  $('image-retire-form').hidden = true;
+  $('image-id').value = id;
+  $('image-label').value = image?.label || '';
+  $('image-reference').value = image?.reference || '';
+  $('image-enabled').checked = image ? image.enabled : true;
+  $('image-form').hidden = false;
+  $('image-reference').focus();
+}
+function beginImageRetirement(id) {
+  if (!canManageInventory() || inventoryBusy) return;
+  const image = inventoryData.images.find(image => image.id === id);
+  if (!image || image.retired) return;
+  retiringImageId = id;
+  $('image-form').hidden = true;
+  $('image-retire-confirm').value = '';
+  $('image-retire-warning').textContent = 'Retirement is permanent. History is preserved; findings in this image resolve after refresh.';
+  $('image-retire-reference').textContent = image.reference;
+  $('image-retire-form').hidden = false;
+  $('image-retire-confirm').focus();
+}
+async function saveInventoryImages(images) {
+  if (!canManageInventory() || inventoryBusy) return;
+  inventoryBusy = true;
+  for (const id of ['image-save', 'image-add', 'image-retire-submit', 'sbom-submit', 'inventory-close']) $(id).disabled = true;
+  $('image-message').classList.toggle('form-error', false);
+  $('image-message').setAttribute('role', 'status');
+  $('image-message').textContent = 'Saving images…';
+  try {
+    const response = await fetch('/api/applications/' + encodeURIComponent(inventoryApplicationId) + '/images', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ images }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not save images');
+    $('image-form').hidden = true;
+    $('image-retire-form').hidden = true;
+    $('image-message').textContent = 'Images saved. Refresh the application to update assessment and finding history.';
+    try { await readInventory(); } catch { $('image-message').textContent += ' Reopen inventory to reload metadata.'; }
+  } catch (error) {
+    $('image-message').classList.toggle('form-error', true);
+    $('image-message').setAttribute('role', 'alert');
+    $('image-message').textContent = error.message;
+  } finally {
+    inventoryBusy = false;
+    for (const id of ['image-save', 'image-add', 'image-retire-submit', 'sbom-submit', 'inventory-close']) $(id).disabled = false;
+  }
+}
+$('image-add').addEventListener('click', () => editInventoryImage());
+$('image-cancel').addEventListener('click', () => { if (!inventoryBusy) $('image-form').hidden = true; });
+$('image-retire-cancel').addEventListener('click', () => { if (!inventoryBusy) $('image-retire-form').hidden = true; });
+$('image-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const id = $('image-id').value;
+  const updated = { ...(inventoryData.images.find(image => image.id === id) || {}), label: $('image-label').value.trim(), reference: $('image-reference').value.trim(), enabled: $('image-enabled').checked };
+  saveInventoryImages(id ? inventoryData.images.map(image => image.id === id ? updated : image) : [...inventoryData.images, updated]);
+});
+$('image-retire-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const image = inventoryData.images.find(image => image.id === retiringImageId);
+  if (!image || $('image-retire-confirm').value !== image.reference) { $('image-message').textContent = 'The confirmation must exactly match the image reference.'; $('image-message').classList.toggle('form-error', true); $('image-message').setAttribute('role', 'alert'); return; }
+  saveInventoryImages(inventoryData.images.map(item => item.id === image.id ? { ...item, retired: true } : item));
+});
+async function openComponents(revisionId) {
+  componentRevisionId = revisionId;
+  componentApplicationId = inventoryApplicationId;
+  componentOffset = 0; componentQuery = '';
+  $('component-search').value = '';
+  $('components-dialog').showModal();
+  await loadComponents();
+}
+async function loadComponents() {
+  const request = ++componentRequest;
+  $('components-body').textContent = 'Loading components…';
+  $('components-prev').disabled = true; $('components-next').disabled = true;
+  try {
+    const response = await fetch('/api/applications/' + encodeURIComponent(componentApplicationId) + '/inventory/revisions/' + encodeURIComponent(componentRevisionId) + '/components?offset=' + componentOffset + '&q=' + encodeURIComponent(componentQuery), { cache: 'no-store' });
+    const data = await response.json();
+    if (request !== componentRequest) return;
+    if (!response.ok) throw new Error(data.error || 'Could not load components');
+    $('components-body').innerHTML = '<p>' + escape(data.total) + ' matching component(s); showing ' + escape(data.components.length ? data.offset + 1 : 0) + '–' + escape(data.offset + data.components.length) + '. Includes non-package metadata; assessment support is shown in coverage.</p>' + data.components.map(component => '<details class="inventory-card"><summary>' + escape(component.name || component.componentRef) + ' ' + escape(component.version || 'No version') + ' · ' + escape(component.componentType || 'Unknown type') + '</summary><p><code>' + escape(component.purl || component.declaredPurl || 'No PURL') + '</code></p><p>Supplier: ' + escape(component.supplier || 'Not reported') + '<br>Licenses (supplier declared): ' + escape((component.licenses || []).join(', ') || 'Not reported') + '<br>Identity: ' + escape(component.identityIssue || 'Versioned identity; assessment support is reported separately') + '<br>Locations: ' + escape((component.locations || []).join(', ') || component.location || 'Not reported') + '<br>CPEs: ' + escape((component.cpes || []).join(', ') || 'Not reported') + '<br>Hashes: ' + escape((component.hashes || []).map(hash => hash.algorithm + ': ' + hash.value).join(', ') || 'Not reported') + '</p><p>Reference: <code>' + escape(component.componentRef) + '</code></p></details>').join('') + '<details><summary>Dependency relationships for this page (up to 200 of ' + escape(data.dependencyCount) + ' total)</summary>' + data.dependencies.map(edge => '<p><code>' + escape(edge.from) + '</code> ' + escape(edge.relationship) + ' <code>' + escape(edge.to) + '</code></p>').join('') + '</details>';
+    $('components-prev').disabled = data.offset === 0;
+    $('components-next').disabled = data.offset + data.components.length >= data.total;
+  } catch (error) { if (request === componentRequest) $('components-body').textContent = error.message; }
+}
+$('components-close').addEventListener('click', () => { componentRequest++; $('components-dialog').close(); });
+$('component-search-form').addEventListener('submit', event => { event.preventDefault(); componentOffset = 0; componentQuery = $('component-search').value; loadComponents(); });
+$('components-prev').addEventListener('click', () => { componentOffset = Math.max(0, componentOffset - 50); loadComponents(); });
+$('components-next').addEventListener('click', () => { componentOffset += 50; loadComponents(); });

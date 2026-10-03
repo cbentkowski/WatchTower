@@ -87,14 +87,14 @@ failures or incomplete evidence.
 Application details start at the top when opened. Refreshing an already open
 dialog preserves its scroll position.
 
-Signal's intermediate SBOM ingestion APIs and supported formats are described in
-[SBOM imports](SBOM_IMPORTS.md); upload controls and package assessment follow in
-later work.
+Signal's SBOM ingestion APIs and supported formats are described in
+[SBOM imports](SBOM_IMPORTS.md). The [inventory interface](INVENTORY_UI.md) manages
+images, imports, provenance, component browsing, and revision history.
 
 [Package assessment](PACKAGE_ASSESSMENT.md) now connects imported inventories to
 OSV on refresh. Package findings show the exact installed component and advisory;
-unsupported or failed evidence remains incomplete. Upload/management controls
-will follow in the final interface part.
+unsupported or failed evidence remains incomplete. Application Editors manage
+images and SBOMs from Package inventory or the application editor.
 
 Administrators manage reusable contacts from **Owners**. Each owner requires a name and unique email address and may include an escalation email. Editing an owner updates its contact information everywhere that owner is assigned. An owner cannot be removed while any application or workspace still references it.
 
@@ -229,6 +229,8 @@ Open **Settings > General** and configure the public protocol, hostname, and web
 
 When WatchTower is behind a reverse proxy, use the public HTTPS hostname and port. Saving an incorrect address can produce unusable email links.
 
+Administrators can also set the **SBOM upload limit (MiB)** here. The default is **35 MiB**; choose a whole number from **1 to 100 MiB**. Changes apply to subsequent uploads without restarting and persist across restarts. The import dialog displays the configured limit, and oversized uploads show an error without replacing the current inventory. Larger imports require additional memory; reverse proxies must allow the JSON-encoded request size, which can be larger than the SBOM file.
+
 ## Access control
 
 Administrators use **Access Control** to map exact identity-provider claims to WatchTower roles.
@@ -310,5 +312,7 @@ without a CPE. Supply a lifecycle source or manual end-of-life date. Open the
 application and choose **Package inventory** under Assessment to import SPDX JSON
 2.2 or 2.3, SPDX JSON-LD 3.0 or 3.0.1, or CycloneDX JSON 1.4 through 1.7, then use **Refresh application** to assess its packages.
 Application Editors can import; viewers can inspect active inventory metadata.
+The dialog also manages container images, shows SBOM provenance and revision history,
+and browses normalized components. See [inventory management](INVENTORY_UI.md).
 The dialog provides a downloadable demo SBOM for testing. See
 [package assessment](PACKAGE_ASSESSMENT.md) for coverage, privacy, and testing details.

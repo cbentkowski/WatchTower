@@ -73,6 +73,13 @@ test('Permission Preview enforces selected access, blocks mutations, and preserv
     assert.match((await mutation.json()).error, /read-only/);
     assert.equal((await fetch(`${origin}/api/applications/${appA}/inventory`, { headers: { cookie } })).status, 200);
     assert.equal((await fetch(`${origin}/api/applications/${appB}/inventory`, { headers: { cookie } })).status, 403);
+    const demo = await (await fetch(`${origin}/api/sboms/demo-before`)).json();
+    const imported = await (await fetch(`${origin}/api/applications/${appA}/sboms`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sbom: JSON.stringify(demo), imageId: null }) })).json();
+    assert.ok(imported.id);
+    const componentPath = `/inventory/revisions/${imported.id}/components`;
+    assert.equal((await fetch(`${origin}/api/applications/${appA}${componentPath}`, { headers: { cookie } })).status, 200);
+    assert.equal((await fetch(`${origin}/api/applications/${appB}${componentPath}`, { headers: { cookie } })).status, 403);
+    assert.equal((await fetch(`${origin}/api/applications/${appA}/images`, { method: 'PUT', headers: { cookie, 'Content-Type': 'application/json' }, body: '{"images":[]}' })).status, 403);
     for (const suffix of ['sboms', 'refresh']) {
       const response = await fetch(`${origin}/api/applications/${appA}/${suffix}`, { method: 'POST', headers: { cookie, 'Content-Type': 'application/json' }, body: '{}' });
       assert.equal(response.status, 403);

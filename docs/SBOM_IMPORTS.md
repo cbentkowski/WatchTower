@@ -1,8 +1,9 @@
 # SBOM ingestion in Signal
 
-API-based image configuration and SBOM ingestion are part 2 of issue #90.
-Basic file import and active inventory metadata are available in application details.
-Image configuration and detailed inventory views follow in the interface part. Newly imported
+Image configuration, SBOM imports, provenance, revision history, and component
+browsing are available from Package inventory in application details and from
+Manage images and SBOMs in an existing application editor. New applications must
+be saved before images and SBOMs can be managed. Newly imported
 inventory is explicitly **awaiting assessment** and does not prove an application
 is clean. The [package assessment implementation](PACKAGE_ASSESSMENT.md) connects
 OSV queries and explicit inventory-only application configuration through the API.
@@ -14,10 +15,12 @@ The supported versions are SPDX JSON 2.2 and 2.3, SPDX JSON-LD 3.0 and 3.0.1,
 and CycloneDX JSON 1.4 through 1.7. Format is
 detected from document content and validated against the bundled official schemas.
 Other versions, compressed documents, and scanner-result formats are rejected.
-This import profile applies additional conservative limits: 5 MiB raw document,
-10,000 components, nesting depth 32, 200,000 visited values, and 8,192 characters
-per string. The JSON request envelope is also bounded. Validation runs in a worker
-with 128 MiB old-generation heap limit and a ten-second deadline; at most two
+This import profile applies additional conservative limits: configurable raw document size (35 MiB default, 1–100 MiB in Settings → General),
+50,000 components, nesting depth 32, 2,000,000 visited values, and 8,192 characters
+per string. The JSON request envelope is bounded to twice the raw-document limit plus 100,000 bytes
+to account for JSON string escaping. Proxy limits must allow this encoded envelope.
+Settings persist in general.yaml and apply to subsequent uploads without restart. Validation runs in a worker
+with 512 MiB old-generation heap limit and a thirty-second deadline; at most two
 workers run and eight wait. Busy callers must retry.
 
 Components retain package names, versions, canonical PURLs, supplied CPEs,
@@ -58,6 +61,10 @@ Application Editors (including inherited workspace grants) may configure images
 and import SBOMs. Administrators have access. Permission Preview blocks mutations.
 
 - `GET /api/applications/<uuid>/inventory` returns images and revision metadata.
+- `GET /api/applications/<uuid>/inventory/revisions/<revision-uuid>/components`
+  returns up to 50 normalized components, total matches, and up to 200 dependency
+  relationships for that page. Optional `offset` and `q` search name, version, PURL,
+  supplier, or license. Both application access and revision ownership are checked.
 - `PUT /api/applications/<uuid>/images` accepts `{ "images": [...] }`. Each new
   image has `reference`, optional `label`, and optional `enabled`/`retired` booleans.
   Updates include the managed image IDs returned by the API and retain all previous
@@ -84,8 +91,8 @@ and image scopes remain independent. Import does not modify finding responses. T
 replaced inventory as described in [replacement and retirement](INVENTORY_RECONCILIATION.md).
 Retention controls remain later work.
 
-Back up this folder with the rest of the data directory. Image configuration in
-this intermediate build is stored here rather than in `applications.yaml`.
+Back up this folder with the rest of the data directory. Image configuration is
+stored here rather than in `applications.yaml`.
 
 ## Manual checks for this PR build
 

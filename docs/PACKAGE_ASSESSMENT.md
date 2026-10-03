@@ -78,7 +78,8 @@ Missing SBOMs on enabled images, an empty inventory, unsupported components,
 stale inventories, and failed lookups remain incomplete/unknown. Previously
 reported findings for the same revision are retained as unverified when a lookup
 is incomplete. No finding is resolved merely because a lookup failed or omitted
-evidence; explicit replacement/removal reconciliation follows in part 4.
+evidence. Fresh complete assessments reconcile replacements and retired images
+as described in [inventory reconciliation](INVENTORY_RECONCILIATION.md).
 
 `SBOM_MAX_AGE_DAYS` defaults to 30 and accepts integers from 1 to 3650. Freshness
 uses generation time when supplied, otherwise import time (with the basis exposed
@@ -172,8 +173,8 @@ Replacement uploads now preserve resolved finding history. See
 10. Confirm existing product applications, CPE selection, edits, scoped refresh,
    and dialog scrolling still work.
 
-The demo contains inventory data, not software to install. Image configuration
-and full inventory management follow in the interface slice.
+The demo contains inventory data, not software to install. Image configuration, provenance, revision history and paged component browsing are
+available through Package inventory. See [inventory management](INVENTORY_UI.md).
 
 Sources: [OSV batch API](https://google.github.io/osv.dev/post-v1-querybatch/),
 [OSV advisory retrieval](https://google.github.io/osv.dev/get-v1-vulns/).
