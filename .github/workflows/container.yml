@@ -211,6 +211,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build local scan image
         run: docker build --pull --tag watchtower:security-scan .
+      - name: Verify container runtime compatibility
+        run: bash docker/test-runtime.sh watchtower:security-scan
       - name: Export image for read-only scanners
         run: |
           mkdir -p "$RUNNER_TEMP/watchtower-security" "$RUNNER_TEMP/container-security" "$RUNNER_TEMP/zap"
