@@ -8,10 +8,10 @@ export async function assessApplicationInventory(app, store, client, kev, { now 
   catch (error) { return { configured: true, state: 'incomplete', reasons: [`Package inventory unavailable: ${error.message}`], findings: [], inventories: [] }; }
   const enabled = loaded.images.filter(image => image.enabled && !image.retired);
   const configured = Boolean(loaded.inventories.length || enabled.length || app.assessmentMode === 'inventory');
-  if (!configured) return { configured: false, state: 'not-configured', reasons: [], findings: [], inventories: [] };
+  if (!configured) return { configured: false, state: 'not-configured', reasons: [], findings: [], inventories: [], lifecycle: { images: loaded.images, inventories: [] } };
   const missing = enabled.filter(image => !loaded.inventories.some(inventory => inventory.scope.imageId === image.id));
   const reasons = missing.map(image => `Image ${image.label || image.reference}: awaiting usable SBOM`);
-  const findings = [], inventories = [];
+  const findings = [], inventories = [], lifecycleInventories = [];
   for (const inventory of loaded.inventories) {
     const ageBasis = inventory.generatedAt || inventory.importedAt;
     const age = now.getTime() - Date.parse(ageBasis);
@@ -44,12 +44,13 @@ export async function assessApplicationInventory(app, store, client, kev, { now 
     await onEvent(assessment.state === 'assessed' ? 'info' : 'warn', 'SBOM assessment completed', `${app.name} (${app.id}), inventory ${inventory.id}: ${assessment.assessedComponentCount} package entries checked; ${assessment.findingCount} finding(s); ${assessment.unsupportedComponentCount} skipped; ${assessment.ignoredComponentCount || 0} non-package entries; ${assessment.errors.length} source errors. ${assessment.skipReasons.map(item => item.count + ' ' + item.reason).join('; ')}${stale ? ' Inventory stale or timestamp invalid.' : ''}${assessment.retainedFindingCount ? ' ' + assessment.retainedFindingCount + ' finding(s) retained as unverified.' : ''}`);
     const saved = await store.recordAssessment(app.id, inventory.id, assessment);
     if (!saved) { assessment.state = 'incomplete'; reasons.push('Inventory changed during package assessment; refresh again'); }
+    lifecycleInventories.push({ imageId: inventory.scope.imageId, revisionId: inventory.id, complete: assessment.state === 'assessed' && !stale && Boolean(saved), components: inventory.components });
     findings.push(...assessment.findings);
     const { findings: scopedFindings, ...summary } = assessment;
     inventories.push({ revisionId: inventory.id, imageId: inventory.scope.imageId, componentCount: inventory.componentCount, generatedAt: inventory.generatedAt, importedAt: inventory.importedAt, ageBasis: inventory.generatedAt ? 'generation' : 'import', stale, ...summary });
   }
   if (!loaded.inventories.length) reasons.push('Package inventory awaiting assessment: no usable SBOM imported');
-  return { configured, state: inventories.length && !missing.length && inventories.every(inventory => inventory.state === 'assessed') ? 'assessed' : 'incomplete', reasons, findings, inventories };
+  return { configured, state: inventories.length && !missing.length && inventories.every(inventory => inventory.state === 'assessed') ? 'assessed' : 'incomplete', reasons, findings, inventories, lifecycle: { images: loaded.images, inventories: lifecycleInventories } };
 }
 
 // Alias/source identifiers and URLs may grow without resetting responses. Only

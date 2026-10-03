@@ -6,10 +6,25 @@ import { readFile } from 'node:fs/promises';
 const source = await readFile(new URL('../src/web/app.js', import.meta.url), 'utf8');
 const detailCode = source.slice(source.indexOf('function showDetails(a)'), source.indexOf('async function openFindingEditor'));
 const application = { id: 'app', name: 'Example', version: '1', status: 'green', vulnerabilities: [], reasons: [], sources: [], ownerIds: [], tags: [] };
+const archiveCode = source.slice(source.indexOf('function resolvedPackagesMarkup('));
+test('resolved history preserves responses, escapes source text and reports read failures safely', async () => {
+  const elements = new Map();
+  const element = id => { if (!elements.has(id)) elements.set(id, { addEventListener() {}, showModal() {}, close() {} }); return elements.get(id); };
+  const context = vm.createContext({ $: element, detailAppId: 'app', encodeURIComponent, Date, escape: value => String(value).replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'), fetch: async () => ({ ok: false, json: async () => ({ error: '<upload failed>' }) }) });
+  vm.runInContext(archiveCode, context);
+  const markup = context.resolvedPackagesMarkup([{ id: 'uuid', advisoryId: 'GHSA-demo', package: { name: '<script>', version: '1' }, resolution: { reason: 'version-changed', at: '2026-10-02' }, workflow: { notes: '<img>', assignee: 'Security', ticketReference: 'SEC-1' } }]);
+  assert.match(markup, /version changed/);
+  assert.match(markup, /&lt;script&gt;/);
+  assert.match(markup, /&lt;img&gt;/);
+  assert.match(markup, /View history/);
+  assert.doesNotMatch(markup, /Update response|<script>|<img>/);
+  await context.openResolvedHistory('uuid');
+  assert.equal(element('resolved-history-body').textContent, '<upload failed>');
+});
 function displayContext(permissions) {
   const elements = new Map();
   const element = id => { if (!elements.has(id)) elements.set(id, { addEventListener() {}, hidden: false, scrollTop: 0, open: false, showModal() { this.open = true; this.scrollTop = 900; } }); return elements.get(id); };
-  const context = vm.createContext({ $: element, requestAnimationFrame: callback => callback(), detailAppId: null, isAdmin: false, permissions, openInventory() {}, packageContext: () => '', packageCoverageMarkup: () => '', labels: { green: 'Clear' }, escape: value => String(value), safeUrl: value => value, workspaces: [], owners: [], allResults: [application], encodeURIComponent, render(data) { context.allResults = data.results; } });
+  const context = vm.createContext({ $: element, requestAnimationFrame: callback => callback(), detailAppId: null, isAdmin: false, permissions, openInventory() {}, packageContext: () => '', packageCoverageMarkup: () => '', resolvedPackagesMarkup: () => '', labels: { green: 'Clear' }, escape: value => String(value), safeUrl: value => value, workspaces: [], owners: [], allResults: [application], encodeURIComponent, render(data) { context.allResults = data.results; } });
   vm.runInContext(detailCode, context);
   return { context, element };
 }

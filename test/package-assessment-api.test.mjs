@@ -71,6 +71,34 @@ test('CPE-less imports reassess new advisories, persist workflow, retain failure
     assert.doesNotMatch(log, /services\.nvd\.nist/);
     const full = await (await request('/api/status?refresh=1')).json();
     assert.equal(full.results[0].packageAssessment.state, 'incomplete');
+    // A failed replacement must not lose a prior finding from the old revision.
+    const oldRevision = metadata.revisions[0].id;
+    document.components[0].version = '2.0.0'; document.components[0].purl = 'pkg:npm/example@2.0.0';
+    const replacement = await request(`/api/applications/${id}/sboms`, 'POST', { sbom: JSON.stringify(document), imageId: null });
+    assert.equal(replacement.status, 201);
+    const replacementMetadata = await replacement.json();
+    assert.equal(replacementMetadata.replacesRevisionId, oldRevision);
+    const incompleteReplacement = await refresh();
+    assert.equal(incompleteReplacement.vulnerabilities[0].id, finding.id);
+    assert.equal(incompleteReplacement.vulnerabilities[0].evidenceState, 'unverified');
+    await writeFile(modeFile, 'empty');
+    const resolved = await refresh();
+    assert.equal(resolved.vulnerabilities.length, 0);
+    assert.equal(resolved.resolvedPackageFindings[0].id, finding.id);
+    assert.equal(resolved.resolvedPackageFindings[0].workflow.notes, 'Reviewing');
+    assert.equal(resolved.resolvedPackageFindings[0].resolution.reason, 'version-changed');
+    const history = (await (await request(`/api/applications/${id}/findings/${finding.id}/history`)).json()).entries;
+    assert.ok(history.some(event => event.type === 'finding-inventory-resolved' && event.reason === 'version-changed'));
+    assert.ok(history.some(event => event.type === 'finding-workflow-updated'));
+    // Demo downloads are generated, avoiding source inventories in the runtime image.
+    for (const stage of ['before', 'after']) {
+      const download = await request('/api/sboms/demo-' + stage);
+      assert.equal(download.status, 200);
+      const demo = await download.json();
+      assert.equal(demo.components[0].version, stage === 'before' ? '4.17.20' : '4.18.1');
+      assert.equal(demo.components[1].purl, 'pkg:npm/minimist@1.2.5');
+    }
+
   } finally {
     if (child.exitCode === null && child.signalCode === null) { child.kill(); await once(child, 'exit'); }
     await rm(directory, { recursive: true, force: true });

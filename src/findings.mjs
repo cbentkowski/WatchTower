@@ -3,6 +3,7 @@ import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises
 import path from 'node:path';
 import { reconcilePackageFinding } from './package-findings.mjs';
 import { packageEvidenceFingerprint } from './package-assessment.mjs';
+import { reconcilePackageLifecycle } from './package-lifecycle.mjs';
 
 export const findingStates = Object.freeze(['new', 'investigating', 'remediation-planned', 'mitigated', 'resolved', 'risk-accepted', 'not-affected', 'false-positive']);
 export const findingStateLabels = Object.freeze({ new: 'New', investigating: 'Investigating', 'remediation-planned': 'Remediation planned', mitigated: 'Mitigated', resolved: 'Resolved', 'risk-accepted': 'Risk accepted', 'not-affected': 'Not affected', 'false-positive': 'False positive' });
@@ -102,6 +103,15 @@ export function reconcileFindingWorkflows(store, results, actor = { issuer: 'sca
       events.push({ at, type: 'finding-discovered', applicationId: application.id, findingId: finding.id, actor, state: 'new' });
       changed = true;
     } else {
+      if (record.inventoryResolution && finding.evidenceState === 'current' && application.inventoryLifecycle) {
+        const resolution = record.inventoryResolution;
+        record.state = 'new'; record.riskExpiration = '';
+        record.reopenedAt = at; record.reopenedReason = 'Package finding reported again after inventory resolution';
+        record.updatedAt = at; record.updatedBy = actor;
+        delete record.inventoryResolution;
+        events.push({ at, type: 'finding-reopened', applicationId: application.id, findingId: finding.id, actor, from: 'resolved', to: 'new', reason: record.reopenedReason, previousResolution: resolution });
+        changed = true;
+      }
       const evidenceChanged = Boolean(record.evidenceFingerprint && record.evidenceFingerprint !== fingerprint);
       const expired = record.state === 'risk-accepted' && record.riskExpiration && record.riskExpiration < today;
       if ((evidenceChanged && dispositions.has(record.state)) || expired) {
@@ -118,7 +128,14 @@ export function reconcileFindingWorkflows(store, results, actor = { issuer: 'sca
       if (record.evidenceFingerprint !== fingerprint) { record.evidenceFingerprint = fingerprint; changed = true; }
     }
     finding.workflow = publicWorkflow(record);
+    if (finding.package) {
+      const { workflow, ...evidence } = finding;
+      if (JSON.stringify(record.packageEvidence) !== JSON.stringify(evidence)) { record.packageEvidence = structuredClone(evidence); changed = true; }
+    }
   }
+  const lifecycle = reconcilePackageLifecycle(store, results, publicWorkflow, actor, at);
+  changed ||= lifecycle.changed;
+  events.push(...lifecycle.events);
   return { changed, events };
 }
 export function updateFindingWorkflow(store, applicationId, findingId, input, actor, now = new Date()) {

@@ -24,6 +24,7 @@ import { createInventoryStore } from './inventory-store.mjs';
 import { sbomLimits } from './sbom.mjs';
 import { createOsvClient } from './osv.mjs';
 import { assessApplicationInventory } from './package-assessment.mjs';
+import { replacementDemo } from './sbom-demo.mjs';
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.dirname(sourceDirectory);
@@ -103,14 +104,22 @@ let nvdLastRequest = 0;
 let lifecycleCatalogCache = null;
 const permissionPreviews = new Map();
 const previewLifetime = 8 * 60 * 60 * 1000;
+let findingWriteQueue = Promise.resolve();
+function withFindingWrite(operation) {
+  const task = findingWriteQueue.catch(() => {}).then(operation);
+  findingWriteQueue = task;
+  return task;
+}
 const snapshotReady = readFile(snapshotFile, 'utf8').then(async raw => {
   const saved = JSON.parse(raw);
   if (saved.checkedAt && Array.isArray(saved.results) && Array.isArray(saved.workspaces)) {
-    const findingStore = await readFindingStore(findingStoreFile);
-    const reconciliation = reconcileFindingWorkflows(findingStore, saved.results);
-    if (reconciliation.changed) await writeFindingStore(findingStoreFile, findingStore);
-    await appendFindingEvents(findingHistoryFile, reconciliation.events);
-    snapshot = saved;
+    await withFindingWrite(async () => {
+      const findingStore = await readFindingStore(findingStoreFile);
+      const reconciliation = reconcileFindingWorkflows(findingStore, saved.results);
+      if (reconciliation.changed) await writeFindingStore(findingStoreFile, findingStore);
+      await appendFindingEvents(findingHistoryFile, reconciliation.events);
+      snapshot = saved;
+    });
   }
 }).catch(error => { if (error.code !== 'ENOENT') console.warn(`Could not load saved scan: ${error.message}`); });
 const yamlCheckInterval = Number(process.env.YAML_CHECK_INTERVAL_MS || 30_000);
@@ -140,15 +149,21 @@ const yamlMonitor = createYamlMonitor({
 await yamlMonitor.start();
 
 async function storeSnapshot(data) {
-  await mkdir(dataDirectory, { recursive: true });
-  const findingStore = await readFindingStore(findingStoreFile);
-  const reconciliation = reconcileFindingWorkflows(findingStore, data.results || []);
-  if (reconciliation.changed) await writeFindingStore(findingStoreFile, findingStore);
-  await appendFindingEvents(findingHistoryFile, reconciliation.events);
-  await saveAtomic(snapshotFile, `${JSON.stringify(data)}\n`);
-  snapshot = data;
-  notifier.onScan(data).catch(error => { console.error(`Notification check failed: ${error.message}`); logger.log('error', 'Notification check failed', error.message); });
-  return data;
+  return withFindingWrite(async () => {
+    await mkdir(dataDirectory, { recursive: true });
+    const findingStore = await readFindingStore(findingStoreFile);
+    const reconciliation = reconcileFindingWorkflows(findingStore, data.results || []);
+    for (const application of data.results || []) delete application.inventoryLifecycle;
+    if (reconciliation.changed) await writeFindingStore(findingStoreFile, findingStore);
+    await appendFindingEvents(findingHistoryFile, reconciliation.events);
+    for (const event of reconciliation.events.filter(event => event.type === 'finding-inventory-resolved' || (event.type === 'finding-reopened' && event.previousResolution))) {
+      await logger.audit(event.type === 'finding-inventory-resolved' ? 'Package finding resolved by inventory assessment' : 'Package finding reopened', event.actor, { type: 'finding', id: event.findingId, applicationId: event.applicationId }, { reason: event.reason, inventory: event.inventory || event.previousResolution }, event.reason);
+    }
+    await saveAtomic(snapshotFile, `${JSON.stringify(data)}\n`);
+    snapshot = data;
+    notifier.onScan(data).catch(error => { console.error(`Notification check failed: ${error.message}`); logger.log('error', 'Notification check failed', error.message); });
+    return data;
+  });
 }
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
@@ -721,6 +736,7 @@ async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
   try {
     const packages = await assessApplicationInventory(app, inventoryStore, osvClient, kev, { maxAgeDays: sbomMaxAgeDays, onEvent: logger.feed });
     result.packageAssessment = { configured: packages.configured, state: packages.state, inventories: packages.inventories };
+    result.inventoryLifecycle = packages.lifecycle;
     result.vulnerabilities.push(...packages.findings);
     result.reasons.push(...packages.reasons);
     if (packages.configured) {
@@ -1213,20 +1229,23 @@ const requestHandler = async (req, res) => {
       const { apps, access } = await authorization(req);
       if (!access.appEdit.has(applicationId)) { forbidden(res, 'Application Editor role required'); return; }
       const application = apps.find(item => item.id === applicationId);
-      const liveApplication = snapshot?.results?.find(item => item.id === applicationId);
-      const finding = liveApplication?.vulnerabilities?.find(item => item.id === findingId);
-      if (!application || !finding) throw new Error('Active finding not found');
-      const actor = auditActor(req);
-      const store = await readFindingStore(findingStoreFile);
-      const updated = updateFindingWorkflow(store, applicationId, findingId, await readBody(req), actor);
-      if (updated.event) {
-        await writeFindingStore(findingStoreFile, store);
-        await appendFindingEvents(findingHistoryFile, [updated.event]);
-        finding.workflow = updated.record;
-        await saveAtomic(snapshotFile, `${JSON.stringify(snapshot)}\n`);
-        await logger.audit('Finding workflow updated', actor, { type: 'finding', id: findingId, applicationId, applicationName: application.name }, updated.changes, `${application.name}: ${findingId} → ${updated.record.stateLabel}`);
-      }
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(updated.record)); return;
+      if (refreshPromise) await refreshPromise;
+      await withFindingWrite(async () => {
+        const liveApplication = snapshot?.results?.find(item => item.id === applicationId);
+        const finding = liveApplication?.vulnerabilities?.find(item => item.id === findingId);
+        if (!application || !finding) throw new Error('Active finding not found');
+        const actor = auditActor(req);
+        const store = await readFindingStore(findingStoreFile);
+        const updated = updateFindingWorkflow(store, applicationId, findingId, await readBody(req), actor);
+        if (updated.event) {
+          await writeFindingStore(findingStoreFile, store);
+          await appendFindingEvents(findingHistoryFile, [updated.event]);
+          finding.workflow = updated.record;
+          await saveAtomic(snapshotFile, `${JSON.stringify(snapshot)}\n`);
+          await logger.audit('Finding workflow updated', actor, { type: 'finding', id: findingId, applicationId, applicationName: application.name }, updated.changes, `${application.name}: ${findingId} → ${updated.record.stateLabel}`);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(updated.record));
+      }); return;
     }
     const appFeeds = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/feeds$/i);
     if (appFeeds && req.method === 'PUT') {
@@ -1327,9 +1346,10 @@ const requestHandler = async (req, res) => {
       if (!access.appView.has(applicationId) || (req.method !== 'GET' && !access.appEdit.has(applicationId))) { forbidden(res, 'Application access required'); return; }
       if (!apps.some(app => app.id === applicationId)) throw new Error('Application not found');
       let result;
+      if (req.method !== 'GET' && refreshPromise) await refreshPromise;
       if (req.method === 'GET' && inventoryRoute[2] === 'inventory') result = await inventoryStore.read(applicationId);
       else if (req.method === 'PUT' && inventoryRoute[2] === 'images') {
-        result = await inventoryStore.setImages(applicationId, (await readBody(req)).images);
+        result = await inventoryStore.setImages(applicationId, (await readBody(req)).images, auditActor(req));
         await logger.audit('Application images updated', auditActor(req), { type: 'application', id: applicationId }, { images: result.images });
       } else if (req.method === 'POST' && inventoryRoute[2] === 'sboms') {
         if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') throw new Error('Compressed SBOM uploads are unsupported');
@@ -1423,6 +1443,12 @@ const requestHandler = async (req, res) => {
       if (url.searchParams.has('refresh') && !access.scan) { forbidden(res, 'Scan Operator role required'); return; }
       const data = !snapshot || Date.now() - new Date(snapshot.checkedAt).getTime() > refreshMs || url.searchParams.has('refresh') ? await refresh() : snapshot;
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(visibleSnapshot(data, owners, access, req))); return;
+    }
+    const replacementDownload = url.pathname.match(/^\/api\/sboms\/demo-(before|after)$/);
+    if (replacementDownload && req.method === 'GET') {
+      const stage = replacementDownload[1];
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': `attachment; filename="replacement-${stage}.cdx.json"`, 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(replacementDemo(stage), null, 2)); return;
     }
     if (url.pathname === '/api/sboms/demo' && req.method === 'GET') {
       const demo = { bomFormat: 'CycloneDX', specVersion: '1.6', version: 1, components: [{ type: 'library', 'bom-ref': 'lodash', name: 'lodash', version: '4.17.20', purl: 'pkg:npm/lodash@4.17.20' }] };

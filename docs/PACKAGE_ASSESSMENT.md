@@ -140,6 +140,9 @@ and source errors. Every entry identifies its application and inventory revision
 Existing log access controls apply. Findings are counted after advisory alias
 correlation; successful queries with no matches remain distinct from failed checks.
 
+Replacement uploads now preserve resolved finding history. See
+[replacement and retirement](INVENTORY_RECONCILIATION.md) for the current test checklist.
+
 ## Manual PR build checks
 
 1. Add an application with **Package inventory (SBOM)** as its assessment source,

@@ -37,6 +37,7 @@ export function createInventoryStore(directory) {
   return {
     read,
     loadActive: async applicationId => {
+      await pending.get(folder(applicationId))?.catch(() => {});
       const state = await read(applicationId);
       const activeImages = new Set(state.images.filter(image => image.enabled && !image.retired).map(image => image.id));
       const inventories = [];
@@ -53,20 +54,25 @@ export function createInventoryStore(directory) {
       inventoryScope(revisionId);
       const revision = state.revisions.find(item => item.id === revisionId && item.active);
       if (!revision) return false;
+      if (revision.scope.imageId && !state.images.some(image => image.id === revision.scope.imageId && image.enabled && !image.retired)) return false;
       await atomic(path.join(folder(applicationId), `${revisionId}-assessment.json`), assessment);
       const { findings, ...summary } = assessment;
       revision.assessment = summary;
       revision.assessmentState = summary.state;
       return true;
     }),
-    setImages: (applicationId, images) => update(applicationId, state => { state.images = reconcileImages(images, state.images); return state; }),
+    setImages: (applicationId, images, actor = {}) => update(applicationId, state => {
+      const previous = state.images;
+      state.images = reconcileImages(images, previous).map(image => image.retired && !previous.find(old => old.id === image.id)?.retired ? { ...image, retiredAt: new Date().toISOString(), retiredBy: actor } : image);
+      return state;
+    }),
     import: (applicationId, raw, selection, actor) => update(applicationId, async state => {
       const inventory = await processSbom(raw);
       const imageId = selectInventoryImage(inventory, state.images, selection);
       const revision = { ...inventory, ...createInventoryRevision(inventoryScope(applicationId, imageId), inventory), uploader: actor };
+      for (const old of state.revisions) if (old.scope.imageId === imageId && old.active) { old.active = false; old.supersededBy = revision.id; old.supersededAt = revision.importedAt; revision.replacesRevisionId = old.id; }
       await atomic(path.join(folder(applicationId), `${revision.id}.json`), revision);
       const { components, dependencies, supplierEvidence, ...metadata } = revision;
-      for (const old of state.revisions) if (old.scope.imageId === imageId && old.active) old.active = false;
       state.revisions.push({ ...metadata, active: true });
       return { ...metadata, active: true };
     }),
