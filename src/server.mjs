@@ -1,3 +1,4 @@
+import { normalizeKevCatalog, kevIndex, enrichKevFindings, kevFeedUrl, kevCatalogUrl } from './kev.mjs';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -523,6 +524,29 @@ async function migrateResourceIds() {
   return { applications: applicationIds, workspaces: workspaceIds };
 }
 
+async function loadKevCatalog() {
+  const file = path.join(dataDirectory, 'kev-cache.json');
+  const attemptedAt = new Date().toISOString();
+  try {
+    const catalog = normalizeKevCatalog(await fetchJson(kevFeedUrl), attemptedAt);
+    await mkdir(dataDirectory, { recursive: true });
+    await saveAtomic(file, JSON.stringify(catalog));
+    logger.feed('info', 'CISA KEV checked', `${catalog.records.length} entries; catalog ${catalog.catalogVersion || catalog.catalogDate || 'date unavailable'}`);
+    return { kev: kevIndex(catalog, 'current', attemptedAt), kevError: null };
+  } catch (error) {
+    logger.feed('error', 'CISA KEV unavailable', error.message);
+    let catalog = null;
+    try {
+      const cached = JSON.parse(await readFile(file, 'utf8'));
+      if (!Number.isFinite(Date.parse(cached.checkedAt))) throw new Error('Invalid cached KEV timestamp');
+      catalog = normalizeKevCatalog({ vulnerabilities: cached.records, dateReleased: cached.catalogDate, catalogVersion: cached.catalogVersion }, cached.checkedAt);
+    } catch {}
+    const retained = kevIndex(catalog, catalog ? 'stale' : 'unavailable', attemptedAt);
+    if (!catalog) for (const app of snapshot?.results || []) for (const finding of app.vulnerabilities || []) if (finding.knownExploited) for (const id of [finding.id, ...(finding.aliases || [])]) if (/^CVE-\d{4}-\d{4,19}$/i.test(id)) retained.add(id.toUpperCase());
+    return { kev: retained, kevError: `CISA KEV unavailable: ${error.message}${catalog ? '; retained last successful catalog' : ''}` };
+  }
+}
+
 async function fetchJson(url, timeout = 15000, headers = {}) {
   try {
     const response = await fetch(url, { headers: { 'User-Agent': 'VulnerabilityDashboard/1.0', Accept: 'application/json', ...headers }, signal: AbortSignal.timeout(timeout) });
@@ -710,7 +734,7 @@ async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
   const reviewAdvisories = [];
   for (const event of feedSecurity) {
     if (event.confidence === 'high' && eventAffectsVersion(event, app.version)) {
-      result.vulnerabilities.push({ id: event.cves[0] || event.title, score: event.score || (event.severity === 'CRITICAL' ? 9 : event.severity === 'HIGH' ? 7 : 0), label: event.severity, severity: event.severity, published: event.published, description: event.summary, knownExploited: event.cves.some(cve => kev.has(cve)), url: event.url, advisories: [event.url], vendorFeed: true });
+      result.vulnerabilities.push({ id: event.cves[0] || event.title, score: event.score || (event.severity === 'CRITICAL' ? 9 : event.severity === 'HIGH' ? 7 : 0), label: event.severity, severity: event.severity, published: event.published, description: event.summary, aliases: event.cves, knownExploited: event.cves.some(cve => kev.has(cve)), url: event.url, advisories: [event.url], vendorFeed: true });
       result.vendorConfirmed = true;
     } else if (event.confidence === 'medium' && ((event.versions || []).some(version => version === versionLine || version.startsWith(`${versionLine}.`)) || /\ball (?:supported )?versions\b/i.test(`${event.title} ${event.summary}`))) {
       reviewAdvisories.push(event);
@@ -745,6 +769,7 @@ async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
       else if (!mapping && !feedErrors.length && !reviewAdvisories.length) { sourceOk = true; sourceLabel = 'OSV'; }
     }
   } catch (error) { sourceOk = false; result.packageAssessment = { configured: true, state: 'incomplete', inventories: [] }; result.reasons.push(`Package assessment unavailable: ${error.message}`); }
+  enrichKevFindings(result.vulnerabilities, kev, snapshot?.results?.find(item => item.id === app.id)?.vulnerabilities || []);
   const urgent = result.vulnerabilities.some(v => v.score >= 7 || v.knownExploited || ['HIGH', 'CRITICAL'].includes(v.severity));
   result.status = urgent || life.state === 'expired' ? 'red' : !sourceOk || life.state === 'unknown' ? 'unknown' : life.state === 'approaching' ? 'yellow' : 'green';
   if (result.status === 'green' && result.vulnerabilities.some(finding => finding.package)) result.status = result.vulnerabilities.some(finding => finding.package && finding.severity === 'UNKNOWN') ? 'unknown' : 'yellow';
@@ -766,13 +791,8 @@ async function refresh() {
     const workspaces = parseWorkspaces(await readFile(path.join(configDirectory, 'workspaces.yaml'), 'utf8'), apps, owners);
     const feeds = await readFeeds(feedFile);
     const feedCache = await collectFeeds(feeds, feedCacheFile, { onEvent: logger.feed });
-    let kev = new Set();
-    let kevError = null;
-    try {
-      if (!apps.length) return storeSnapshot({ checkedAt: new Date().toISOString(), results: [], workspaces, owners, warning: null, inventoryCount: 0 });
-      const data = await fetchJson('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json');
-      kev = new Set(data.vulnerabilities.map(v => v.cveID));
-    } catch (error) { logger.feed('error', 'CISA KEV unavailable', error.message); kevError = `CISA KEV unavailable: ${error.message}`; }
+    if (!apps.length) return storeSnapshot({ checkedAt: new Date().toISOString(), results: [], workspaces, owners, warning: null, inventoryCount: 0 });
+    const { kev, kevError } = await loadKevCatalog();
     const results = [];
     for (const app of apps) {
       const associatedFeeds = feeds.filter(feed => feed.enabled && feed.applicationIds.includes(app.id));
@@ -782,7 +802,7 @@ async function refresh() {
     }
     for (const app of results) {
       if (kevError) { app.reasons.push(kevError); if (app.status !== 'red') app.status = 'unknown'; }
-      else app.sources.push({ name: 'CISA Known Exploited Vulnerabilities', url: 'https://www.cisa.gov/known-exploited-vulnerabilities-catalog' });
+      else app.sources.push({ name: 'CISA Known Exploited Vulnerabilities', url: kevCatalogUrl, state: kev.state, checkedAt: kev.catalog?.checkedAt || '', attemptedAt: kev.attemptedAt });
     }
     const saved = await storeSnapshot({ checkedAt: new Date().toISOString(), results, workspaces, owners, feedSummary: { total: feeds.length, errors: Object.values(feedCache.feeds).filter(item => item.status === 'error').length }, warning: kevError, inventoryCount: apps.length });
     logger.log('info', 'Scan completed', `${results.length} applications; ${results.filter(app => app.status === 'unknown').length} unknown`);
@@ -809,15 +829,10 @@ async function refreshApplication(appId) {
     const feedCache = associatedFeeds.length ? await collectFeeds(associatedFeeds, feedCacheFile, { preserveUnlisted: true, onEvent: logger.feed }) : await readFeedCache();
     const associated = associatedFeeds.flatMap(feed => feedCache.feeds?.[feed.id]?.entries || []);
     const feedErrors = associatedFeeds.filter(feed => feedCache.feeds?.[feed.id]?.status === 'error').map(feed => `${feed.name}: ${feedCache.feeds[feed.id].error}`);
-    let kev = new Set();
-    let kevError = null;
-    try {
-      const data = await fetchJson('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json');
-      kev = new Set(data.vulnerabilities.map(item => item.cveID));
-    } catch (error) { logger.feed('error', 'CISA KEV unavailable', error.message); kevError = `CISA KEV unavailable: ${error.message}`; }
+    const { kev, kevError } = await loadKevCatalog();
     const result = await scanApp(app, kev, associated, feedErrors);
     if (kevError) { result.reasons.push(kevError); if (result.status !== 'red') result.status = 'unknown'; }
-    else result.sources.push({ name: 'CISA Known Exploited Vulnerabilities', url: 'https://www.cisa.gov/known-exploited-vulnerabilities-catalog' });
+    else result.sources.push({ name: 'CISA Known Exploited Vulnerabilities', url: kevCatalogUrl, state: kev.state, checkedAt: kev.catalog?.checkedAt || '', attemptedAt: kev.attemptedAt });
     const previousResults = snapshot.results || [];
     const results = previousResults.some(item => item.id === app.id) ? previousResults.map(item => item.id === app.id ? result : item) : [...previousResults, result];
     const saved = await storeSnapshot({ ...snapshot, checkedAt: new Date().toISOString(), results, workspaces, owners, inventoryCount: apps.length, feedSummary: { total: feeds.length, errors: Object.values(feedCache.feeds || {}).filter(item => item.status === 'error').length } });

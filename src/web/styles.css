@@ -62,3 +62,5 @@ html:not([data-theme="dark"]) .rail-foot code{color:#294657}
 #inventory-dialog .confirmation-fields .destructive{background:#b33238;border-color:#b33238;color:#fff}
 
 #licenses-dialog{width:min(900px,calc(100vw - 26px));max-height:90vh}#licenses-body{padding:20px 28px 28px;overflow:auto;max-height:calc(90vh - 90px)}#licenses-body pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:12px;line-height:1.6}#licenses-body details{border-top:1px solid #cbd9e1;padding:14px 0}#licenses-body summary{cursor:pointer;font-weight:700}#licenses-body a{color:#147c69}[data-theme="dark"] #licenses-body details{border-color:#405563}[data-theme="dark"] #licenses-body a{color:#74d9bf}
+
+.kev-evidence{padding:12px 14px;border:1px solid #cbd9e1;border-radius:8px;margin:14px 0}.kev-evidence h4{margin:0 0 8px}.kev-evidence dl{display:grid;grid-template-columns:minmax(120px,1fr) 1fr;gap:8px;font-size:12px}.kev-evidence dt{font-weight:700}.kev-evidence dd{margin:0}.kev-evidence p{max-height:none;overflow-wrap:anywhere}[data-theme="dark"] .kev-evidence{border-color:#405563}

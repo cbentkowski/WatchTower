@@ -127,6 +127,13 @@ export function reconcileFindingWorkflows(store, results, actor = { issuer: 'sca
       }
       if (record.evidenceFingerprint !== fingerprint) { record.evidenceFingerprint = fingerprint; changed = true; }
     }
+    if (finding.kev?.state === 'current') {
+      const status = Boolean(finding.knownExploited);
+      if (record.kevStatus !== undefined && record.kevStatus !== status) {
+        events.push({ at, type: 'finding-kev-status-changed', applicationId: application.id, findingId: finding.id, actor, from: record.kevStatus, to: status, source: finding.kev.sourceUrl, checkedAt: finding.kev.lastSuccessfulCheckAt });
+      }
+      if (record.kevStatus !== status) { record.kevStatus = status; changed = true; }
+    }
     finding.workflow = publicWorkflow(record);
     if (finding.package) {
       const { workflow, ...evidence } = finding;

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Show CISA KEV required actions, dates, catalog freshness, and verified status-change history for product and package findings, retaining stale evidence during feed outages.
 - Provide locally bundled full license notices through a shared footer and SBOM attribution dialog for all signed-in users.
 - Configure the SBOM upload limit in General settings, with a 35 MiB default, persistent settings, and upload errors that preserve the current inventory; support up to 50,000 components across supported SBOM formats.
 - Manage application images and SBOMs through the interface, with provenance, revision history, searchable components, grouped findings, and explicit image-reference mismatch handling.
