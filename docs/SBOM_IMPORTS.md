@@ -1,8 +1,9 @@
 # SBOM ingestion in Signal
 
-API-based image configuration and SBOM ingestion are part 2 of issue #90.
-Basic file import and active inventory metadata are available in application details.
-Image configuration and detailed inventory views follow in the interface part. Newly imported
+Image configuration, SBOM imports, provenance, revision history, and component
+browsing are available from Package inventory in application details and from
+Manage images and SBOMs in an existing application editor. New applications must
+be saved before images and SBOMs can be managed. Newly imported
 inventory is explicitly **awaiting assessment** and does not prove an application
 is clean. The [package assessment implementation](PACKAGE_ASSESSMENT.md) connects
 OSV queries and explicit inventory-only application configuration through the API.
@@ -58,6 +59,10 @@ Application Editors (including inherited workspace grants) may configure images
 and import SBOMs. Administrators have access. Permission Preview blocks mutations.
 
 - `GET /api/applications/<uuid>/inventory` returns images and revision metadata.
+- `GET /api/applications/<uuid>/inventory/revisions/<revision-uuid>/components`
+  returns up to 50 normalized components, total matches, and up to 200 dependency
+  relationships for that page. Optional `offset` and `q` search name, version, PURL,
+  supplier, or license. Both application access and revision ownership are checked.
 - `PUT /api/applications/<uuid>/images` accepts `{ "images": [...] }`. Each new
   image has `reference`, optional `label`, and optional `enabled`/`retired` booleans.
   Updates include the managed image IDs returned by the API and retain all previous

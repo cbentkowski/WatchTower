@@ -18,7 +18,10 @@ export async function assessApplicationInventory(app, store, client, kev, { now 
     const stale = !Number.isFinite(age) || age < -86400000 || age > maxAgeDays * 86400000;
     await onEvent('info', 'SBOM assessment started', `${app.name} (${app.id}), inventory ${inventory.id}: ${inventory.componentCount} inventory entries`);
     let assessment;
-    try { assessment = await client.assess(inventory, kev, { onEvent: (level, message, detail) => onEvent(level, message, `${app.name} (${app.id}), inventory ${inventory.id}: ${detail}`) }); }
+    try {
+      if (inventory.imageMismatch) throw new Error('Image reference changed since import; import a matching replacement SBOM');
+      assessment = await client.assess(inventory, kev, { onEvent: (level, message, detail) => onEvent(level, message, `${app.name} (${app.id}), inventory ${inventory.id}: ${detail}`) });
+    }
     catch (error) {
       const identities = inventory.components.map(component => ({ component, identity: osvPackage(component) }));
       const ignored = identities.filter(item => item.identity.ignored).map(({ component }) => ({ componentRef: component.componentRef, name: component.name, componentType: component.componentType }));

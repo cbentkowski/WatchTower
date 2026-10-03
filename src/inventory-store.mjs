@@ -36,6 +36,13 @@ export function createInventoryStore(directory) {
   }
   return {
     read,
+    readRevision: async (applicationId, revisionId) => {
+      inventoryScope(revisionId);
+      await pending.get(folder(applicationId))?.catch(() => {});
+      const state = await read(applicationId);
+      if (!state.revisions.some(revision => revision.id === revisionId)) throw new Error('Inventory revision not found');
+      return JSON.parse(await readFile(path.join(folder(applicationId), `${revisionId}.json`), 'utf8'));
+    },
     loadActive: async applicationId => {
       await pending.get(folder(applicationId))?.catch(() => {});
       const state = await read(applicationId);
@@ -44,6 +51,9 @@ export function createInventoryStore(directory) {
       for (const revision of state.revisions.filter(item => item.active && (item.scope.imageId === null || activeImages.has(item.scope.imageId)))) {
         inventoryScope(revision.id);
         const inventory = JSON.parse(await readFile(path.join(folder(applicationId), `${revision.id}.json`), 'utf8'));
+        const image = state.images.find(image => image.id === revision.scope.imageId);
+        const importedReference = inventory.imageReferenceAtImport || revision.imageReferenceAtImport;
+        inventory.imageMismatch = Boolean(image && importedReference && image.reference !== importedReference);
         try { inventory.previousAssessment = JSON.parse(await readFile(path.join(folder(applicationId), `${revision.id}-assessment.json`), 'utf8')); }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
         inventories.push(inventory);
@@ -63,6 +73,7 @@ export function createInventoryStore(directory) {
     }),
     setImages: (applicationId, images, actor = {}) => update(applicationId, state => {
       const previous = state.images;
+      for (const revision of state.revisions) if (revision.scope.imageId && !revision.imageReferenceAtImport) revision.imageReferenceAtImport = previous.find(image => image.id === revision.scope.imageId)?.reference || null;
       state.images = reconcileImages(images, previous).map(image => image.retired && !previous.find(old => old.id === image.id)?.retired ? { ...image, retiredAt: new Date().toISOString(), retiredBy: actor } : image);
       return state;
     }),
@@ -70,6 +81,7 @@ export function createInventoryStore(directory) {
       const inventory = await processSbom(raw);
       const imageId = selectInventoryImage(inventory, state.images, selection);
       const revision = { ...inventory, ...createInventoryRevision(inventoryScope(applicationId, imageId), inventory), uploader: actor };
+      revision.imageReferenceAtImport = state.images.find(image => image.id === imageId)?.reference || null;
       for (const old of state.revisions) if (old.scope.imageId === imageId && old.active) { old.active = false; old.supersededBy = revision.id; old.supersededAt = revision.importedAt; revision.replacesRevisionId = old.id; }
       await atomic(path.join(folder(applicationId), `${revision.id}.json`), revision);
       const { components, dependencies, supplierEvidence, ...metadata } = revision;

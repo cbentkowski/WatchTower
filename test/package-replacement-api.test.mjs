@@ -69,6 +69,19 @@ test('replacement demos preserve responses across failure, upgrade, rollback, re
     const imageState = await request(base + '/images', 'PUT', { images: [{ reference: 'docker.io/test/app:1', label: 'Web' }] });
     const image = imageState.images[0]; await upload(before, image.id);
     const scoped = await refresh(); assert.equal(scoped.vulnerabilities.length, 4);
+    const imageRevision = (await request(base + '/inventory')).revisions.find(revision => revision.active && revision.scope.imageId === image.id);
+    assert.equal(imageRevision.imageReferenceAtImport, image.reference);
+    const componentPage = await request(base + '/inventory/revisions/' + imageRevision.id + '/components?q=lodash');
+    assert.equal(componentPage.total, 1); assert.equal(componentPage.components[0].name, 'lodash');
+    await request(base + '/images', 'PUT', { images: [{ ...image, reference: 'docker.io/test/app:2' }] });
+    const mismatch = await refresh();
+    assert.equal(mismatch.packageAssessment.state, 'incomplete');
+    assert.ok(mismatch.vulnerabilities.filter(item => item.package.imageId === image.id).every(item => item.evidenceState === 'unverified'));
+    assert.ok(mismatch.reasons.some(reason => reason.includes('package entries checked')));
+    await request(base + '/images', 'PUT', { images: [{ ...image, enabled: false }] });
+    assert.ok((await refresh()).vulnerabilities.some(item => item.package.imageId === image.id && item.evidenceState === 'unverified'));
+    await request(base + '/images', 'PUT', { images: [image] });
+    assert.ok((await refresh()).vulnerabilities.filter(item => item.package.imageId === image.id).every(item => item.evidenceState === 'current'));
     const retiredState = await request(base + '/images', 'PUT', { images: [{ ...image, retired: true }] });
     assert.ok(retiredState.images[0].retiredAt); assert.ok(retiredState.images[0].retiredBy);
     const retired = await refresh();
@@ -77,5 +90,15 @@ test('replacement demos preserve responses across failure, upgrade, rollback, re
     assert.ok(retired.vulnerabilities.every(item => item.package.imageId === null));
     const rejection = await fetch(origin + base + '/images', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ images: [{ ...image, retired: false }] }) });
     assert.equal(rejection.status, 400);
+    const otherApp = await request('/api/applications', 'POST', { name: 'Browse inventory', version: '1', assessmentMode: 'inventory', eolDate: '2030-01-01' });
+    const many = { ...before, components: Array.from({ length: 70 }, (_, index) => ({ type: 'library', name: 'component-' + index, version: '1', purl: 'pkg:npm/component-' + index + '@1', 'bom-ref': 'ref-' + index })) };
+    const manyRevision = await request('/api/applications/' + otherApp.id + '/sboms', 'POST', { sbom: JSON.stringify(many), imageId: null });
+    const browseRoute = '/api/applications/' + otherApp.id + '/inventory/revisions/' + manyRevision.id + '/components';
+    assert.equal((await request(browseRoute)).components.length, 50);
+    assert.equal((await request(browseRoute + '?offset=50')).components.length, 20);
+    assert.equal((await request(browseRoute + '?q=component-69')).total, 1);
+    const foreign = await fetch(origin + base + '/inventory/revisions/' + manyRevision.id + '/components');
+    assert.equal(foreign.status, 404);
+    assert.equal((await fetch(origin + browseRoute + '?offset=-1')).status, 400);
   } finally { await stop(); await rm(directory, { recursive: true, force: true }); }
 });

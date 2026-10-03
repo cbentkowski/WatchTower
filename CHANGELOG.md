@@ -4,6 +4,7 @@
 
 ### Added
 
+- Manage application images and SBOMs through the interface, with provenance, revision history, searchable components, grouped findings, and explicit image-reference mismatch handling.
 - Reconcile replacement SBOMs and retired images with package findings, preserving responses and resolved history while retaining incomplete evidence as unverified.
 - Provide Before and After test SBOM downloads and a resolved package finding history view in application details.
 

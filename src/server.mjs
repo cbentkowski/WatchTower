@@ -1339,6 +1339,28 @@ const requestHandler = async (req, res) => {
       await logger.audit('Application removed', auditActor(req), { type: 'application', id: app.id, name: app.name }, changes, `${app.name} (${app.id}); removed from ${affectedWorkspaces.length} workspaces and ${affectedFeeds.length} feeds; finding workflow records preserved`);
       res.writeHead(204); res.end(); return;
     }
+    const componentRoute = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/inventory\/revisions\/([0-9a-f-]+)\/components$/i);
+    if (componentRoute && req.method === 'GET') {
+      const { access, apps } = await authorization(req);
+      const applicationId = componentRoute[1];
+      if (!access.appView.has(applicationId)) { forbidden(res); return; }
+      if (!apps.some(app => app.id === applicationId)) throw new Error('Application not found');
+      const offset = Number(url.searchParams.get('offset') || 0);
+      const q = (url.searchParams.get('q') || '').trim().toLowerCase();
+      if (!Number.isInteger(offset) || offset < 0 || offset > sbomLimits.components || q.length > 200) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Invalid component search' })); return; }
+      let revision;
+      try { revision = await inventoryStore.readRevision(applicationId, componentRoute[2]); }
+      catch (error) {
+        if (error.message !== 'Inventory revision not found') throw error;
+        res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Inventory revision not found' })); return;
+      }
+      const filtered = revision.components.filter(component => !q || [component.name, component.version, component.purl, component.supplier, ...(component.licenses || [])].join(' ').toLowerCase().includes(q));
+      const components = filtered.slice(offset, offset + 50);
+      const refs = new Set(components.map(component => component.componentRef));
+      const dependencies = (revision.dependencies || []).filter(edge => refs.has(edge.from) || refs.has(edge.to)).slice(0, 200);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ revisionId: revision.id, total: filtered.length, offset, components, dependencies, dependencyCount: (revision.dependencies || []).length })); return;
+    }
     const inventoryRoute = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/(inventory|images|sboms)$/i);
     if (inventoryRoute && ['GET', 'PUT', 'POST'].includes(req.method)) {
       const applicationId = inventoryRoute[1];

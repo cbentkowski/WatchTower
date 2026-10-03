@@ -172,8 +172,8 @@ Replacement uploads now preserve resolved finding history. See
 10. Confirm existing product applications, CPE selection, edits, scoped refresh,
    and dialog scrolling still work.
 
-The demo contains inventory data, not software to install. Image configuration
-and full inventory management follow in the interface slice.
+The demo contains inventory data, not software to install. Image configuration, provenance, revision history and paged component browsing are
+available through Package inventory. See [inventory management](INVENTORY_UI.md).
 
 Sources: [OSV batch API](https://google.github.io/osv.dev/post-v1-querybatch/),
 [OSV advisory retrieval](https://google.github.io/osv.dev/get-v1-vulns/).

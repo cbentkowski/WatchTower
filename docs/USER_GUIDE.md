@@ -310,5 +310,7 @@ without a CPE. Supply a lifecycle source or manual end-of-life date. Open the
 application and choose **Package inventory** under Assessment to import SPDX JSON
 2.2 or 2.3, SPDX JSON-LD 3.0 or 3.0.1, or CycloneDX JSON 1.4 through 1.7, then use **Refresh application** to assess its packages.
 Application Editors can import; viewers can inspect active inventory metadata.
+The dialog also manages container images, shows SBOM provenance and revision history,
+and browses normalized components. See [inventory management](INVENTORY_UI.md).
 The dialog provides a downloadable demo SBOM for testing. See
 [package assessment](PACKAGE_ASSESSMENT.md) for coverage, privacy, and testing details.
