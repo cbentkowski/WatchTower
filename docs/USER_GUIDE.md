@@ -87,14 +87,14 @@ failures or incomplete evidence.
 Application details start at the top when opened. Refreshing an already open
 dialog preserves its scroll position.
 
-Signal's intermediate SBOM ingestion APIs and supported formats are described in
-[SBOM imports](SBOM_IMPORTS.md); upload controls and package assessment follow in
-later work.
+Signal's SBOM ingestion APIs and supported formats are described in
+[SBOM imports](SBOM_IMPORTS.md). The [inventory interface](INVENTORY_UI.md) manages
+images, imports, provenance, component browsing, and revision history.
 
 [Package assessment](PACKAGE_ASSESSMENT.md) now connects imported inventories to
 OSV on refresh. Package findings show the exact installed component and advisory;
-unsupported or failed evidence remains incomplete. Upload/management controls
-will follow in the final interface part.
+unsupported or failed evidence remains incomplete. Application Editors manage
+images and SBOMs from Package inventory or the application editor.
 
 Administrators manage reusable contacts from **Owners**. Each owner requires a name and unique email address and may include an escalation email. Editing an owner updates its contact information everywhere that owner is assigned. An owner cannot be removed while any application or workspace still references it.
 

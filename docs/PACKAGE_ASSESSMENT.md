@@ -78,7 +78,8 @@ Missing SBOMs on enabled images, an empty inventory, unsupported components,
 stale inventories, and failed lookups remain incomplete/unknown. Previously
 reported findings for the same revision are retained as unverified when a lookup
 is incomplete. No finding is resolved merely because a lookup failed or omitted
-evidence; explicit replacement/removal reconciliation follows in part 4.
+evidence. Fresh complete assessments reconcile replacements and retired images
+as described in [inventory reconciliation](INVENTORY_RECONCILIATION.md).
 
 `SBOM_MAX_AGE_DAYS` defaults to 30 and accepts integers from 1 to 3650. Freshness
 uses generation time when supplied, otherwise import time (with the basis exposed

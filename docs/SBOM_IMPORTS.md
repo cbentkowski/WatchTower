@@ -89,8 +89,8 @@ and image scopes remain independent. Import does not modify finding responses. T
 replaced inventory as described in [replacement and retirement](INVENTORY_RECONCILIATION.md).
 Retention controls remain later work.
 
-Back up this folder with the rest of the data directory. Image configuration in
-this intermediate build is stored here rather than in `applications.yaml`.
+Back up this folder with the rest of the data directory. Image configuration is
+stored here rather than in `applications.yaml`.
 
 ## Manual checks for this PR build
 
