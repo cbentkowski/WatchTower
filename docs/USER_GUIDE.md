@@ -2,6 +2,8 @@
 
 This guide explains how to configure and operate WatchTower through its web interface. The options visible to a user depend on administrator status and delegated access grants.
 
+Screenshots in this guide show **0.10.0** with fictional demo data. See the [complete screenshot gallery](SCREENSHOTS.md) for additional pages and both themes. Use the upper-right theme switch to choose dark or light mode.
+
 ## Contents
 
 - [First sign-in](#first-sign-in)
@@ -35,6 +37,8 @@ For a new installation:
 
 ## Dashboard and status
 
+![Application inventory and status filters in dark mode](images/0.10.0/inventory-dark.jpg)
+
 The Overview page summarizes monitored applications. Named workspaces restrict the view to their assigned applications, while All Applications shows the complete visible inventory.
 
 Select a status card to filter the current list. Selecting more than one status combines them, and selecting a card again removes that filter.
@@ -50,7 +54,13 @@ Select an application row to open a wide application workspace with ownership, l
 
 Application Editors can select **Update response** on a finding to record its state as New, Investigating, Remediation planned, Mitigated, Resolved, Risk accepted, Not affected, or False positive. A response can also include an assignee, due date, notes, an optional expiration for Risk accepted, and an external ticket reference. Enter a plain ticket number for systems without a web interface or when the tracking system should not be disclosed, or enter an HTTPS link when direct navigation is appropriate. Ticket references appear in application details and alert emails; only HTTPS references become links. WatchTower records the actor and timestamps in audit and finding history. Expired risk acceptance or changed vulnerability evidence automatically returns a completed disposition to New for review.
 
+![Application details and vulnerability findings](images/0.10.0/application-details-dark.jpg)
+
+![Finding response dialog with disposition and tracking fields](images/0.10.0/finding-response-dark.jpg)
+
 ## Applications
+
+![Application editor with product mappings and risk context](images/0.10.0/application-editor-dark.jpg)
 
 ### Add an application
 
@@ -74,6 +84,8 @@ Review the CPE and lifecycle mappings whenever the product name, edition, releas
 
 ## Owners and application context
 
+![Reusable owner directory in light mode](images/0.10.0/owners-light.jpg)
+
 Administrators manage reusable contacts from **Owners**. Each owner requires a name and unique email address and may include an escalation email. Editing an owner updates its contact information everywhere that owner is assigned. An owner cannot be removed while any application or workspace still references it.
 
 Application Editors and Workspace Notification Managers can create an owner from the owner-selection dialog and immediately assign it to the resource they are editing. They cannot edit or remove directory entries unless they are administrators. If the email already belongs to an owner, WatchTower prevents the duplicate and directs the user to select the existing owner.
@@ -88,6 +100,8 @@ Application Editors can assign configured owners and maintain the application co
 Existing applications receive conservative defaults during startup migration: unspecified criticality and environment, unknown exposure, and no owners or tags. Ownership and context appear in application details and are covered by the same visibility and editing permissions as the application. Owner-directory changes and application-context changes are recorded in the audit log; contact values are not copied into audit entries.
 
 ## CPE vulnerability mappings
+
+![Parsed CPE components and mapping modes](images/0.10.0/cpe-mapping-dark.jpg)
 
 The CPE dialog maps an application to the product identifiers used by NVD.
 
@@ -177,6 +191,8 @@ Edit a workspace and choose one or more owners. WatchTower sends workspace notif
 
 ### Configure notification policies
 
+![Notification policy match conditions](images/0.10.0/notification-policy-dark.jpg)
+
 Notification policies decide which vulnerability findings enter the delivery flow. Open **Settings > Notification policies** to review the migrated defaults, add a policy, or edit an existing policy.
 
 An empty multi-select means **Any** and does not restrict that field. For example, leaving Environment empty includes findings from every environment; selecting Production and Staging limits it to either of those environments. Values selected within one field use OR: selecting High and Critical matches either severity. Different populated fields use AND: a policy with Critical severity, Production environment, and Internet exposure matches only findings satisfying all three conditions. Multiple enabled policies can independently match the same finding without creating duplicate application cards in one workspace message. A policy must contain at least one condition, so every field cannot be left unrestricted.
@@ -203,11 +219,15 @@ Acknowledgement links require confirmation. Acknowledging an application stops r
 
 ## General settings
 
+![WatchTower 0.10.0 general and delivery settings](images/0.10.0/settings-dark.jpg)
+
 Open **Settings > General** and configure the public protocol, hostname, and web port used in notification links. These values must describe the address recipients can reach, which may differ from the container's internal listener.
 
 When WatchTower is behind a reverse proxy, use the public HTTPS hostname and port. Saving an incorrect address can produce unusable email links.
 
 ## Access control
+
+![Draft identity mapping and workspace-viewer grant](images/0.10.0/access-control-dark.jpg)
 
 Administrators use **Access Control** to map exact identity-provider claims to WatchTower roles.
 
