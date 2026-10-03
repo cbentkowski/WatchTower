@@ -3,3 +3,4 @@ general:
   protocol: ""
   host: ""
   port: ""
+  sbomUploadLimitMiB: 35

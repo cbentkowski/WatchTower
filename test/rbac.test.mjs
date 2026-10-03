@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateAccess, canCreateOwner, canDeleteApplication, describeIdentityClaims, explainAccess, protectedRoleState, validateRbacInput } from '../src/rbac.mjs';
+import { calculateAccess, canCreateOwner, canDeleteApplication, canRefreshApplication, describeIdentityClaims, explainAccess, protectedRoleState, validateRbacInput } from '../src/rbac.mjs';
 
 const appA = { id: '11111111-1111-4111-8111-111111111111', name: 'Jira' };
 const appB = { id: '22222222-2222-4222-8222-222222222222', name: 'GitLab' };
@@ -8,6 +8,20 @@ const workspace = { id: '33333333-3333-4333-8333-333333333333', name: 'Infrastru
 const groupId = '44444444-4444-4444-8444-444444444444';
 const grantId = '55555555-5555-4555-8555-555555555555';
 const feed = { id: '66666666-6666-4666-8666-666666666666', name: 'Istio News' };
+
+test('application refresh accepts scoped editors and visible scan-operator access only', () => {
+  const accessFor = grants => calculateAccess({ claims: { groups: ['group'] } }, { groups: [{ id: groupId, claimSource: 'groups', claimValue: 'group', enabled: true }], grants: grants.map(grant => ({ ...grant, groupId })) }, [appA, appB], [workspace], [feed]);
+  const editor = accessFor([{ scopeType: 'application', roles: ['application-editor'], resourceIds: [appA.id] }]);
+  assert.equal(canRefreshApplication(editor, appA.id), true);
+  assert.equal(canRefreshApplication(editor, appB.id), false);
+  const scanner = accessFor([{ scopeType: 'global', roles: ['scan-operator'], resourceIds: [] }, { scopeType: 'application', roles: ['application-viewer'], resourceIds: [appA.id] }]);
+  assert.equal(canRefreshApplication(scanner, appA.id), true);
+  assert.equal(canRefreshApplication(scanner, appB.id), false);
+  assert.equal(canRefreshApplication(accessFor([{ scopeType: 'application', roles: ['application-viewer'], resourceIds: [appA.id] }]), appA.id), false);
+  const workspaceEditor = accessFor([{ scopeType: 'workspace', roles: ['workspace-application-editor'], resourceIds: [workspace.id] }]);
+  assert.equal(canRefreshApplication(workspaceEditor, appB.id), true);
+  assert.equal(canRefreshApplication(accessFor([{ scopeType: 'feed', roles: ['feed-editor'], resourceIds: [feed.id] }]), appA.id), false);
+});
 
 test('one workspace grant combines multiple roles and applies to every application in the workspace', () => {
   const config = validateRbacInput({

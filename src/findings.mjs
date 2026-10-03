@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { reconcilePackageFinding } from './package-findings.mjs';
+import { packageEvidenceFingerprint } from './package-assessment.mjs';
+import { reconcilePackageLifecycle } from './package-lifecycle.mjs';
 
 export const findingStates = Object.freeze(['new', 'investigating', 'remediation-planned', 'mitigated', 'resolved', 'risk-accepted', 'not-affected', 'false-positive']);
 export const findingStateLabels = Object.freeze({ new: 'New', investigating: 'Investigating', 'remediation-planned': 'Remediation planned', mitigated: 'Mitigated', resolved: 'Resolved', 'risk-accepted': 'Risk accepted', 'not-affected': 'Not affected', 'false-positive': 'False positive' });
@@ -27,6 +30,7 @@ const ticketReference = value => {
 };
 export const findingKey = (applicationId, findingId) => `${applicationId}:${findingId}`;
 export function evidenceFingerprint(finding) {
+  if (finding.package) return packageEvidenceFingerprint(finding);
   const evidence = { id: finding.id, score: Number(finding.score) || 0, severity: finding.severity || finding.label || '', knownExploited: Boolean(finding.knownExploited), url: finding.url || '', advisories: [...(finding.advisories || [])].sort() };
   return createHash('sha256').update(JSON.stringify(evidence)).digest('hex');
 }
@@ -42,7 +46,7 @@ export function validateFindingUpdate(input = {}) {
 export async function readFindingStore(file) {
   try {
     const parsed = JSON.parse(await readFile(file, 'utf8'));
-    return { version: 1, records: parsed?.records && typeof parsed.records === 'object' ? parsed.records : {} };
+    return { version: 1, records: parsed?.records && typeof parsed.records === 'object' ? parsed.records : {}, packageFindings: Array.isArray(parsed?.packageFindings) ? parsed.packageFindings : [] };
   } catch (error) { if (error.code === 'ENOENT') return { version: 1, records: {} }; throw error; }
 }
 export async function writeFindingStore(file, store) {
@@ -78,6 +82,19 @@ export function reconcileFindingWorkflows(store, results, actor = { issuer: 'sca
   const events = [];
   let changed = false;
   for (const application of results) for (const finding of application.vulnerabilities || []) {
+    if (finding.package) {
+      const identity = reconcilePackageFinding(store, { ...finding.package, applicationId: application.id, advisoryId: finding.advisoryId, aliases: finding.aliases });
+      if (identity.status === 'ambiguous') {
+        finding.identity = identity;
+        finding.id = `ambiguous-${identity.findingIds.join('-')}`;
+        if (application.status !== 'red') application.status = 'unknown';
+        if (application.reasons) application.reasons.push('Package advisory aliases connect multiple response records; identity review required');
+        delete finding.workflow;
+        continue;
+      }
+      finding.id = identity.findingId;
+      changed ||= identity.changed;
+    }
     const key = findingKey(application.id, finding.id);
     const fingerprint = evidenceFingerprint(finding);
     let record = store.records[key];
@@ -86,6 +103,15 @@ export function reconcileFindingWorkflows(store, results, actor = { issuer: 'sca
       events.push({ at, type: 'finding-discovered', applicationId: application.id, findingId: finding.id, actor, state: 'new' });
       changed = true;
     } else {
+      if (record.inventoryResolution && finding.evidenceState === 'current' && application.inventoryLifecycle) {
+        const resolution = record.inventoryResolution;
+        record.state = 'new'; record.riskExpiration = '';
+        record.reopenedAt = at; record.reopenedReason = 'Package finding reported again after inventory resolution';
+        record.updatedAt = at; record.updatedBy = actor;
+        delete record.inventoryResolution;
+        events.push({ at, type: 'finding-reopened', applicationId: application.id, findingId: finding.id, actor, from: 'resolved', to: 'new', reason: record.reopenedReason, previousResolution: resolution });
+        changed = true;
+      }
       const evidenceChanged = Boolean(record.evidenceFingerprint && record.evidenceFingerprint !== fingerprint);
       const expired = record.state === 'risk-accepted' && record.riskExpiration && record.riskExpiration < today;
       if ((evidenceChanged && dispositions.has(record.state)) || expired) {
@@ -102,7 +128,14 @@ export function reconcileFindingWorkflows(store, results, actor = { issuer: 'sca
       if (record.evidenceFingerprint !== fingerprint) { record.evidenceFingerprint = fingerprint; changed = true; }
     }
     finding.workflow = publicWorkflow(record);
+    if (finding.package) {
+      const { workflow, ...evidence } = finding;
+      if (JSON.stringify(record.packageEvidence) !== JSON.stringify(evidence)) { record.packageEvidence = structuredClone(evidence); changed = true; }
+    }
   }
+  const lifecycle = reconcilePackageLifecycle(store, results, publicWorkflow, actor, at);
+  changed ||= lifecycle.changed;
+  events.push(...lifecycle.events);
   return { changed, events };
 }
 export function updateFindingWorkflow(store, applicationId, findingId, input, actor, now = new Date()) {

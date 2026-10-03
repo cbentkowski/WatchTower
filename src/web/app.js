@@ -53,6 +53,13 @@ const safeUrl = (url) => { try { const u = new URL(url); return u.protocol === '
 const safeTicketUrl = value => { try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password ? url.href : '#'; } catch { return '#'; } };
 const ticketReferenceMarkup = reference => { const href = safeTicketUrl(reference); const value = href === '#' ? `<strong>${escape(reference)}</strong>` : `<a href="${href}" target="_blank" rel="noopener noreferrer">Open external ticket ↗</a>`; return `<div class="finding-ticket-display"><span>TICKET</span>${value}</div>`; };
 const labels = { red: 'Needs action', yellow: 'Approaching EOL', green: 'Clear', unknown: 'Unknown' };
+function dashboardStatus(app) {
+  const checkedPackages = app.packageAssessment?.inventories?.some(inventory => inventory.assessedComponentCount > 0);
+  if (app.status === 'unknown' && !app.vulnerabilities.length && checkedPackages) {
+    return '<span class="badge unknown"><i></i>No findings</span><span class="vendor">' + (app.packageAssessment.state === 'assessed' ? 'Assessment incomplete' : 'Partial coverage') + '</span>';
+  }
+  return '<span class="badge ' + escape(app.status) + '"><i></i>' + escape(labels[app.status] || 'Unknown') + '</span>';
+}
 function setTheme(theme) {
   document.documentElement.dataset.theme = theme;
   try { localStorage.setItem('dashboard-theme', theme); } catch {}
@@ -164,7 +171,7 @@ function renderView() {
     $('rows').innerHTML = group ? activeFilters ? '<tr><td colspan="6" class="empty"><div class="empty-mark">◇</div><strong>No applications match</strong><p>Select Monitored Applications to show the full workspace.</p></td></tr>' : '<tr><td colspan="6" class="empty"><div class="empty-mark">◇</div><strong>No applications in this workspace</strong><p>Add application IDs to this group in <code>config/workspaces.yaml</code>, then refresh.</p></td></tr>' : '<tr><td colspan="6" class="empty"><div class="empty-mark">◇</div><strong>Nothing needs action</strong><p>Applications with high risk findings or past end of life will appear here.</p></td></tr>';
     return;
   }
-  $('rows').innerHTML = results.map((a, i) => `<tr data-index="${i}" tabindex="0" aria-label="Review ${escape(a.name)}"><td><strong>${escape(a.name)}</strong><span class="vendor">${escape(a.vendor || a.cpeVendor)}</span></td><td class="mono">${escape(a.version)}</td><td>${escape(a.lifecycle?.note || 'Unknown')}</td><td>${a.vulnerabilities.length ? `<strong class="finding">${a.vulnerabilities.length} ${a.vendorConfirmed ? 'vendor' : 'possible'} finding${a.vulnerabilities.length === 1 ? '' : 's'}</strong>` : '<span class="muted">None found</span>'}<span class="vendor">${escape(a.assessmentSource || 'NVD')}</span></td><td><span class="badge ${a.status}"><i></i>${labels[a.status]}</span></td><td class="chevron">›</td></tr>`).join('');
+  $('rows').innerHTML = results.map((a, i) => `<tr data-index="${i}" tabindex="0" aria-label="Review ${escape(a.name)}"><td><strong>${escape(a.name)}</strong><span class="vendor">${escape(a.vendor || a.cpeVendor)}</span></td><td class="mono">${escape(a.version)}</td><td>${escape(a.lifecycle?.note || 'Unknown')}</td><td>${a.vulnerabilities.length ? `<strong class="finding">${a.vulnerabilities.length} ${a.vendorConfirmed ? 'vendor' : 'possible'} finding${a.vulnerabilities.length === 1 ? '' : 's'}</strong>` : '<span class="muted">None found</span>'}<span class="vendor">${escape(a.assessmentSource || 'NVD')}</span></td><td>${dashboardStatus(a)}</td><td class="chevron">›</td></tr>`).join('');
   for (const row of $('rows').querySelectorAll('[data-index]')) {
     const open = () => showDetails(results[Number(row.dataset.index)]);
     row.addEventListener('click', open);
@@ -582,6 +589,7 @@ async function loadSettings() {
     form.querySelector('[name="protocol"]').value = general.protocol;
     form.querySelector('[name="publicHost"]').value = general.host;
     form.querySelector('[name="publicPort"]').value = general.port;
+    form.querySelector('[name="sbomUploadLimitMiB"]').value = data.general?.sbomUploadLimitMiB ?? 35;
     form.querySelector(`[name="transportSecurity"][value="${data.smtp.secure ? 'tls' : data.smtp.requireTls ? 'starttls' : 'none'}"]`).checked = true;
     updateCredentialFields();
     showEnvironmentStatus(data);
@@ -595,10 +603,11 @@ async function saveSettings(event) {
   const fields = new FormData(form);
   const payload = Object.fromEntries(fields);
   delete payload.testRecipient;
-  const general = { protocol: payload.protocol, host: payload.publicHost, port: Number(payload.publicPort) };
+  const general = { protocol: payload.protocol, host: payload.publicHost, port: Number(payload.publicPort), sbomUploadLimitMiB: Number(payload.sbomUploadLimitMiB) };
   delete payload.protocol;
   delete payload.publicHost;
   delete payload.publicPort;
+  delete payload.sbomUploadLimitMiB;
   delete payload.transportSecurity;
   const security = form.querySelector('[name="transportSecurity"]:checked')?.value;
   payload.secure = security === 'tls';
@@ -757,13 +766,25 @@ function render(data) {
   renderView();
 }
 
+function packageContext(finding) {
+  const pkg = finding.package;
+  return `<p class="detail-note"><strong>Package:</strong> ${escape(pkg.name)} ${escape(pkg.version)} · ${pkg.imageId ? `Image ${escape(pkg.imageId)}` : 'Application inventory'}<br><code>${escape(pkg.purl)}</code>${pkg.location ? `<br>Location: ${escape(pkg.location)}` : ''}${['unverified', 'inventory-stale'].includes(finding.evidenceState) ? '<br>Previously reported; current evidence could not be verified.' : ''}${finding.identity?.status === 'ambiguous' ? '<br>Advisory identity requires review; response editing is unavailable.' : ''}</p>`;
+}
+
 function showDetails(a) {
+  const opening = !$('details').open || detailAppId !== a.id;
+  const scroll = $('details').scrollTop;
+  const bodyScroll = $('detail-body').scrollTop;
   detailAppId = a.id;
   $('detail-name').textContent = a.name;
   $('detail-kicker').textContent = `${a.version} · ${labels[a.status].toUpperCase()}`;
   $('edit-app').hidden = !(isAdmin || permissions.applications.edit.includes(a.id));
+  $('refresh-app').hidden = !(isAdmin || permissions.applications.edit.includes(a.id) || (permissions.scan && permissions.applications.view.includes(a.id)));
+  if (opening) $('detail-refresh-message').hidden = true;
   const canEditFindings = isAdmin || permissions.applications.edit.includes(a.id);
-  const findings = a.vulnerabilities.length ? a.vulnerabilities.map(v => { const workflow = v.workflow || { state: 'new', stateLabel: 'New' }; return `<article class="vuln finding-card" data-finding-id="${escape(v.id)}"><div class="vuln-top"><div><a href="${safeUrl(v.url)}" target="_blank" rel="noopener noreferrer">${escape(v.id)} ↗</a><span class="finding-state state-${escape(workflow.state)}">${escape(workflow.stateLabel)}</span></div><span class="badge ${v.knownExploited ? 'red' : 'yellow'}">${v.knownExploited ? 'Known exploited' : `${v.label} · ${v.score}`}</span></div><div class="finding-card-grid"><div class="finding-evidence"><p>${escape(v.description)}</p>${(v.advisories || []).map(url => `<a class="source" href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer">Vendor advisory ↗</a>`).join('')}</div><div class="finding-workflow-summary"><span>ASSIGNEE<strong>${escape(workflow.assignee || 'Unassigned')}</strong></span><span>DUE DATE<strong>${escape(workflow.dueDate || 'Not set')}</strong></span>${workflow.riskExpiration ? `<span>RISK EXPIRES<strong>${escape(workflow.riskExpiration)}</strong></span>` : ''}${workflow.ticketReference ? ticketReferenceMarkup(workflow.ticketReference) : ''}${workflow.notes ? `<p>${escape(workflow.notes)}</p>` : ''}${workflow.reopenedReason ? `<p class="form-error">Reopened: ${escape(workflow.reopenedReason)}</p>` : ''}${canEditFindings ? `<button type="button" class="finding-edit">Update response</button>` : ''}</div></div></article>`; }).join('') : `<p class="muted">No high or critical CVEs found for this version in ${escape(a.assessmentSource || 'the current source')}.</p>`;
+  const findingScope = v => !v.package ? 'Product findings' : v.package.imageId || 'Application inventory';
+  let lastFindingScope = null;
+  const findings = a.vulnerabilities.length ? [...a.vulnerabilities].sort((left, right) => findingScope(left).localeCompare(findingScope(right))).map(v => { const scope = findingScope(v); const heading = scope !== lastFindingScope ? '<h4>' + escape(v.package?.imageId ? a.packageAssessment?.inventories?.find(item => item.imageId === v.package.imageId)?.scopeLabel || 'Image ' + v.package.imageId : scope) + '</h4>' : ''; lastFindingScope = scope; const workflow = v.workflow || { state: 'new', stateLabel: 'New' }; return heading + `<article class="vuln finding-card" data-finding-id="${escape(v.id)}"><div class="vuln-top"><div><a href="${safeUrl(v.url)}" target="_blank" rel="noopener noreferrer">${escape(v.advisoryId || v.id)} ↗</a><span class="finding-state state-${escape(workflow.state)}">${escape(workflow.stateLabel)}</span></div><span class="badge ${v.knownExploited ? 'red' : 'yellow'}">${v.knownExploited ? 'Known exploited' : `${v.label} · ${v.score ?? "Not scored"}`}</span></div><div class="finding-card-grid"><div class="finding-evidence">${v.package ? packageContext(v) : ""}<p>${escape(v.description)}</p>${(v.advisories || []).map(url => `<a class="source" href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer">Vendor advisory ↗</a>`).join('')}</div><div class="finding-workflow-summary"><span>ASSIGNEE<strong>${escape(workflow.assignee || 'Unassigned')}</strong></span><span>DUE DATE<strong>${escape(workflow.dueDate || 'Not set')}</strong></span>${workflow.riskExpiration ? `<span>RISK EXPIRES<strong>${escape(workflow.riskExpiration)}</strong></span>` : ''}${workflow.ticketReference ? ticketReferenceMarkup(workflow.ticketReference) : ''}${workflow.notes ? `<p>${escape(workflow.notes)}</p>` : ''}${workflow.reopenedReason ? `<p class="form-error">Reopened: ${escape(workflow.reopenedReason)}</p>` : ''}${canEditFindings && !v.identity ? `<button type="button" class="finding-edit">Update response</button>` : ''}</div></div></article>`; }).join('') : `<p class="muted">No findings reported by ${escape(a.assessmentSource || 'the current source')}. Review assessment warnings for coverage and incomplete evidence.</p>`;
   const upgrade = a.upgrades || {};
   const releaseLink = upgrade.sourceUrl ? `<a href="${safeUrl(upgrade.sourceUrl)}" target="_blank" rel="noopener noreferrer">Release source ↗</a>` : '';
   const containing = workspaces.filter(group => group.applications.includes(a.id));
@@ -772,8 +793,48 @@ function showDetails(a) {
   const ownership = assignedOwners.length ? assignedOwners.map(owner => `<article class="owner-contact"><strong>${escape(owner.name)}</strong><span>Email: ${escape(owner.email)}</span>${owner.escalationEmail ? `<span>Escalation: ${escape(owner.escalationEmail)}</span>` : ''}</article>`).join('') : '<p class="muted">No owner assigned.</p>';
   const context = `<div class="detail-grid context-grid"><div><span>CRITICALITY</span><strong>${escape(a.criticality || 'unspecified')}</strong></div><div><span>ENVIRONMENT</span><strong>${escape(a.environment || 'unspecified')}</strong></div><div><span>EXPOSURE</span><strong>${escape(a.exposure || 'unknown')}</strong></div><div><span>TAGS</span><strong>${escape((a.tags || []).join(', ') || 'None')}</strong></div></div><h3>Ownership</h3><div class="owner-contacts">${ownership}</div>`;
   const feedEvidence = (a.feedEvents || []).length ? `<h3>Feed evidence</h3>${a.feedEvents.map(event => `<div class="feed-evidence"><a href="${safeUrl(event.url)}" target="_blank" rel="noopener noreferrer">${escape(event.title)} ↗</a><span class="vendor">${escape(event.type)} · ${escape(event.confidence)} confidence${event.severity && event.severity !== 'UNKNOWN' ? ` · ${escape(event.severity)}` : ''}</span></div>`).join('')}` : '';
-  $('detail-body').innerHTML = `${sharedWarning}<div class="application-overview"><section><h3>Version and lifecycle</h3><div class="detail-grid"><div><span>INSTALLED VERSION</span><strong>${escape(a.version)}</strong></div><div><span>LATEST AVAILABLE</span><strong>${escape(upgrade.latest || 'Unavailable')}</strong>${releaseLink}</div><div><span>LATEST ON INSTALLED LINE</span><strong>${escape(upgrade.currentLine || 'Unavailable')}</strong></div><div><span>LATEST LTS VERSION</span><strong>${escape(upgrade.latestLts || 'No designated LTS')}</strong></div><div><span>SUPPORT</span><strong>${escape(a.lifecycle?.note || 'Unknown')}</strong></div></div></section><section><h3>Application context</h3>${context}</section></div><section class="assessment-section"><h3>Assessment</h3><ul class="reasons">${a.reasons.map(r => `<li>${escape(r)}</li>`).join('')}</ul></section><section class="findings-section"><h3>Vulnerability findings</h3>${findings}</section>${feedEvidence}<h3>Sources</h3><div class="sources">${a.sources.map(s => `<a href="${safeUrl(s.url)}" target="_blank" rel="noopener noreferrer">${escape(s.name)} ↗</a>`).join('') || '<span class="muted">No source links available</span>'}</div><p class="detail-note">CPE: <code>${escape(a.cpe)}</code>. Confirm product identity and affected version ranges in the linked advisories before remediation decisions.</p>`;
-  $('details').showModal();
+  $('detail-body').innerHTML = `${sharedWarning}<div class="application-overview"><section><h3>Version and lifecycle</h3><div class="detail-grid"><div><span>INSTALLED VERSION</span><strong>${escape(a.version)}</strong></div><div><span>LATEST AVAILABLE</span><strong>${escape(upgrade.latest || 'Unavailable')}</strong>${releaseLink}</div><div><span>LATEST ON INSTALLED LINE</span><strong>${escape(upgrade.currentLine || 'Unavailable')}</strong></div><div><span>LATEST LTS VERSION</span><strong>${escape(upgrade.latestLts || 'No designated LTS')}</strong></div><div><span>SUPPORT</span><strong>${escape(a.lifecycle?.note || 'Unknown')}</strong></div></div></section><section><h3>Application context</h3>${context}</section></div><section class="assessment-section"><h3>Assessment</h3><button id="open-inventory" type="button">Package inventory</button><ul class="reasons">${a.reasons.map(r => `<li>${escape(r)}</li>`).join('')}</ul>${packageCoverageMarkup(a.packageAssessment)}</section><section class="findings-section"><h3>Vulnerability findings</h3>${findings}</section>${resolvedPackagesMarkup(a.resolvedPackageFindings)}${feedEvidence}<h3>Sources</h3><div class="sources">${a.sources.map(s => `<a href="${safeUrl(s.url)}" target="_blank" rel="noopener noreferrer">${escape(s.name)} ↗</a>`).join('') || '<span class="muted">No source links available</span>'}</div><p class="detail-note">${a.cpe ? `CPE: <code>${escape(a.cpe)}</code>. ` : ""}Confirm product identity and affected version ranges in the linked advisories before remediation decisions.</p>`;
+  $('open-inventory').addEventListener('click', () => openInventory());
+  for (const button of $('detail-body').querySelectorAll?.('[data-resolved-history]') || []) button.addEventListener('click', () => openResolvedHistory(button.dataset.resolvedHistory));
+  if (!$('details').open) $('details').showModal();
+  $('details').scrollTop = opening ? 0 : scroll;
+  $('detail-body').scrollTop = opening ? 0 : bodyScroll;
+  if (opening) requestAnimationFrame(() => {
+    if ($('details').open && detailAppId === a.id) {
+      $('details').scrollTop = 0;
+      $('detail-body').scrollTop = 0;
+    }
+  });
+}
+
+let refreshingApplication = false;
+async function refreshDisplayedApplication() {
+  if (refreshingApplication || !detailAppId) return;
+  const applicationId = detailAppId;
+  const button = $('refresh-app');
+  const message = $('detail-refresh-message');
+  refreshingApplication = true;
+  button.disabled = true;
+  button.textContent = 'Refreshing…';
+  message.hidden = false;
+  message.textContent = 'Refreshing this application and its associated feeds…';
+  try {
+    const response = await fetch(`/api/applications/${encodeURIComponent(applicationId)}/refresh`, { method: 'POST' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Application refresh failed');
+    render(data);
+    if (detailAppId === applicationId && $('details').open) {
+      const application = allResults.find(item => item.id === applicationId);
+      if (application) showDetails(application);
+      message.textContent = 'Application refresh complete. Review source warnings in Assessment.';
+    }
+  } catch (error) {
+    if (detailAppId === applicationId && $('details').open) message.textContent = `Refresh failed: ${error.message}`;
+  } finally {
+    refreshingApplication = false;
+    button.disabled = false;
+    button.textContent = '↻ Refresh application';
+  }
 }
 
 async function openFindingEditor(findingId) {
@@ -801,7 +862,7 @@ async function openFindingEditor(findingId) {
     if (!response.ok) throw new Error(data.error || 'Could not load finding history');
     $('finding-history').innerHTML = data.entries.length ? data.entries.map(event => {
       const actor = event.actor?.name || event.actor?.username || 'Automated assessment';
-      const action = event.type === 'finding-discovered' ? 'Finding discovered' : event.type === 'finding-reopened' ? `Reopened: ${event.reason}` : `Workflow updated to ${event.state || 'a new state'}`;
+      const action = event.type === 'finding-discovered' ? 'Finding discovered' : event.type === 'finding-reopened' ? `Reopened: ${event.reason}` : event.type === 'finding-inventory-resolved' ? `Resolved by inventory: ${event.reason.replaceAll('-', ' ')}` : `Workflow updated to ${event.state || 'a new state'}`;
       const changes = event.changes ? Object.keys(event.changes).map(field => `<span>${escape(field)}: ${escape(event.changes[field].from || 'empty')} → ${escape(event.changes[field].to || 'empty')}</span>`).join('') : '';
       return `<article><div><strong>${escape(action)}</strong><time>${escape(new Date(event.at).toLocaleString())}</time></div><p>${escape(actor)}</p>${changes ? `<div class="finding-history-changes">${changes}</div>` : ''}</article>`;
     }).join('') : '<p class="muted">No recorded history for this finding yet.</p>';
@@ -886,7 +947,7 @@ async function openEditor(mode, targetId = null) {
     if (mode === 'app') {
       $('editor-fields').innerHTML = `<div class="form-grid">
         <label>Display name <input name="name" required placeholder="Application name"></label>
-        <label>Vendor <input name="vendor" placeholder="Vendor name"></label>
+        <label>Assessment source <select name="assessmentMode"><option value="cpe">Product vulnerabilities (CPE)</option><option value="inventory">Package inventory (SBOM)</option></select></label><label>Vendor <input name="vendor" placeholder="Vendor name"></label>
         <label>Installed version <input name="version" required pattern="[A-Za-z0-9._-]+" placeholder="1.2.3"></label>
         <label>Criticality <select name="criticality"><option value="unspecified">Unspecified</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="critical">Critical</option></select></label>
         <label>Environment <select name="environment"><option value="unspecified">Unspecified</option><option value="production">Production</option><option value="staging">Staging</option><option value="development">Development</option><option value="test">Test</option><option value="disaster-recovery">Disaster recovery</option></select></label>
@@ -903,7 +964,8 @@ async function openEditor(mode, targetId = null) {
         <label>Latest version override <input name="latestVersion" placeholder="Optional"></label>
         <label>Latest installed-line override <input name="latestBranchVersion" placeholder="Optional"></label>
         <label>Latest LTS override <input name="latestLtsVersion" placeholder="Optional"></label>
-      </div>${targetId ? `<p class="form-hint">Application ID: <code>${escape(targetId)}</code> (immutable)</p>` : ''}<p class="form-hint">Provide a lifecycle product or a manual end-of-life date. Vulnerability mappings use the canonical NVD CPE Dictionary.</p><div class="association-summaries">${associationRow('ownerIds', 'Owners', 'None selected')}${associationRow('workspaceIds', 'Workspaces', 'None selected')}${associationRow('feedIds', 'Feeds', 'None selected')}</div>`;
+      </div>${targetId ? `<button id="editor-inventory" class="secondary-action" type="button">Manage images and SBOMs</button><p class="form-hint">Image changes and SBOM imports save independently of this application form.</p><p class="form-hint">Application ID: <code>${escape(targetId)}</code> (immutable)</p>` : ''}<p class="form-hint">Provide a lifecycle product or a manual end-of-life date. Product assessment requires a CPE. Package inventory assessment uses an imported SBOM; you can import it after saving.</p><div class="association-summaries">${associationRow('ownerIds', 'Owners', 'None selected')}${associationRow('workspaceIds', 'Workspaces', 'None selected')}${associationRow('feedIds', 'Feeds', 'None selected')}</div>`;
+      if (targetId) $('editor-inventory').addEventListener('click', () => openInventory(targetId));
       $('change-cpe').addEventListener('click', openCpeDialog);
       $('change-lifecycle').addEventListener('click', openLifecycleDialog);
       cpeMapping = null;
@@ -920,9 +982,11 @@ async function openEditor(mode, targetId = null) {
         editorSelections.ownerIds = new Set(app.ownerIds || []);
         for (const key of ['ownerIds', 'workspaceIds', 'feedIds']) $(`${key}-summary`).textContent = editorSelections[key].size ? `${editorSelections[key].size} selected` : 'None selected';
         $('editor-form').elements.tags.value = (app.tags || []).join(', ');
-        cpeMapping = { cpeName: app.cpeName || `cpe:2.3:a:${app.cpeVendor}:${app.cpeProduct}:*:*:*:*:${app.cpeEdition || '*'}:*:*:*`, mode: app.cpeMode || 'product', title: app.cpeTitle || app.name, deprecated: app.cpeDeprecated === true || app.cpeDeprecated === 'true', testedAt: app.cpeLastTestedAt || '', candidateCount: app.cpeTestCandidateCount || '', applicableCount: app.cpeTestApplicableCount || '' };
+        cpeMapping = app.cpeName || app.cpeVendor ? { cpeName: app.cpeName || `cpe:2.3:a:${app.cpeVendor}:${app.cpeProduct}:*:*:*:*:${app.cpeEdition || '*'}:*:*:*`, mode: app.cpeMode || 'product', title: app.cpeTitle || app.name, deprecated: app.cpeDeprecated === true || app.cpeDeprecated === 'true', testedAt: app.cpeLastTestedAt || '', candidateCount: app.cpeTestCandidateCount || '', applicableCount: app.cpeTestApplicableCount || '' } : null;
         if (app.lifecycleProduct) lifecycleMapping = { name: app.lifecycleProduct, label: app.lifecycleProduct, sourceUrl: app.lifecycleUrl || `https://endoflife.date/${app.lifecycleProduct}` };
       }
+      $('editor-form').elements.assessmentMode.addEventListener('change', renderAssessmentMode);
+      renderAssessmentMode();
       updateEditorDanger();
       renderMappingSummary();
       renderLifecycleSummary();
@@ -932,6 +996,11 @@ async function openEditor(mode, targetId = null) {
       if (targetId) { $('workspace-choice').value = targetId; populateWorkspaceEditor(); $('workspace-choice').hidden = true; $('workspace-choice').closest('label').hidden = true; }
     }
   } catch (error) { $('editor-fields').innerHTML = ''; $('editor-error').textContent = error.message; $('editor-error').hidden = false; }
+}
+
+function renderAssessmentMode() {
+  const inventory = $('editor-form').elements.assessmentMode.value === 'inventory';
+  $('change-cpe').closest('section').hidden = inventory && !cpeMapping;
 }
 
 function renderMappingSummary() {
@@ -1240,7 +1309,8 @@ async function saveEditor(event) {
   const fields = new FormData(form);
   const currentWorkspace = editorMode === 'workspace' && editorTargetId ? editorConfig.workspaces.find(group => group.id === editorTargetId) : null;
   const payload = editorMode === 'app' ? { ...Object.fromEntries(fields), ownerIds: [...editorSelections.ownerIds] } : { name: fields.get('name'), ownerIds: currentWorkspace && !isAdmin && !permissions.workspaces.notifications.includes(currentWorkspace.id) ? currentWorkspace.ownerIds : [...editorSelections.ownerIds], applications: currentWorkspace && !isAdmin && !permissions.workspaces.membership.includes(currentWorkspace.id) ? currentWorkspace.applications : [...editorSelections.applicationIds] };
-  if (editorMode === 'app' && !payload.cpeName) { $('editor-error').textContent = 'Choose a vulnerability mapping before saving.'; $('editor-error').hidden = false; return; }
+  if (editorMode === 'app') payload.assessmentMode = fields.get('assessmentMode') || 'cpe';
+  if (editorMode === 'app' && !payload.cpeName && payload.assessmentMode !== 'inventory') { $('editor-error').textContent = 'Choose a vulnerability mapping before saving.'; $('editor-error').hidden = false; return; }
   if (editorMode === 'app' && !payload.lifecycleProduct && !payload.eolDate) { $('editor-error').textContent = 'Enter a lifecycle product or manual end-of-life date.'; $('editor-error').hidden = false; return; }
   $('editor-save').disabled = true;
   $('editor-save').textContent = 'Saving…';
@@ -1305,6 +1375,7 @@ $('add-app').addEventListener('click', () => openEditor('app'));
 $('manage-workspaces').addEventListener('click', () => openEditor('workspace'));
 $('edit-workspace').addEventListener('click', () => { const group = activeWorkspace(); if (group && group.id !== 'all') openEditor('workspace', group.id); });
 $('edit-app').addEventListener('click', () => { const id = detailAppId; $('details').close(); if (id) openEditor('app', id); });
+$('refresh-app').addEventListener('click', refreshDisplayedApplication);
 $('editor-form').addEventListener('submit', saveEditor);
 $('editor-delete').addEventListener('click', openDeleteConfirmation);
 $('delete-confirmation-form').addEventListener('submit', deleteEditorResource);
@@ -1462,3 +1533,257 @@ $('preview-exit').addEventListener('click', async () => {
 load();
 setInterval(() => { if (!document.hidden) load(false, true); }, 60_000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) load(false, true); });
+
+async function openLicenses(event) {
+  event.preventDefault();
+  const dialog = $('licenses-dialog');
+  dialog.showModal();
+  dialog.scrollTop = 0;
+  $('licenses-body').textContent = 'Loading bundled notices…';
+  try {
+    const response = await fetch('/api/licenses');
+    if (!response.ok) throw new Error('Could not load bundled notices. Close this dialog and try again.');
+    const data = await response.json();
+    $('licenses-body').innerHTML = '<p>These notices cover material bundled with WatchTower. Package license declarations in imported SBOMs describe your inventory separately.</p><h3>WatchTower notices</h3><pre>' + escape(data.notice) + '</pre>' + data.entries.map(entry => '<details><summary>' + escape(entry.name) + (entry.version ? ' ' + escape(entry.version) : '') + ' · ' + escape(entry.license) + '</summary><p><a href="' + escape(entry.source) + '" target="_blank" rel="noopener noreferrer">Upstream source ↗</a></p><pre>' + escape(entry.text) + '</pre></details>').join('');
+  } catch (error) { $('licenses-body').textContent = error.message; }
+}
+document.querySelectorAll('[data-open-licenses]').forEach(link => link.addEventListener('click', openLicenses));
+$('licenses-close').addEventListener('click', () => $('licenses-dialog').close());
+
+function packageCoverageMarkup(assessment) {
+  if (!assessment?.inventories?.length) return '';
+  const reasonLabel = reason => ({ 'unsupported-ecosystem': 'No assessment adapter for this package ecosystem', 'unsupported-qualifiers': 'Package qualifiers are not supported by the assessment adapter', 'missing-purl': 'No package URL (PURL) supplied', 'missing-purl-version': 'PURL has no installed version', 'version-mismatch': 'Package version conflicts with its PURL', 'invalid-purl': 'Invalid package URL', 'conflicting-purls': 'Conflicting package URLs' }[reason] || reason.replaceAll('-', ' '));
+  return '<div class="package-coverage"><h3>SBOM package coverage</h3>' + assessment.inventories.map(item => {
+    const unsupported = item.unsupported || [], lookups = item.lookups || [], errors = item.errors || [];
+    const list = (items, render) => items.slice(0, 100).map(render).join('') + (items.length > 100 ? '<li>Showing the first 100 of ' + items.length + ' entries.</li>' : '');
+    return '<section>' + (item.scopeLabel ? '<h4>' + escape(item.scopeLabel) + '</h4>' : '') + '<p><strong>' + escape(item.assessedComponentCount ?? 0) + ' of ' + escape(item.packageComponentCount ?? item.componentCount ?? 0) + ' package entries checked</strong> · ' + escape(item.findingCount ?? 0) + ' finding(s) · ' + escape(item.unsupportedComponentCount ?? 0) + ' unsupported/incomplete · ' + escape(errors.length) + ' source error(s)</p>' +
+      '<p class="form-hint">' + escape(item.ignoredComponentCount ?? 0) + ' non-package entries (files, containers, or operating-system metadata) retained in inventory and excluded from package lookups. Checked: ' + escape(item.checkedAt ? new Date(item.checkedAt).toLocaleString() : 'Not yet checked') + '</p>' +
+      (item.typeMetadataMissing ? '<p class="form-hint">Reimport this SBOM to distinguish non-package entries from packages; this older import does not retain component types.</p>' : '') +
+      (item.retainedFindingCount ? '<p class="form-hint">' + escape(item.retainedFindingCount) + ' finding(s) retained from the previous assessment as unverified because coverage is incomplete.</p>' : '') +
+      (item.stale ? '<p class="form-hint">This inventory is stale or has an invalid timestamp. Import a current SBOM to restore current evidence.</p>' : '') +
+      (lookups.length ? '<details><summary>Package lookup results (' + lookups.length + ' unique queries)</summary><ul>' + list(lookups, lookup => '<li><code>' + escape(lookup.purl) + '</code>: ' + escape(lookup.state === 'no-known-matches' ? 'Lookup succeeded; no known vulnerabilities returned' : lookup.state === 'findings' ? lookup.findingCount + ' finding occurrence(s)' : 'Lookup incomplete') + '</li>') + '</ul></details>' : '') +
+      (unsupported.length ? '<details><summary>Skipped packages and reasons (' + unsupported.length + ')</summary><ul>' + list(unsupported, entry => '<li>' + escape(entry.name || entry.componentRef) + ': ' + escape(reasonLabel(entry.reason)) + (entry.ecosystem ? ' (' + escape(entry.ecosystem) + ')' : '') + '</li>') + '</ul></details>' : '') +
+      (errors.length ? '<details><summary>Source errors (' + errors.length + ')</summary><ul>' + list(errors, error => '<li>' + escape(error.purl || '') + ' ' + escape(error.message) + '</li>') + '</ul></details>' : '') +
+      (item.state !== 'assessed' ? '<p class="form-hint">Coverage is incomplete. Successful lookups with no matches do not establish that unchecked packages are clear.</p>' : '') + '</section>';
+  }).join('') + '</div>';
+}
+
+let inventoryApplicationId = null;
+let sbomUploadLimitMiB = 35;
+function setSbomMessage(message, failed = false) {
+  const element = $('sbom-message');
+  element.textContent = failed ? `SBOM upload failed: ${message}` : message;
+  element.classList.toggle('form-error', failed);
+  element.setAttribute('role', failed ? 'alert' : 'status');
+  element.hidden = !message;
+  if (failed) element.scrollIntoView({ block: 'nearest' });
+}
+async function readInventory() {
+  const applicationId = inventoryApplicationId;
+  const response = await fetch('/api/applications/' + encodeURIComponent(applicationId) + '/inventory', { cache: 'no-store' });
+  const inventory = await response.json();
+  if (applicationId !== inventoryApplicationId) return;
+  if (!response.ok) throw new Error(inventory.error || 'Could not load inventory');
+  sbomUploadLimitMiB = inventory.uploadLimitMiB ?? 35;
+  $('sbom-upload-limit').textContent = sbomUploadLimitMiB + ' MiB';
+  const previousScope = $('sbom-scope').value;
+  $('sbom-scope').innerHTML = '<option value="">Application</option>' + inventory.images.filter(image => image.enabled && !image.retired).map(image => '<option value="' + escape(image.id) + '">' + escape(image.label || image.reference) + '</option>').join('');
+  if (inventory.images.some(image => image.id === previousScope && image.enabled && !image.retired)) $('sbom-scope').value = previousScope;
+  else if (previousScope) $('sbom-file').value = '';
+  inventoryData = inventory;
+  renderInventory();
+
+}
+async function openInventory(applicationId = detailAppId) {
+  inventoryApplicationId = applicationId;
+  inventoryData = { images: [], revisions: [] };
+  inventoryBusy = false;
+  $('image-form').hidden = true;
+  $('image-retire-form').hidden = true;
+  $('image-message').textContent = '';
+  $('inventory-images').textContent = 'Loading images…';
+  $('image-add').hidden = true;
+  $('sbom-form').hidden = Boolean(activePreview) || !(isAdmin || permissions.applications.edit.includes(inventoryApplicationId));
+  $('sbom-form').reset();
+  setSbomMessage('');
+  $('inventory-summary').textContent = 'Loading inventory…';
+  $('sbom-submit').disabled = true;
+  $('inventory-dialog').showModal();
+  $('inventory-dialog').scrollTop = 0;
+  try { await readInventory(); }
+  catch (error) { if (inventoryApplicationId === applicationId) { $('inventory-summary').textContent = error.message; $('sbom-form').hidden = true; $('image-add').hidden = true; } }
+  finally { if (inventoryApplicationId === applicationId) $('sbom-submit').disabled = false; }
+}
+$('inventory-close').addEventListener('click', () => $('inventory-dialog').close());
+$('inventory-dialog').addEventListener('cancel', event => { if ($('sbom-submit').disabled || inventoryBusy) event.preventDefault(); });
+async function importSbom(event) {
+  event.preventDefault();
+  if (inventoryBusy) return;
+  const file = $('sbom-file').files[0];
+  if (!file) return;
+  if (file.size > sbomUploadLimitMiB * 1024 * 1024) { setSbomMessage(`The file is ${(file.size / 1024 / 1024).toFixed(2)} MiB. The maximum upload size is ${sbomUploadLimitMiB} MiB.`, true); return; }
+  inventoryBusy = true;
+  $('image-add').disabled = true;
+  $('image-save').disabled = true;
+  $('image-retire-submit').disabled = true;
+  $('sbom-submit').disabled = true;
+  $('inventory-close').disabled = true;
+  const applicationId = inventoryApplicationId;
+  const imageId = $('sbom-scope').value || null;
+  $('sbom-file').disabled = true;
+  $('sbom-scope').disabled = true;
+  setSbomMessage('Importing SBOM…');
+  try {
+    const response = await fetch('/api/applications/' + encodeURIComponent(applicationId) + '/sboms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sbom: await file.text(), imageId }) });
+    let result;
+    try { result = await response.json(); }
+    catch { throw new Error(`The server returned an unreadable upload response (HTTP ${response.status}). Check the upload limit on your server or proxy.`); }
+    if (!response.ok) throw new Error(result.error || 'SBOM import failed');
+    setSbomMessage('SBOM imported. Refresh the application to assess its packages.');
+    $('sbom-file').value = '';
+    try { await readInventory(); }
+    catch { setSbomMessage('SBOM imported, but inventory metadata could not be refreshed. Reopen inventory to check the import, then refresh the application.'); }
+  } catch (error) { setSbomMessage(error.message, true); }
+  finally { inventoryBusy = false; $('image-add').disabled = false; $('image-save').disabled = false; $('image-retire-submit').disabled = false; $('sbom-submit').disabled = false; $('inventory-close').disabled = false; $('sbom-file').disabled = false; $('sbom-scope').disabled = false; }
+}
+$('sbom-form').addEventListener('submit', importSbom);
+
+function resolvedPackagesMarkup(findings = []) {
+  if (!findings.length) return '';
+  return '<section><h3>Resolved package findings (' + findings.length + ')</h3><p class="form-hint">Preserved inventory history; these findings are excluded from active alerts.</p>' + findings.map(finding => '<details><summary>' + escape(finding.package.name) + ' ' + escape(finding.package.version) + ' · ' + escape(finding.advisoryId) + ' · ' + escape(finding.resolution.reason.replaceAll('-', ' ')) + '</summary><p>Finding ID: <code>' + escape(finding.id) + '</code></p><p>Resolved: ' + escape(new Date(finding.resolution.at).toLocaleString()) + '</p><p>Assignee: ' + escape(finding.workflow.assignee || 'None') + ' · Ticket: ' + escape(finding.workflow.ticketReference || 'None') + '</p><p>Notes: ' + escape(finding.workflow.notes || 'None') + '</p><button type="button" data-resolved-history="' + escape(finding.id) + '">View history</button></details>').join('') + '</section>';
+}
+async function openResolvedHistory(findingId) {
+  const body = $('resolved-history-body');
+  body.textContent = 'Loading history…';
+  $('resolved-history-dialog').showModal();
+  try {
+    const response = await fetch('/api/applications/' + encodeURIComponent(detailAppId) + '/findings/' + encodeURIComponent(findingId) + '/history');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not load history');
+    body.innerHTML = data.entries.map(event => '<p><strong>' + escape(event.type.replaceAll('-', ' ')) + '</strong> · ' + escape(new Date(event.at).toLocaleString()) + '<br>' + escape(event.reason || event.state || '') + ' · ' + escape(event.actor?.name || 'Automated assessment') + (event.changes ? '<br>' + escape(JSON.stringify(event.changes)) : '') + '</p>').join('') || '<p>No recorded events.</p>';
+  } catch (error) { body.textContent = error.message; }
+}
+$('resolved-history-close').addEventListener('click', () => $('resolved-history-dialog').close());
+
+let inventoryData = { images: [], revisions: [] };
+let inventoryBusy = false;
+let retiringImageId = null;
+let componentRevisionId = null;
+let componentApplicationId = null;
+let componentOffset = 0;
+let componentQuery = '';
+let componentRequest = 0;
+const canManageInventory = () => !activePreview && (isAdmin || permissions.applications.edit.includes(inventoryApplicationId));
+const inventoryTime = value => value ? new Date(value).toLocaleString() : 'Not reported';
+function renderInventory() {
+  const { images, revisions } = inventoryData;
+  const canEdit = canManageInventory();
+  $('image-add').hidden = !canEdit;
+  $('inventory-images').innerHTML = images.map(image => '<article class="inventory-card"><h4>' + escape(image.label || image.reference) + '</h4><code>' + escape(image.reference) + '</code><p>' + (image.retired ? 'Retired · ' + escape(inventoryTime(image.retiredAt)) : image.enabled ? 'Enabled' : 'Disabled; findings remain unverified') + '</p>' + (canEdit && !image.retired ? '<div class="form-actions"><button type="button" data-image-edit="' + escape(image.id) + '">Edit image</button><button type="button" data-image-import="' + escape(image.id) + '"' + (!image.enabled ? ' disabled' : '') + '>Import image SBOM</button><button type="button" data-image-retire="' + escape(image.id) + '">Retire image</button></div>' : '') + '</article>').join('') || '<p class="muted">No container images configured. Application-level SBOMs are available below.</p>';
+  $('inventory-images').querySelectorAll?.('[data-image-edit]').forEach(button => button.addEventListener('click', () => editInventoryImage(button.dataset.imageEdit)));
+  $('inventory-images').querySelectorAll?.('[data-image-retire]').forEach(button => button.addEventListener('click', () => beginImageRetirement(button.dataset.imageRetire)));
+  $('inventory-images').querySelectorAll?.('[data-image-import]').forEach(button => button.addEventListener('click', () => { if (inventoryBusy) return; $('sbom-scope').value = button.dataset.imageImport; $('sbom-file').focus(); }));
+  const scopeName = revision => revision.scope.imageId ? images.find(image => image.id === revision.scope.imageId)?.label || images.find(image => image.id === revision.scope.imageId)?.reference || 'Image' : 'Application';
+  const revisionMarkup = revision => {
+    const image = images.find(image => image.id === revision.scope.imageId);
+    const mismatch = image && revision.imageReferenceAtImport && image.reference !== revision.imageReferenceAtImport;
+    const inactive = image && (!image.enabled || image.retired);
+    const assessment = revision.assessment;
+    const state = mismatch ? 'Image mismatch; replacement SBOM required' : inactive ? image.retired ? 'Retired image; history only' : 'Disabled image; not assessed' : revision.assessmentState || 'awaiting-assessment';
+    return '<article class="inventory-card"><h4>' + escape(scopeName(revision)) + '</h4><p>' + escape(state.replaceAll('-', ' ')) + (assessment?.stale ? ' · Stale' : '') + '</p><dl class="inventory-metadata"><dt>Format</dt><dd>' + escape(revision.format + ' ' + revision.specificationVersion) + '</dd><dt>Generator</dt><dd>' + escape((revision.generator || []).join(', ') || 'Not reported') + '</dd><dt>Generated</dt><dd>' + escape(inventoryTime(revision.generatedAt)) + '</dd><dt>Imported</dt><dd>' + escape(inventoryTime(revision.importedAt)) + ' · ' + escape(revision.uploader?.name || 'Unknown uploader') + '</dd><dt>Components</dt><dd>' + escape(revision.componentCount) + ' · ' + escape(assessment?.assessedComponentCount ?? 0) + ' checked · ' + escape(assessment?.unsupportedComponentCount ?? revision.incompleteComponentCount ?? 0) + ' unsupported/incomplete</dd><dt>Last successful lookup</dt><dd>' + escape(inventoryTime(assessment?.lastSuccessfulLookup)) + '</dd><dt>Reported image</dt><dd>' + escape((revision.reportedImages || []).join(', ') || 'Not reported') + '</dd><dt>Revision</dt><dd><code>' + escape(revision.id) + '</code></dd><dt>Document identity / version</dt><dd>' + escape(revision.documentIdentity || 'Not reported') + ' / ' + escape(revision.documentVersion ?? 'Not reported') + '</dd><dt>Checksum (SHA-256)</dt><dd><code>' + escape(revision.checksum) + '</code></dd>' + (revision.replacesRevisionId ? '<dt>Replaces revision</dt><dd><code>' + escape(revision.replacesRevisionId) + '</code></dd>' : '') + (revision.supersededBy ? '<dt>Superseded by</dt><dd><code>' + escape(revision.supersededBy) + '</code> · ' + escape(inventoryTime(revision.supersededAt)) + '</dd>' : '') + '</dl><button type="button" data-revision-components="' + escape(revision.id) + '">Browse components</button></article>';
+  };
+  const active = revisions.filter(revision => revision.active);
+  $('inventory-summary').innerHTML = '<h3>Active inventories</h3>' + (active.map(revisionMarkup).join('') || '<p class="muted">No SBOM imported. Inventory assessment remains incomplete.</p>') + packageCoverageMarkup({ inventories: active.filter(revision => revision.assessment && (!revision.scope.imageId || images.some(image => image.id === revision.scope.imageId && image.enabled && !image.retired && (!revision.imageReferenceAtImport || image.reference === revision.imageReferenceAtImport)))).map(revision => ({ componentCount: revision.componentCount, ...revision.assessment })) }) + '<details><summary>Previous revisions (' + revisions.filter(revision => !revision.active).length + ')</summary>' + '<p class="form-hint">Showing the most recent 50 previous revisions.</p>' + revisions.filter(revision => !revision.active).slice(-50).reverse().map(revisionMarkup).join('') + '</details>';
+  $('inventory-summary').querySelectorAll?.('[data-revision-components]').forEach(button => button.addEventListener('click', () => openComponents(button.dataset.revisionComponents)));
+}
+function editInventoryImage(id = '') {
+  if (!canManageInventory() || inventoryBusy) return;
+  const image = inventoryData.images.find(image => image.id === id);
+  if (image?.retired) return;
+  $('image-retire-form').hidden = true;
+  $('image-id').value = id;
+  $('image-label').value = image?.label || '';
+  $('image-reference').value = image?.reference || '';
+  $('image-enabled').checked = image ? image.enabled : true;
+  $('image-form').hidden = false;
+  $('image-reference').focus();
+}
+function beginImageRetirement(id) {
+  if (!canManageInventory() || inventoryBusy) return;
+  const image = inventoryData.images.find(image => image.id === id);
+  if (!image || image.retired) return;
+  retiringImageId = id;
+  $('image-form').hidden = true;
+  $('image-retire-confirm').value = '';
+  $('image-retire-warning').textContent = 'Retirement is permanent. History is preserved; findings in this image resolve after refresh.';
+  $('image-retire-reference').textContent = image.reference;
+  $('image-retire-form').hidden = false;
+  $('image-retire-confirm').focus();
+}
+async function saveInventoryImages(images) {
+  if (!canManageInventory() || inventoryBusy) return;
+  inventoryBusy = true;
+  for (const id of ['image-save', 'image-add', 'image-retire-submit', 'sbom-submit', 'inventory-close']) $(id).disabled = true;
+  $('image-message').classList.toggle('form-error', false);
+  $('image-message').setAttribute('role', 'status');
+  $('image-message').textContent = 'Saving images…';
+  try {
+    const response = await fetch('/api/applications/' + encodeURIComponent(inventoryApplicationId) + '/images', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ images }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not save images');
+    $('image-form').hidden = true;
+    $('image-retire-form').hidden = true;
+    $('image-message').textContent = 'Images saved. Refresh the application to update assessment and finding history.';
+    try { await readInventory(); } catch { $('image-message').textContent += ' Reopen inventory to reload metadata.'; }
+  } catch (error) {
+    $('image-message').classList.toggle('form-error', true);
+    $('image-message').setAttribute('role', 'alert');
+    $('image-message').textContent = error.message;
+  } finally {
+    inventoryBusy = false;
+    for (const id of ['image-save', 'image-add', 'image-retire-submit', 'sbom-submit', 'inventory-close']) $(id).disabled = false;
+  }
+}
+$('image-add').addEventListener('click', () => editInventoryImage());
+$('image-cancel').addEventListener('click', () => { if (!inventoryBusy) $('image-form').hidden = true; });
+$('image-retire-cancel').addEventListener('click', () => { if (!inventoryBusy) $('image-retire-form').hidden = true; });
+$('image-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const id = $('image-id').value;
+  const updated = { ...(inventoryData.images.find(image => image.id === id) || {}), label: $('image-label').value.trim(), reference: $('image-reference').value.trim(), enabled: $('image-enabled').checked };
+  saveInventoryImages(id ? inventoryData.images.map(image => image.id === id ? updated : image) : [...inventoryData.images, updated]);
+});
+$('image-retire-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const image = inventoryData.images.find(image => image.id === retiringImageId);
+  if (!image || $('image-retire-confirm').value !== image.reference) { $('image-message').textContent = 'The confirmation must exactly match the image reference.'; $('image-message').classList.toggle('form-error', true); $('image-message').setAttribute('role', 'alert'); return; }
+  saveInventoryImages(inventoryData.images.map(item => item.id === image.id ? { ...item, retired: true } : item));
+});
+async function openComponents(revisionId) {
+  componentRevisionId = revisionId;
+  componentApplicationId = inventoryApplicationId;
+  componentOffset = 0; componentQuery = '';
+  $('component-search').value = '';
+  $('components-dialog').showModal();
+  await loadComponents();
+}
+async function loadComponents() {
+  const request = ++componentRequest;
+  $('components-body').textContent = 'Loading components…';
+  $('components-prev').disabled = true; $('components-next').disabled = true;
+  try {
+    const response = await fetch('/api/applications/' + encodeURIComponent(componentApplicationId) + '/inventory/revisions/' + encodeURIComponent(componentRevisionId) + '/components?offset=' + componentOffset + '&q=' + encodeURIComponent(componentQuery), { cache: 'no-store' });
+    const data = await response.json();
+    if (request !== componentRequest) return;
+    if (!response.ok) throw new Error(data.error || 'Could not load components');
+    $('components-body').innerHTML = '<p>' + escape(data.total) + ' matching component(s); showing ' + escape(data.components.length ? data.offset + 1 : 0) + '–' + escape(data.offset + data.components.length) + '. Includes non-package metadata; assessment support is shown in coverage.</p>' + data.components.map(component => '<details class="inventory-card"><summary>' + escape(component.name || component.componentRef) + ' ' + escape(component.version || 'No version') + ' · ' + escape(component.componentType || 'Unknown type') + '</summary><p><code>' + escape(component.purl || component.declaredPurl || 'No PURL') + '</code></p><p>Supplier: ' + escape(component.supplier || 'Not reported') + '<br>Licenses (supplier declared): ' + escape((component.licenses || []).join(', ') || 'Not reported') + '<br>Identity: ' + escape(component.identityIssue || 'Versioned identity; assessment support is reported separately') + '<br>Locations: ' + escape((component.locations || []).join(', ') || component.location || 'Not reported') + '<br>CPEs: ' + escape((component.cpes || []).join(', ') || 'Not reported') + '<br>Hashes: ' + escape((component.hashes || []).map(hash => hash.algorithm + ': ' + hash.value).join(', ') || 'Not reported') + '</p><p>Reference: <code>' + escape(component.componentRef) + '</code></p></details>').join('') + '<details><summary>Dependency relationships for this page (up to 200 of ' + escape(data.dependencyCount) + ' total)</summary>' + data.dependencies.map(edge => '<p><code>' + escape(edge.from) + '</code> ' + escape(edge.relationship) + ' <code>' + escape(edge.to) + '</code></p>').join('') + '</details>';
+    $('components-prev').disabled = data.offset === 0;
+    $('components-next').disabled = data.offset + data.components.length >= data.total;
+  } catch (error) { if (request === componentRequest) $('components-body').textContent = error.message; }
+}
+$('components-close').addEventListener('click', () => { componentRequest++; $('components-dialog').close(); });
+$('component-search-form').addEventListener('submit', event => { event.preventDefault(); componentOffset = 0; componentQuery = $('component-search').value; loadComponents(); });
+$('components-prev').addEventListener('click', () => { componentOffset = Math.max(0, componentOffset - 50); loadComponents(); });
+$('components-next').addEventListener('click', () => { componentOffset += 50; loadComponents(); });
+
+

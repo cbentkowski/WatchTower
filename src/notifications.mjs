@@ -50,7 +50,7 @@ function classify(app, workspace, policies, now) {
     return matches.map(policy => ({ findingId: finding.id, ...policy }));
   });
   const vulnerable = app.status === 'red' && policyMatches.length > 0;
-  const urgentFindings = vulnerable ? matchedFindings.filter(item => Number(item.score) >= 9 || item.knownExploited) : [];
+  const urgentFindings = vulnerable ? matchedFindings.filter(item => Number(item.score) >= 9 || String(item.severity || item.label).toUpperCase() === 'CRITICAL' || item.knownExploited) : [];
   const urgentFingerprint = urgentFindings.map(item => `${item.id || 'unknown'}:${Number(item.score) || 0}:${Boolean(item.knownExploited)}`).sort().join('|');
   const days = Number(app.lifecycle?.daysRemaining);
   const approaching = app.lifecycle?.state === 'approaching' && Number.isFinite(days) && days >= 0 && days <= 30;

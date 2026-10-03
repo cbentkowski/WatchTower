@@ -11,7 +11,7 @@ import { readGeneralSettings, writeGeneralSettings, validateGeneralSettings, gen
 import { createLogger, logTypes } from './logger.mjs';
 import { administratorRole, createAuth } from './auth.mjs';
 import { createYamlMonitor } from './yaml-monitor.mjs';
-import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, canCreateOwner, canDeleteApplication, claimsForIdentityMappings, describeIdentityClaims, explainAccess, protectedRoleState, standardRoles } from './rbac.mjs';
+import { readRbac, writeRbac, validateRbacInput, calculateAccess, accessJson, canCreateOwner, canDeleteApplication, claimsForIdentityMappings, describeIdentityClaims, explainAccess, protectedRoleState, standardRoles, canRefreshApplication } from './rbac.mjs';
 import { collectFeeds, eventAffectsVersion, feedRequestUrl, normalizeEntries, readFeeds, secureFetchText, serializeFeeds, validateFeedInput, writeFeeds } from './feeds.mjs';
 import { readOwners, validateOwner, writeOwners } from './owners.mjs';
 import { cveAffectsApplication, wildcardApplicationCpe } from './nvd.mjs';
@@ -20,6 +20,11 @@ import { cpeSearchMatch, effectiveCpe, legacyCpe, mappingFromApp, mappingWarning
 import { matchLifecycleRelease, normalizeLifecycleProduct, searchLifecycleProducts } from './lifecycle.mjs';
 import { appendFindingEvents, readFindingEvents, readFindingStore, reconcileFindingWorkflows, updateFindingWorkflow, writeFindingStore } from './findings.mjs';
 import { ensureNotificationPolicies, notificationPolicyOptions, previewNotificationPolicy, readNotificationPolicies, validateNotificationPolicies, validateNotificationPolicy, writeNotificationPolicies } from './notification-policy-store.mjs';
+import { createInventoryStore } from './inventory-store.mjs';
+import { sbomLimits } from './sbom.mjs';
+import { createOsvClient } from './osv.mjs';
+import { assessApplicationInventory } from './package-assessment.mjs';
+import { replacementDemo } from './sbom-demo.mjs';
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.dirname(sourceDirectory);
@@ -30,6 +35,10 @@ const PORT = Number(process.env.SERVER_PORT || process.env.PORT || 4173);
 const HOST = process.env.HOST || '127.0.0.1';
 const tlsConfiguration = await loadTlsConfiguration();
 const dataDirectory = process.env.DATA_DIR || path.join(projectDirectory, 'data');
+const inventoryStore = createInventoryStore(path.join(dataDirectory, 'inventories'));
+const osvClient = createOsvClient();
+const sbomMaxAgeDays = Number(process.env.SBOM_MAX_AGE_DAYS || 30);
+if (!Number.isInteger(sbomMaxAgeDays) || sbomMaxAgeDays < 1 || sbomMaxAgeDays > 3650) throw new Error('SBOM_MAX_AGE_DAYS must be an integer from 1 to 3650');
 const configFiles = ['applications.yaml', 'workspaces.yaml', 'feeds.yaml', 'owners.yaml', 'smtp.yaml', 'general.yaml'];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const exists = file => access(file).then(() => true, () => false);
@@ -95,14 +104,22 @@ let nvdLastRequest = 0;
 let lifecycleCatalogCache = null;
 const permissionPreviews = new Map();
 const previewLifetime = 8 * 60 * 60 * 1000;
+let findingWriteQueue = Promise.resolve();
+function withFindingWrite(operation) {
+  const task = findingWriteQueue.catch(() => {}).then(operation);
+  findingWriteQueue = task;
+  return task;
+}
 const snapshotReady = readFile(snapshotFile, 'utf8').then(async raw => {
   const saved = JSON.parse(raw);
   if (saved.checkedAt && Array.isArray(saved.results) && Array.isArray(saved.workspaces)) {
-    const findingStore = await readFindingStore(findingStoreFile);
-    const reconciliation = reconcileFindingWorkflows(findingStore, saved.results);
-    if (reconciliation.changed) await writeFindingStore(findingStoreFile, findingStore);
-    await appendFindingEvents(findingHistoryFile, reconciliation.events);
-    snapshot = saved;
+    await withFindingWrite(async () => {
+      const findingStore = await readFindingStore(findingStoreFile);
+      const reconciliation = reconcileFindingWorkflows(findingStore, saved.results);
+      if (reconciliation.changed) await writeFindingStore(findingStoreFile, findingStore);
+      await appendFindingEvents(findingHistoryFile, reconciliation.events);
+      snapshot = saved;
+    });
   }
 }).catch(error => { if (error.code !== 'ENOENT') console.warn(`Could not load saved scan: ${error.message}`); });
 const yamlCheckInterval = Number(process.env.YAML_CHECK_INTERVAL_MS || 30_000);
@@ -132,15 +149,21 @@ const yamlMonitor = createYamlMonitor({
 await yamlMonitor.start();
 
 async function storeSnapshot(data) {
-  await mkdir(dataDirectory, { recursive: true });
-  const findingStore = await readFindingStore(findingStoreFile);
-  const reconciliation = reconcileFindingWorkflows(findingStore, data.results || []);
-  if (reconciliation.changed) await writeFindingStore(findingStoreFile, findingStore);
-  await appendFindingEvents(findingHistoryFile, reconciliation.events);
-  await saveAtomic(snapshotFile, `${JSON.stringify(data)}\n`);
-  snapshot = data;
-  notifier.onScan(data).catch(error => { console.error(`Notification check failed: ${error.message}`); logger.log('error', 'Notification check failed', error.message); });
-  return data;
+  return withFindingWrite(async () => {
+    await mkdir(dataDirectory, { recursive: true });
+    const findingStore = await readFindingStore(findingStoreFile);
+    const reconciliation = reconcileFindingWorkflows(findingStore, data.results || []);
+    for (const application of data.results || []) delete application.inventoryLifecycle;
+    if (reconciliation.changed) await writeFindingStore(findingStoreFile, findingStore);
+    await appendFindingEvents(findingHistoryFile, reconciliation.events);
+    for (const event of reconciliation.events.filter(event => event.type === 'finding-inventory-resolved' || (event.type === 'finding-reopened' && event.previousResolution))) {
+      await logger.audit(event.type === 'finding-inventory-resolved' ? 'Package finding resolved by inventory assessment' : 'Package finding reopened', event.actor, { type: 'finding', id: event.findingId, applicationId: event.applicationId }, { reason: event.reason, inventory: event.inventory || event.previousResolution }, event.reason);
+    }
+    await saveAtomic(snapshotFile, `${JSON.stringify(data)}\n`);
+    snapshot = data;
+    notifier.onScan(data).catch(error => { console.error(`Notification check failed: ${error.message}`); logger.log('error', 'Notification check failed', error.message); });
+    return data;
+  });
 }
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
@@ -182,7 +205,7 @@ function parseInventory(source, includeDisabled = false, allowLegacyIds = false)
   }
   for (const app of apps) {
     const hadContext = ['criticality', 'environment', 'exposure', 'ownerIds', 'tags'].every(key => Object.hasOwn(app, key));
-    for (const key of ['id', 'name', 'version', 'cpeVendor', 'cpeProduct']) {
+    for (const key of ['id', 'name', 'version']) {
       if (!app[key] || typeof app[key] !== 'string') throw new Error(`Application is missing ${key}`);
     }
     if (!allowLegacyIds && !uuidPattern.test(app.id)) throw new Error(`Invalid immutable application ID for ${app.name}`);
@@ -191,9 +214,13 @@ function parseInventory(source, includeDisabled = false, allowLegacyIds = false)
     }
     if (app.cpeMode && !['product', 'exact'].includes(app.cpeMode)) throw new Error(`Invalid cpeMode for ${app.name}`);
     const hadCanonicalCpe = Boolean(app.cpeName);
-    const mapping = mappingFromApp(app);
-    app.cpeName = mapping.cpeName;
-    app.cpeMode = mapping.mode;
+    app.assessmentMode ||= 'cpe';
+    if (!['cpe', 'inventory'].includes(app.assessmentMode)) throw new Error('Invalid assessmentMode');
+    if (app.cpeName || app.cpeVendor && app.cpeProduct || app.assessmentMode === 'cpe') {
+      const mapping = mappingFromApp(app);
+      app.cpeName = mapping.cpeName;
+      app.cpeMode = mapping.mode;
+    }
     app.cpeTitle ||= app.name;
     app.criticality ||= 'unspecified';
     app.environment ||= 'unspecified';
@@ -205,14 +232,14 @@ function parseInventory(source, includeDisabled = false, allowLegacyIds = false)
     if (!['unspecified', 'low', 'medium', 'high', 'critical'].includes(app.criticality)) throw new Error(`Invalid criticality for ${app.name}`);
     if (!['unspecified', 'production', 'staging', 'development', 'test', 'disaster-recovery'].includes(app.environment)) throw new Error(`Invalid environment for ${app.name}`);
     if (!['unknown', 'internal', 'external', 'internet'].includes(app.exposure)) throw new Error(`Invalid exposure for ${app.name}`);
-    Object.defineProperty(app, '_needsCpeMigration', { value: !hadCanonicalCpe, enumerable: false });
+    Object.defineProperty(app, '_needsCpeMigration', { value: !hadCanonicalCpe && Boolean(app.cpeName), enumerable: false });
     Object.defineProperty(app, '_needsContextMigration', { value: !hadContext, enumerable: false });
   }
   if (new Set(apps.map(a => a.id)).size !== apps.length) throw new Error('Application IDs must be unique');
   return includeDisabled ? apps : apps.filter(a => a.enabled !== false);
 }
 
-const appFields = ['id', 'legacyId', 'name', 'vendor', 'version', 'cpeName', 'cpeMode', 'cpeTitle', 'cpeDeprecated', 'cpeLastTestedAt', 'cpeTestCandidateCount', 'cpeTestApplicableCount', 'cpeVendor', 'cpeProduct', 'cpeEdition', 'lifecycleProduct', 'eolDate', 'lifecycleUrl', 'vendorBulletinUrl', 'releaseUrl', 'latestVersion', 'latestBranchVersion', 'latestLtsVersion', 'criticality', 'environment', 'exposure', 'ownerIds', 'tags'];
+const appFields = ['assessmentMode', 'id', 'legacyId', 'name', 'vendor', 'version', 'cpeName', 'cpeMode', 'cpeTitle', 'cpeDeprecated', 'cpeLastTestedAt', 'cpeTestCandidateCount', 'cpeTestApplicableCount', 'cpeVendor', 'cpeProduct', 'cpeEdition', 'lifecycleProduct', 'eolDate', 'lifecycleUrl', 'vendorBulletinUrl', 'releaseUrl', 'latestVersion', 'latestBranchVersion', 'latestLtsVersion', 'criticality', 'environment', 'exposure', 'ownerIds', 'tags'];
 const scalarAppFields = appFields.filter(key => !['ownerIds', 'tags'].includes(key));
 const idPattern = /^[A-Za-z0-9._-]+$/;
 function cleanApp(input, existingId = '') {
@@ -228,8 +255,12 @@ function cleanApp(input, existingId = '') {
     app.cpeMode = app.cpeEdition ? 'exact' : 'product';
     app.cpeTitle ||= app.name;
   }
-  for (const key of ['id', 'name', 'version', 'cpeName']) if (!app[key]) throw new Error(`${key} is required`);
+  app.assessmentMode ||= 'cpe';
+  if (!['cpe', 'inventory'].includes(app.assessmentMode)) throw new Error('Invalid assessmentMode');
+  for (const key of ['id', 'name', 'version']) if (!app[key]) throw new Error(`${key} is required`);
+  if (!app.cpeName && app.assessmentMode !== 'inventory') throw new Error('cpeName is required');
   if (!uuidPattern.test(app.id)) throw new Error('Application ID must be an immutable UUID');
+  if (app.cpeName) {
   if (!['product', 'exact'].includes(app.cpeMode)) throw new Error('cpeMode must be product or exact');
   const mapping = parseCpe23(app.cpeName);
   app.cpeVendor = mapping.vendor;
@@ -237,6 +268,7 @@ function cleanApp(input, existingId = '') {
   app.cpeEdition = mapping.edition === '*' || mapping.edition === '-' ? '' : mapping.edition;
   const blocking = mappingWarnings({ ...mapping, mode: app.cpeMode, deprecated: app.cpeDeprecated === 'true' }, app.version).filter(item => item.code === 'version-conflict');
   if (blocking.length) throw new Error(blocking[0].message);
+  }
   // CPE-derived fields have already been validated as part of the canonical CPE.
   // They may legitimately contain escaped punctuation such as Notepad++'s `notepad\+\+`.
   for (const key of ['version', 'lifecycleProduct']) if (app[key] && !idPattern.test(app[key])) throw new Error(`${key} may contain only letters, numbers, dots, underscores, and hyphens`);
@@ -326,12 +358,15 @@ async function saveRelatedFiles(updates) {
     throw error;
   }
 }
-async function readBody(req) {
-  let body = '';
+async function readBody(req, limit = 50000) {
+  const chunks = [];
+  let bytes = 0;
   for await (const chunk of req) {
-    body += chunk;
-    if (body.length > 50000) throw new Error('Request is too large');
+    bytes += chunk.length;
+    if (bytes > limit) throw new Error('Request is too large');
+    chunks.push(chunk);
   }
+  const body = Buffer.concat(chunks).toString('utf8');
   try { return JSON.parse(body); } catch { throw new Error('Invalid JSON'); }
 }
 
@@ -427,6 +462,14 @@ async function realAuthorization(req, includeDisabled = true) {
 function forbidden(res, message = 'You do not have permission to perform this action') {
   res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify({ error: message }));
+}
+
+function visibleSnapshot(data, owners, access, req) {
+  const results = (data.results || []).filter(app => access.appView.has(app.id));
+  const workspaces = (data.workspaces || []).filter(group => access.workspaceView.has(group.id)).map(group => ({ ...group, applications: group.applications.filter(id => access.appView.has(id)) }));
+  const assignedOwnerIds = new Set(results.flatMap(app => app.ownerIds || []));
+  const visibleOwners = owners.filter(owner => assignedOwnerIds.has(owner.id));
+  return { ...data, results, workspaces, owners: visibleOwners, access: accessJson(access), groupOverage: req.permissionPreview ? false : Boolean(req.authUser?.groupOverage) };
 }
 
 function selectedPreviewConfig(config, grantIds) {
@@ -612,12 +655,12 @@ async function checkGitlab(app, kev) {
 }
 
 async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
-  const mapping = mappingFromApp(app);
-  const cpe = mapping.mode === 'exact' ? mapping.cpeName : `cpe:2.3:${mapping.part}:${mapping.vendor}:${mapping.product}:${app.version}:*:*:*:*:*:*:*`;
+  const mapping = app.cpeName ? mappingFromApp(app) : null;
+  const cpe = mapping ? mapping.mode === 'exact' ? mapping.cpeName : `cpe:2.3:${mapping.part}:${mapping.vendor}:${mapping.product}:${app.version}:*:*:*:*:*:*:*` : '';
   const result = { ...app, cpe, status: 'unknown', reasons: [], vulnerabilities: [], sources: [], checkedAt: new Date().toISOString() };
   let sourceOk = false;
-  let sourceLabel = 'NVD';
-  try {
+  let sourceLabel = mapping ? 'NVD' : 'Package inventory';
+  if (mapping) try {
     const vendor = app.cpeVendor === 'atlassian' ? await checkAtlassian(app, kev) : await checkGitlab(app, kev);
     if (vendor) {
       result.vulnerabilities = vendor.vulnerabilities;
@@ -627,7 +670,7 @@ async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
       result.vendorConfirmed = true;
     }
   } catch (error) { logger.feed('warn', 'Vendor assessment unavailable', `${app.name}: ${error.message}; using NVD fallback`); result.reasons.push(`Vendor check unavailable: ${error.message}; using NVD fallback`); }
-  if (!sourceOk) try {
+  if (mapping && !sourceOk) try {
     const api = new URL('https://services.nvd.nist.gov/rest/json/cves/2.0');
     api.searchParams.set('virtualMatchString', wildcardApplicationCpe(app));
     api.searchParams.set('resultsPerPage', '2000');
@@ -690,11 +733,27 @@ async function scanApp(app, kev, feedRecords = [], feedErrors = []) {
   for (const error of feedErrors) result.reasons.push(`Vendor feed unavailable: ${error}`);
   if (feedErrors.length) sourceOk = false;
   result.vulnerabilities = [...new Map(result.vulnerabilities.map(item => [`${item.id}:${item.url}`, item])).values()].sort((a, b) => (b.score || 0) - (a.score || 0));
-  const urgent = result.vulnerabilities.some(v => v.score >= 7 || v.knownExploited);
+  try {
+    const packages = await assessApplicationInventory(app, inventoryStore, osvClient, kev, { maxAgeDays: sbomMaxAgeDays, onEvent: logger.feed });
+    result.packageAssessment = { configured: packages.configured, state: packages.state, inventories: packages.inventories };
+    result.inventoryLifecycle = packages.lifecycle;
+    result.vulnerabilities.push(...packages.findings);
+    result.reasons.push(...packages.reasons);
+    if (packages.configured) {
+      result.sources.push({ name: 'OSV package assessment', url: 'https://osv.dev/' });
+      if (packages.state !== 'assessed') sourceOk = false;
+      else if (!mapping && !feedErrors.length && !reviewAdvisories.length) { sourceOk = true; sourceLabel = 'OSV'; }
+    }
+  } catch (error) { sourceOk = false; result.packageAssessment = { configured: true, state: 'incomplete', inventories: [] }; result.reasons.push(`Package assessment unavailable: ${error.message}`); }
+  const urgent = result.vulnerabilities.some(v => v.score >= 7 || v.knownExploited || ['HIGH', 'CRITICAL'].includes(v.severity));
   result.status = urgent || life.state === 'expired' ? 'red' : !sourceOk || life.state === 'unknown' ? 'unknown' : life.state === 'approaching' ? 'yellow' : 'green';
-  if (urgent) result.reasons.push(`${result.vulnerabilities.length} ${result.vendorConfirmed ? 'vendor-confirmed' : 'possible'} high/critical or known exploited CVE${result.vulnerabilities.length === 1 ? '' : 's'}${result.vendorConfirmed ? '' : '; confirm vendor applicability'}`);
+  if (result.status === 'green' && result.vulnerabilities.some(finding => finding.package)) result.status = result.vulnerabilities.some(finding => finding.package && finding.severity === 'UNKNOWN') ? 'unknown' : 'yellow';
+  const unknownSeverity = result.vulnerabilities.filter(finding => finding.package && finding.severity === 'UNKNOWN').length;
+  if (unknownSeverity) result.reasons.push(`${unknownSeverity} package findings have no interpreted severity label; review retained source severity evidence`);
+  if (urgent) result.reasons.push(`${result.vulnerabilities.filter(v => v.score >= 7 || v.knownExploited || ['HIGH', 'CRITICAL'].includes(v.severity)).length} high/critical or known-exploited findings; review linked applicability evidence`);
   if (life.state !== 'supported') result.reasons.push(life.note);
   if (result.status === 'green') result.reasons.push(`Supported; no high or critical CVEs found in ${sourceLabel}`);
+  result.assessmentSource = sourceLabel;
   return result;
 }
 
@@ -734,7 +793,7 @@ async function refresh() {
 
 async function refreshApplication(appId) {
   if (refreshPromise) await refreshPromise;
-  if (!snapshot) return refresh();
+  if (!snapshot) snapshot = { results: [], checkedAt: new Date().toISOString(), workspaces: [], owners: [], inventoryCount: 0 };
   refreshPromise = (async () => {
     const apps = parseInventory(await readFile(path.join(configDirectory, 'applications.yaml'), 'utf8'));
     const owners = await readOwners(ownerFile);
@@ -768,6 +827,8 @@ async function refreshApplication(appId) {
   return refreshPromise;
 }
 
+const bundledLicenses = JSON.parse(await readFile(new URL('./licenses.json', import.meta.url), 'utf8'));
+
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
 const requestHandler = async (req, res) => {
   try {
@@ -799,6 +860,10 @@ const requestHandler = async (req, res) => {
     if (req.permissionPreview && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !previewExit) {
       forbidden(res, 'Permission Preview is read-only. Exit preview to make changes.'); return;
     }
+    if (url.pathname === '/api/licenses' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(bundledLicenses)); return;
+    }
     if (url.pathname === '/api/session' && req.method === 'GET') {
       const { access } = await authorization(req);
       const real = await realAuthorization(req);
@@ -815,7 +880,7 @@ const requestHandler = async (req, res) => {
     if (url.pathname === '/api/settings' && req.method === 'GET') {
       const smtp = await readSmtpSettings(smtpFile);
       const configuredGeneral = await readGeneralSettings(generalFile);
-      const general = configuredGeneral.host ? configuredGeneral : detectedGeneral(req);
+      const general = configuredGeneral.host ? configuredGeneral : { ...detectedGeneral(req), sbomUploadLimitMiB: configuredGeneral.sbomUploadLimitMiB };
       const password = await smtpPasswordState(process.env);
       const envStatus = { usernamePresent: Boolean(smtp.usernameEnv && process.env[smtp.usernameEnv]), passwordFileConfigured: password.configured, passwordPresent: password.present };
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ version: applicationVersion, smtp, general, generalConfigured: Boolean(configuredGeneral.host), envStatus })); return;
@@ -838,9 +903,10 @@ const requestHandler = async (req, res) => {
       const general = await yamlMonitor.webWrite(generalFile, () => writeGeneralSettings(generalFile, generalInput));
       const smtpFieldsChanged = Object.keys(changedFields(previousSmtp, smtp, Object.keys(smtp)));
       const publicAddress = changedFields({ url: generalUrl(previousGeneral) }, { url: generalUrl(general) }, ['url']);
-      if (smtpFieldsChanged.length || Object.keys(publicAddress).length) {
-        const changes = { publicAddress, smtpFieldsChanged, emailDelivery: { from: previousSmtp.enabled, to: smtp.enabled } };
-        const detail = [Object.keys(publicAddress).length ? `Public address: ${describeFields(publicAddress)}` : '', smtpFieldsChanged.length ? `Email fields changed: ${smtpFieldsChanged.join(', ')}` : ''].filter(Boolean).join('; ');
+      const inventoryLimits = changedFields(previousGeneral, general, ['sbomUploadLimitMiB']);
+      if (smtpFieldsChanged.length || Object.keys(publicAddress).length || Object.keys(inventoryLimits).length) {
+        const changes = { publicAddress, inventoryLimits, smtpFieldsChanged, emailDelivery: { from: previousSmtp.enabled, to: smtp.enabled } };
+        const detail = [Object.keys(publicAddress).length ? `Public address: ${describeFields(publicAddress)}` : '', Object.keys(inventoryLimits).length ? `Inventory limits: ${describeFields(inventoryLimits)}` : '', smtpFieldsChanged.length ? `Email fields changed: ${smtpFieldsChanged.join(', ')}` : ''].filter(Boolean).join('; ');
         await logger.audit('Settings updated', auditActor(req), { type: 'settings', id: 'general-and-email' }, changes, detail);
       }
       if (snapshot) notifier.onScan(snapshot).catch(error => console.error(`Notification check failed: ${error.message}`));
@@ -1170,20 +1236,23 @@ const requestHandler = async (req, res) => {
       const { apps, access } = await authorization(req);
       if (!access.appEdit.has(applicationId)) { forbidden(res, 'Application Editor role required'); return; }
       const application = apps.find(item => item.id === applicationId);
-      const liveApplication = snapshot?.results?.find(item => item.id === applicationId);
-      const finding = liveApplication?.vulnerabilities?.find(item => item.id === findingId);
-      if (!application || !finding) throw new Error('Active finding not found');
-      const actor = auditActor(req);
-      const store = await readFindingStore(findingStoreFile);
-      const updated = updateFindingWorkflow(store, applicationId, findingId, await readBody(req), actor);
-      if (updated.event) {
-        await writeFindingStore(findingStoreFile, store);
-        await appendFindingEvents(findingHistoryFile, [updated.event]);
-        finding.workflow = updated.record;
-        await saveAtomic(snapshotFile, `${JSON.stringify(snapshot)}\n`);
-        await logger.audit('Finding workflow updated', actor, { type: 'finding', id: findingId, applicationId, applicationName: application.name }, updated.changes, `${application.name}: ${findingId} → ${updated.record.stateLabel}`);
-      }
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(updated.record)); return;
+      if (refreshPromise) await refreshPromise;
+      await withFindingWrite(async () => {
+        const liveApplication = snapshot?.results?.find(item => item.id === applicationId);
+        const finding = liveApplication?.vulnerabilities?.find(item => item.id === findingId);
+        if (!application || !finding) throw new Error('Active finding not found');
+        const actor = auditActor(req);
+        const store = await readFindingStore(findingStoreFile);
+        const updated = updateFindingWorkflow(store, applicationId, findingId, await readBody(req), actor);
+        if (updated.event) {
+          await writeFindingStore(findingStoreFile, store);
+          await appendFindingEvents(findingHistoryFile, [updated.event]);
+          finding.workflow = updated.record;
+          await saveAtomic(snapshotFile, `${JSON.stringify(snapshot)}\n`);
+          await logger.audit('Finding workflow updated', actor, { type: 'finding', id: findingId, applicationId, applicationName: application.name }, updated.changes, `${application.name}: ${findingId} → ${updated.record.stateLabel}`);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(updated.record));
+      }); return;
     }
     const appFeeds = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/feeds$/i);
     if (appFeeds && req.method === 'PUT') {
@@ -1277,12 +1346,56 @@ const requestHandler = async (req, res) => {
       await logger.audit('Application removed', auditActor(req), { type: 'application', id: app.id, name: app.name }, changes, `${app.name} (${app.id}); removed from ${affectedWorkspaces.length} workspaces and ${affectedFeeds.length} feeds; finding workflow records preserved`);
       res.writeHead(204); res.end(); return;
     }
+    const componentRoute = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/inventory\/revisions\/([0-9a-f-]+)\/components$/i);
+    if (componentRoute && req.method === 'GET') {
+      const { access, apps } = await authorization(req);
+      const applicationId = componentRoute[1];
+      if (!access.appView.has(applicationId)) { forbidden(res); return; }
+      if (!apps.some(app => app.id === applicationId)) throw new Error('Application not found');
+      const offset = Number(url.searchParams.get('offset') || 0);
+      const q = (url.searchParams.get('q') || '').trim().toLowerCase();
+      if (!Number.isInteger(offset) || offset < 0 || offset > sbomLimits.components || q.length > 200) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Invalid component search' })); return; }
+      let revision;
+      try { revision = await inventoryStore.readRevision(applicationId, componentRoute[2]); }
+      catch (error) {
+        if (error.message !== 'Inventory revision not found') throw error;
+        res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Inventory revision not found' })); return;
+      }
+      const filtered = revision.components.filter(component => !q || [component.name, component.version, component.purl, component.supplier, ...(component.licenses || [])].join(' ').toLowerCase().includes(q));
+      const components = filtered.slice(offset, offset + 50);
+      const refs = new Set(components.map(component => component.componentRef));
+      const dependencies = (revision.dependencies || []).filter(edge => refs.has(edge.from) || refs.has(edge.to)).slice(0, 200);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ revisionId: revision.id, total: filtered.length, offset, components, dependencies, dependencyCount: (revision.dependencies || []).length })); return;
+    }
+    const inventoryRoute = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/(inventory|images|sboms)$/i);
+    if (inventoryRoute && ['GET', 'PUT', 'POST'].includes(req.method)) {
+      const applicationId = inventoryRoute[1];
+      const { access, apps } = await authorization(req);
+      if (!access.appView.has(applicationId) || (req.method !== 'GET' && !access.appEdit.has(applicationId))) { forbidden(res, 'Application access required'); return; }
+      if (!apps.some(app => app.id === applicationId)) throw new Error('Application not found');
+      let result;
+      if (req.method !== 'GET' && refreshPromise) await refreshPromise;
+      if (req.method === 'GET' && inventoryRoute[2] === 'inventory') result = { ...await inventoryStore.read(applicationId), uploadLimitMiB: (await readGeneralSettings(generalFile)).sbomUploadLimitMiB };
+      else if (req.method === 'PUT' && inventoryRoute[2] === 'images') {
+        result = await inventoryStore.setImages(applicationId, (await readBody(req)).images, auditActor(req));
+        await logger.audit('Application images updated', auditActor(req), { type: 'application', id: applicationId }, { images: result.images });
+      } else if (req.method === 'POST' && inventoryRoute[2] === 'sboms') {
+        if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') throw new Error('Compressed SBOM uploads are unsupported');
+        const maxBytes = (await readGeneralSettings(generalFile)).sbomUploadLimitMiB * 1024 * 1024;
+        const body = await readBody(req, maxBytes * 2 + 100000);
+        result = await inventoryStore.import(applicationId, body.sbom, body.imageId, auditActor(req), { maxBytes });
+        await logger.audit('SBOM imported', auditActor(req), { type: 'application', id: applicationId }, result, 'Inventory awaiting vulnerability assessment');
+      } else { res.writeHead(405); res.end(); return; }
+      res.writeHead(req.method === 'POST' ? 201 : 200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(result)); return;
+    }
     const appRefresh = url.pathname.match(/^\/api\/applications\/([0-9a-f-]+)\/refresh$/i);
     if (appRefresh && req.method === 'POST') {
-      const { access } = await authorization(req);
-      if (!access.appEdit.has(appRefresh[1])) { forbidden(res, 'Application Editor role required'); return; }
+      await snapshotReady;
+      const { access, owners } = await authorization(req);
+      if (!canRefreshApplication(access, appRefresh[1])) { forbidden(res, 'Application Editor or Scan Operator access required'); return; }
       const data = await refreshApplication(appRefresh[1]);
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); return;
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(visibleSnapshot(data, owners, access, req))); return;
     }
     const workspaceEdit = url.pathname.match(/^\/api\/workspaces\/([A-Za-z0-9._-]+)$/);
     if ((url.pathname === '/api/workspaces' && req.method === 'POST') || (workspaceEdit && req.method === 'PUT')) {
@@ -1359,11 +1472,18 @@ const requestHandler = async (req, res) => {
       const { owners, access } = await authorization(req);
       if (url.searchParams.has('refresh') && !access.scan) { forbidden(res, 'Scan Operator role required'); return; }
       const data = !snapshot || Date.now() - new Date(snapshot.checkedAt).getTime() > refreshMs || url.searchParams.has('refresh') ? await refresh() : snapshot;
-      const results = (data.results || []).filter(app => access.appView.has(app.id));
-      const workspaces = (data.workspaces || []).filter(group => access.workspaceView.has(group.id)).map(group => ({ ...group, applications: group.applications.filter(id => access.appView.has(id)) }));
-      const assignedOwnerIds = new Set(results.flatMap(app => app.ownerIds || []));
-      const visibleOwners = owners.filter(owner => assignedOwnerIds.has(owner.id));
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ ...data, results, workspaces, owners: visibleOwners, access: accessJson(access), groupOverage: req.permissionPreview ? false : Boolean(req.authUser?.groupOverage) })); return;
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(visibleSnapshot(data, owners, access, req))); return;
+    }
+    const replacementDownload = url.pathname.match(/^\/api\/sboms\/demo-(before|after)$/);
+    if (replacementDownload && req.method === 'GET') {
+      const stage = replacementDownload[1];
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': `attachment; filename="replacement-${stage}.cdx.json"`, 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(replacementDemo(stage), null, 2)); return;
+    }
+    if (url.pathname === '/api/sboms/demo' && req.method === 'GET') {
+      const demo = { bomFormat: 'CycloneDX', specVersion: '1.6', version: 1, components: [{ type: 'library', 'bom-ref': 'lodash', name: 'lodash', version: '4.17.20', purl: 'pkg:npm/lodash@4.17.20' }] };
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': 'attachment; filename="demo-sbom.cdx.json"', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(demo, null, 2)); return;
     }
     const files = { '/': 'index.html', '/styles.css': 'styles.css', '/theme-init.js': 'theme-init.js', '/app.js': 'app.js', '/favicon.svg': 'favicon.svg' };
     const file = files[url.pathname];

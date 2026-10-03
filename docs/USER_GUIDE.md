@@ -97,6 +97,27 @@ Open the application details and select **Edit application**. Update the install
 
 Review the CPE and lifecycle mappings whenever the product name, edition, release family, or vendor changes.
 
+### Refresh one application
+
+Open an application and choose **Refresh application** beside **Edit application**.
+This collects its associated feeds and updates its assessment without refreshing
+other applications. Administrators, Application Editors (including workspace
+grants), and Scan Operators with view access to that application can use it.
+View-only access and feed-edit access alone do not permit refresh. Permission
+Preview remains read-only. Review Assessment warnings after refresh for source
+failures or incomplete evidence.
+
+Application details start at the top when opened. Refreshing an already open
+dialog preserves its scroll position.
+
+Signal's SBOM ingestion APIs and supported formats are described in
+[SBOM imports](SBOM_IMPORTS.md). The [inventory interface](INVENTORY_UI.md) manages
+images, imports, provenance, component browsing, and revision history.
+
+[Package assessment](PACKAGE_ASSESSMENT.md) now connects imported inventories to
+OSV on refresh. Package findings show the exact installed component and advisory;
+unsupported or failed evidence remains incomplete. Application Editors manage
+images and SBOMs from Package inventory or the application editor.
 ## Owners and application context
 
 ![Reusable owner directory in dark mode](images/0.10.0/owners-dark.jpg)
@@ -234,11 +255,15 @@ Acknowledgement links require confirmation. Acknowledging an application stops r
 
 ## General settings
 
+The **Licenses and attribution** link in the footer and Package inventory opens the same read-only dialog. Expand an entry to read its full bundled license text, including SPDX, CycloneDX, and JavaScript dependency notices. These texts are available without internet access; upstream links are optional. Ordinary viewers and Permission Preview can read the notices. Package license declarations from imported SBOMs describe inventory packages separately.
+
 ![WatchTower 0.10.0 general and delivery settings](images/0.10.0/settings-dark.jpg)
 
 Open **Settings > General** and configure the public protocol, hostname, and web port used in notification links. These values must describe the address recipients can reach, which may differ from the container's internal listener.
 
 When WatchTower is behind a reverse proxy, use the public HTTPS hostname and port. Saving an incorrect address can produce unusable email links.
+
+Administrators can also set the **SBOM upload limit (MiB)** here. The default is **35 MiB**; choose a whole number from **1 to 100 MiB**. Changes apply to subsequent uploads without restarting and persist across restarts. The import dialog displays the configured limit, and oversized uploads show an error without replacing the current inventory. Larger imports require additional memory; reverse proxies must allow the JSON-encoded request size, which can be larger than the SBOM file.
 
 ## Access control
 
@@ -315,3 +340,15 @@ When investigating a problem:
 WatchTower stores configuration as YAML and detects external changes, but direct editing is discouraged. The UI validates values and relationships, preserves immutable identifiers, applies permission checks, and creates attributable audit records.
 
 Use the interface for normal administration. Direct file editing should be limited to recovery or carefully controlled maintenance with a current backup and a clear understanding of the stored schema.
+
+### Package inventory assessment
+
+Select **Package inventory (SBOM)** in Add/Edit application to assess an application
+without a CPE. Supply a lifecycle source or manual end-of-life date. Open the
+application and choose **Package inventory** under Assessment to import SPDX JSON
+2.2 or 2.3, SPDX JSON-LD 3.0 or 3.0.1, or CycloneDX JSON 1.4 through 1.7, then use **Refresh application** to assess its packages.
+Application Editors can import; viewers can inspect active inventory metadata.
+The dialog also manages container images, shows SBOM provenance and revision history,
+and browses normalized components. See [inventory management](INVENTORY_UI.md).
+The dialog provides a downloadable demo SBOM for testing. See
+[package assessment](PACKAGE_ASSESSMENT.md) for coverage, privacy, and testing details.
