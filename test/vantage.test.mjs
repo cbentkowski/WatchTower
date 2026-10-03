@@ -62,6 +62,9 @@ test('Permission Preview enforces selected access, blocks mutations, and preserv
     const cookie = started.headers.get('set-cookie').split(';')[0];
     const session = await (await fetch(`${origin}/api/session`, { headers: { cookie } })).json();
     assert.equal(session.isAdmin, false);
+    const licenseResponse = await fetch(`${origin}/api/licenses`, { headers: { cookie } });
+    assert.equal(licenseResponse.status, 200);
+    assert.ok((await licenseResponse.json()).entries.some(entry => entry.name === 'SPDX schemas 3.0 and 3.0.1'));
     assert.equal(session.preview.name, 'Workspace Readers');
 
     const visible = await (await fetch(`${origin}/api/config`, { headers: { cookie } })).json();

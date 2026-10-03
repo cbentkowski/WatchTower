@@ -19,6 +19,7 @@ COPY --from=build /usr/share/doc/tini/copyright /usr/share/doc/tini/copyright
 COPY --from=build --chown=1000:1000 /opt/watchtower/data /opt/watchtower/data
 COPY --from=build /opt/watchtower/node_modules /opt/watchtower/node_modules
 COPY package.json /opt/watchtower/package.json
+COPY LICENSE NOTICE /opt/watchtower/
 COPY src /opt/watchtower/src
 COPY config /opt/watchtower/defaults
 

@@ -1534,6 +1534,22 @@ load();
 setInterval(() => { if (!document.hidden) load(false, true); }, 60_000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) load(false, true); });
 
+async function openLicenses(event) {
+  event.preventDefault();
+  const dialog = $('licenses-dialog');
+  dialog.showModal();
+  dialog.scrollTop = 0;
+  $('licenses-body').textContent = 'Loading bundled notices…';
+  try {
+    const response = await fetch('/api/licenses');
+    if (!response.ok) throw new Error('Could not load bundled notices. Close this dialog and try again.');
+    const data = await response.json();
+    $('licenses-body').innerHTML = '<p>These notices cover material bundled with WatchTower. Package license declarations in imported SBOMs describe your inventory separately.</p><h3>WatchTower notices</h3><pre>' + escape(data.notice) + '</pre>' + data.entries.map(entry => '<details><summary>' + escape(entry.name) + (entry.version ? ' ' + escape(entry.version) : '') + ' · ' + escape(entry.license) + '</summary><p><a href="' + escape(entry.source) + '" target="_blank" rel="noopener noreferrer">Upstream source ↗</a></p><pre>' + escape(entry.text) + '</pre></details>').join('');
+  } catch (error) { $('licenses-body').textContent = error.message; }
+}
+document.querySelectorAll('[data-open-licenses]').forEach(link => link.addEventListener('click', openLicenses));
+$('licenses-close').addEventListener('click', () => $('licenses-dialog').close());
+
 function packageCoverageMarkup(assessment) {
   if (!assessment?.inventories?.length) return '';
   const reasonLabel = reason => ({ 'unsupported-ecosystem': 'No assessment adapter for this package ecosystem', 'unsupported-qualifiers': 'Package qualifiers are not supported by the assessment adapter', 'missing-purl': 'No package URL (PURL) supplied', 'missing-purl-version': 'PURL has no installed version', 'version-mismatch': 'Package version conflicts with its PURL', 'invalid-purl': 'Invalid package URL', 'conflicting-purls': 'Conflicting package URLs' }[reason] || reason.replaceAll('-', ' '));
@@ -1769,3 +1785,5 @@ $('components-close').addEventListener('click', () => { componentRequest++; $('c
 $('component-search-form').addEventListener('submit', event => { event.preventDefault(); componentOffset = 0; componentQuery = $('component-search').value; loadComponents(); });
 $('components-prev').addEventListener('click', () => { componentOffset = Math.max(0, componentOffset - 50); loadComponents(); });
 $('components-next').addEventListener('click', () => { componentOffset += 50; loadComponents(); });
+
+
