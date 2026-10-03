@@ -46,7 +46,7 @@ The image copies starter configuration into an empty mount during first startup.
 
 ### Choose a version
 
-Use a versioned release tag in production, such as `devynn76/watchtowervi:0.8.0`. Replace `0.8.0` with the version you intend to deploy. Avoid relying on `latest` for controlled environments because it can change during a future release.
+Use a versioned release tag in production, such as `devynn76/watchtowervi:0.10.0`. Replace `0.10.0` with the version you intend to deploy. Avoid relying on `latest` for controlled environments because it can change during a future release.
 
 ### Configure OpenID Connect
 
@@ -90,7 +90,7 @@ Create `compose.yaml`:
 ```yaml
 services:
   watchtower:
-    image: devynn76/watchtowervi:0.8.0
+    image: devynn76/watchtowervi:0.10.0
     container_name: watchtower
     restart: unless-stopped
     ports:
