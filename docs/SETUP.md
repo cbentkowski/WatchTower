@@ -25,7 +25,7 @@ This guide covers a production-oriented Docker deployment of WatchTower. It assu
 Before starting, prepare:
 
 - A host with Docker Engine and Docker Compose.
-- Persistent storage for `/home/container`.
+- Persistent storage for `/opt/watchtower/data`.
 - Outbound HTTPS access to NVD, CISA, endoflife.date, configured feeds, and your OpenID Connect provider.
 - One inbound TCP port for native HTTPS or a trusted reverse proxy.
 - An OpenID Connect client from Microsoft Entra ID, Keycloak, or another compatible provider.
@@ -35,18 +35,18 @@ WatchTower runs its own hourly scheduler. Do not create a host cron job or a sec
 
 ### Persistent storage
 
-Mount persistent storage at `/home/container`. WatchTower creates and maintains these directories inside it:
+For 0.11.0 and later, mount persistent storage at `/opt/watchtower/data`. Earlier images use `/home/container`; follow the [existing-volume upgrade instructions](CONTAINER_RUNTIME.md#upgrade-an-existing-storage-volume) when migrating. During pre-release validation, use the PR preview tag rather than the unreleased 0.11.0 tag. WatchTower creates and maintains these directories inside it:
 
-- `/home/container/config` contains application, owner, workspace, feed, notification-policy, access-control, general, and email configuration. Notification policies, schedules, recipient routes, reminder intervals, and escalation rules are stored in `notification-policies.json`; an upgrade without that file creates equivalent default policies automatically.
-- `/home/container/data` contains the latest scan, finding workflows and append-only finding history, feed cache, notification state, and system, notification-delivery, feed, audit, and authentication logs.
+- `/opt/watchtower/data/config` contains application, owner, workspace, feed, notification-policy, access-control, general, and email configuration. Notification policies, schedules, recipient routes, reminder intervals, and escalation rules are stored in `notification-policies.json`; an upgrade without that file creates equivalent default policies automatically.
+- `/opt/watchtower/data/state` contains the latest scan, finding workflows and append-only finding history, feed cache, notification state, and system, notification-delivery, feed, audit, and authentication logs.
 
 Back up the entire mounted directory. Replacing a container without preserving this mount removes configuration, acknowledgement state, and locally retained results.
 
-The image copies starter configuration into an empty mount during first startup. It also migrates legacy YAML files found directly under `/home/container` into `/home/container/config`.
+The image copies starter configuration into an empty mount during first startup. It also migrates legacy YAML files found directly under `/opt/watchtower/data` into `/opt/watchtower/data/config`.
 
 ### Choose a version
 
-Use a versioned release tag in production, such as `devynn76/watchtowervi:0.8.0`. Replace `0.8.0` with the version you intend to deploy. Avoid relying on `latest` for controlled environments because it can change during a future release.
+Use a versioned release tag in production, such as `devynn76/watchtowervi:0.11.0`. Replace `0.11.0` with the version you intend to deploy. Avoid relying on `latest` for controlled environments because it can change during a future release.
 
 ### Configure OpenID Connect
 
@@ -90,7 +90,7 @@ Create `compose.yaml`:
 ```yaml
 services:
   watchtower:
-    image: devynn76/watchtowervi:0.8.0
+    image: devynn76/watchtowervi:0.11.0
     container_name: watchtower
     restart: unless-stopped
     ports:
@@ -103,7 +103,7 @@ services:
       OIDC_BASE_URL: https://watchtower.example.com
       # OIDC_PROMPT: select_account
     volumes:
-      - watchtower-data:/home/container
+      - watchtower-data:/opt/watchtower/data
       - ./secrets/oidc-client-secret:/run/watchtower-secrets/oidc-client-secret:ro
       - ./secrets/admin-group-id:/run/watchtower-secrets/admin-group-id:ro
 
@@ -172,8 +172,8 @@ Use this process for every upgrade:
 
 1. Read the target version's GitHub release notes and note any migration or configuration requirements.
 2. Confirm the current container is healthy and record the current image tag.
-3. Back up the persistent `/home/container` volume and mounted secret files.
-4. Change the image reference in `compose.yaml` to the target version. Do not change directly from one mutable `latest` image to another without recording both digests.
+3. Back up the persistent `/opt/watchtower/data` volume and mounted secret files.
+4. When moving from an earlier image to 0.11.0, follow the [existing-volume upgrade instructions](CONTAINER_RUNTIME.md#upgrade-an-existing-storage-volume), including the compatibility `DATA_DIR` override. Change the image reference in `compose.yaml` to the target version. Do not change directly from one mutable `latest` image to another without recording both digests.
 5. Pull and recreate the container:
 
    ```bash
@@ -191,7 +191,7 @@ WatchTower performs compatible file migrations during startup. Do not interrupt 
 
 ### Back up
 
-Stop the container for the most consistent file-level backup, then copy or snapshot the complete volume mounted at `/home/container`. Back up mounted secret files separately.
+Stop the container for the most consistent file-level backup, then copy or snapshot the complete volume mounted at `/opt/watchtower/data`. Back up mounted secret files separately.
 
 At minimum, preserve the complete `config` directory, including `owners.yaml` and `notification-policies.json`, and the notification, feed, scan, and log files under `data`. WatchTower stores rotating system, notification-delivery, feed, audit, and authentication streams in `system.jsonl`, `notification.jsonl`, `feed.jsonl`, `audit.jsonl`, and `auth.jsonl`; each may also have a `.previous.jsonl` rotation file. Legacy `logs.jsonl` files remain visible with the system stream after an upgrade.
 
@@ -220,7 +220,7 @@ Confirm that `OIDC_BASE_URL` exactly matches the public origin and that its `/au
 
 ### The application starts with no saved configuration
 
-Confirm that the expected persistent volume is mounted at `/home/container`. Inspect the container mounts before making new configuration changes.
+Confirm that the expected persistent volume is mounted at `/opt/watchtower/data`. Inspect the container mounts before making new configuration changes.
 
 ### Checks cannot reach external sources
 

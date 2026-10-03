@@ -12,9 +12,24 @@ Compose and Kubernetes use the image defaults without command overrides:
 
 The image no longer interprets `STARTUP` shell commands. If a platform needs an explicit command, use the executable arguments above. The application initializes defaults and migrates legacy YAML configuration before serving requests.
 
-The runtime uses UID 1000 and GID 1000, preserving existing volume ownership. Mount writable persistent storage at `/home/container`. Application code under `/opt/watchtower` is read-only. New Docker named volumes inherit the image directory ownership; existing volumes retain their ownership.
+The runtime uses UID 1000 and GID 1000, preserving existing volume ownership. Mount writable persistent storage at `/opt/watchtower/data`. Configuration lives in `/opt/watchtower/data/config`; application state, caches, and logs live in `/opt/watchtower/data/state`. Application code elsewhere under `/opt/watchtower` is read-only. New Docker named volumes inherit the image directory ownership; existing volumes retain their ownership.
 
 On Linux, provision bind-mounted data directories for `1000:1000`. Secret files must be readable by UID/GID 1000: for root-owned files, use group 1000 and mode `0440`, with parent directories traversable by that group. Do not make production private keys world-readable.
+
+## Upgrade an existing storage volume
+
+Stop WatchTower and back up the complete old volume before changing mounts. For a volume previously mounted at `/home/container`, reuse that same volume at `/opt/watchtower/data` and set:
+
+```yaml
+environment:
+  DATA_DIR: /opt/watchtower/data/data
+volumes:
+  - watchtower-data:/opt/watchtower/data
+```
+
+This retains the old `config/` and `data/` directory layout without moving or replacing any files. New deployments use `config/` and `state/`. Keep the compatibility override until an offline migration is performed; simply changing the mount without the override would start with an empty state directory. Do not run old and new instances against the volume simultaneously.
+
+To adopt the new layout later, stop the application, back up the volume, rename its `data` child directory to `state` (only if `state` does not already exist), and remove the `DATA_DIR` override. Do not rename the volume root or merge two existing state directories. Rollback requires restoring the backup and the previous mount/settings.
 
 ## Docker Compose
 
@@ -38,7 +53,7 @@ services:
       OIDC_CLIENT_SECRET_FILE: /run/watchtower-secrets/oidc-client-secret
       OIDC_ADMIN_GROUP_ID_FILE: /run/watchtower-secrets/admin-group-id
     volumes:
-      - watchtower-data:/home/container
+      - watchtower-data:/opt/watchtower/data
       - ./secrets:/run/watchtower-secrets:ro
 volumes:
   watchtower-data:
@@ -126,7 +141,7 @@ spec:
             periodSeconds: 30
           volumeMounts:
             - name: data
-              mountPath: /home/container
+              mountPath: /opt/watchtower/data
             - name: oidc
               mountPath: /run/watchtower-secrets
               readOnly: true
