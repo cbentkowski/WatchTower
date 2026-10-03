@@ -137,6 +137,6 @@ CycloneDX [1.4](https://github.com/CycloneDX/specification/tree/1.4/schema) and 
 SPDX 3 schemas use their version-specific 3.0.0 and 3.0.1 sources. The legacy
 3.0 context alias is adapted only in the validation copy. SPDX 3 license and
 preexisting-material notices are retained in `src/schemas/LICENSE-SPDX-3`.
-The import dialog exposes schema attribution and upstream license links.
+The import dialog and application footer open the shared Licenses and attribution dialog. Full bundled schema and JavaScript dependency notices are available locally, with optional upstream links. Regenerate the checked-in catalog after dependency or notice changes with `node .github/scripts/generate-licenses.mjs`; tests verify that it matches the shipped files.
 The category compatibility rule follows the upstream
 [SPDX interoperability discussion](https://github.com/spdx/spdx-spec/issues/792).

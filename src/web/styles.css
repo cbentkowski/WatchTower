@@ -60,3 +60,5 @@ html:not([data-theme="dark"]) .rail-foot code{color:#294657}
 .secondary-action{margin-top:16px}.secondary-action:hover{border-color:#198e78}.secondary-action:focus-visible{outline:2px solid #71d5ba;outline-offset:2px}
 
 #inventory-dialog .confirmation-fields .destructive{background:#b33238;border-color:#b33238;color:#fff}
+
+#licenses-dialog{width:min(900px,calc(100vw - 26px));max-height:90vh}#licenses-body{padding:20px 28px 28px;overflow:auto;max-height:calc(90vh - 90px)}#licenses-body pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:12px;line-height:1.6}#licenses-body details{border-top:1px solid #cbd9e1;padding:14px 0}#licenses-body summary{cursor:pointer;font-weight:700}#licenses-body a{color:#147c69}[data-theme="dark"] #licenses-body details{border-color:#405563}[data-theme="dark"] #licenses-body a{color:#74d9bf}

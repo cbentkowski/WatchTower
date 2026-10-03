@@ -827,6 +827,8 @@ async function refreshApplication(appId) {
   return refreshPromise;
 }
 
+const bundledLicenses = JSON.parse(await readFile(new URL('./licenses.json', import.meta.url), 'utf8'));
+
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
 const requestHandler = async (req, res) => {
   try {
@@ -857,6 +859,10 @@ const requestHandler = async (req, res) => {
     const previewExit = url.pathname === '/api/rbac/preview' && req.method === 'DELETE';
     if (req.permissionPreview && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !previewExit) {
       forbidden(res, 'Permission Preview is read-only. Exit preview to make changes.'); return;
+    }
+    if (url.pathname === '/api/licenses' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(bundledLicenses)); return;
     }
     if (url.pathname === '/api/session' && req.method === 'GET') {
       const { access } = await authorization(req);

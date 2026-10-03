@@ -255,6 +255,8 @@ Acknowledgement links require confirmation. Acknowledging an application stops r
 
 ## General settings
 
+The **Licenses and attribution** link in the footer and Package inventory opens the same read-only dialog. Expand an entry to read its full bundled license text, including SPDX, CycloneDX, and JavaScript dependency notices. These texts are available without internet access; upstream links are optional. Ordinary viewers and Permission Preview can read the notices. Package license declarations from imported SBOMs describe inventory packages separately.
+
 ![WatchTower 0.10.0 general and delivery settings](images/0.10.0/settings-dark.jpg)
 
 Open **Settings > General** and configure the public protocol, hostname, and web port used in notification links. These values must describe the address recipients can reach, which may differ from the container's internal listener.
