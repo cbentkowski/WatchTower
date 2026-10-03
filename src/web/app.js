@@ -1699,7 +1699,8 @@ function beginImageRetirement(id) {
   retiringImageId = id;
   $('image-form').hidden = true;
   $('image-retire-confirm').value = '';
-  $('image-retire-warning').textContent = 'Retirement is permanent. History is preserved; findings in this image resolve after refresh. Type ' + image.reference + ' to confirm.';
+  $('image-retire-warning').textContent = 'Retirement is permanent. History is preserved; findings in this image resolve after refresh.';
+  $('image-retire-reference').textContent = image.reference;
   $('image-retire-form').hidden = false;
   $('image-retire-confirm').focus();
 }
