@@ -6,7 +6,8 @@ import { PackageURL } from 'packageurl-js';
 import { normalizeSpdx3, spdx3Version } from './spdx3.mjs';
 import { canonicalImageReference } from './inventory.mjs';
 
-export const sbomLimits = Object.freeze({ bytes: 35 * 1024 * 1024, components: 10000, depth: 32, nodes: 2000000, text: 8192 });
+import { sbomLimits } from './sbom-limits.mjs';
+export { sbomLimits } from './sbom-limits.mjs';
 async function schemaValidator(primary, dependencies = []) {
   const ajv = new Ajv({ strict: false, allErrors: false, validateFormats: true });
   addFormats(ajv);
@@ -87,7 +88,7 @@ export function normalizeSbom(raw, { maxBytes = sbomLimits.bytes } = {}) {
   if (format === 'CycloneDX' && document.metadata?.component) pending.unshift(document.metadata.component);
   while (pending.length) {
     const component = pending.pop();
-    if (components.length >= sbomLimits.components) throw new Error('SBOM component count limit exceeded');
+    if (components.length >= sbomLimits.components) throw new Error(`SBOM component count limit exceeded (maximum ${sbomLimits.components.toLocaleString('en-US')} components)`);
     components.push(normalizedComponent(component, format, components.length));
     if (format === 'CycloneDX') pending.push(...(component.components || []));
   }

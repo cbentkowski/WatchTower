@@ -4,6 +4,7 @@ import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { PackageURL } from 'packageurl-js';
 import { canonicalImageReference } from './inventory.mjs';
+import { sbomLimits } from './sbom-limits.mjs';
 
 const contexts = new Map([['3.0', '3.0'], ['3.0.0', '3.0'], ['3.0.1', '3.0.1']].map(([context, version]) => [`https://spdx.org/rdf/${context}/spdx-context.jsonld`, version]));
 const schemas = Object.fromEntries(await Promise.all(['3.0', '3.0.1'].map(async version => [version, JSON.parse(await readFile(new URL(`./schemas/spdx-${version}.json`, import.meta.url), 'utf8'))])));
@@ -57,7 +58,7 @@ export function normalizeSpdx3(document, raw, version, normalizeComponent) {
     if (item.creationInfo && resolve(item.creationInfo)?.type !== 'CreationInfo') throw new Error(`Unresolved SPDX creation information for ${id(item) || item.type}`);
   }
   const packages = objects.filter(item => ['software_Package', 'ai_AIPackage', 'dataset_DatasetPackage'].includes(item.type));
-  if (packages.length > 10000) throw new Error('SBOM component count limit exceeded');
+  if (packages.length > sbomLimits.components) throw new Error(`SBOM component count limit exceeded (maximum ${sbomLimits.components.toLocaleString('en-US')} components)`);
   const relationships = objects.filter(item => item.from && Array.isArray(item.to) && item.relationshipType);
   const licenseText = value => {
     const license = resolve(value);

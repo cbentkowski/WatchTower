@@ -4,7 +4,7 @@
 
 ### Added
 
-- Configure the SBOM upload limit in General settings, with a 35 MiB default, persistent settings, and upload errors that preserve the current inventory.
+- Configure the SBOM upload limit in General settings, with a 35 MiB default, persistent settings, and upload errors that preserve the current inventory; support up to 50,000 components across supported SBOM formats.
 - Manage application images and SBOMs through the interface, with provenance, revision history, searchable components, grouped findings, and explicit image-reference mismatch handling.
 - Reconcile replacement SBOMs and retired images with package findings, preserving responses and resolved history while retaining incomplete evidence as unverified.
 - Provide Before and After test SBOM downloads and a resolved package finding history view in application details.

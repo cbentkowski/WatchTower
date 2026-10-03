@@ -16,7 +16,7 @@ and CycloneDX JSON 1.4 through 1.7. Format is
 detected from document content and validated against the bundled official schemas.
 Other versions, compressed documents, and scanner-result formats are rejected.
 This import profile applies additional conservative limits: configurable raw document size (35 MiB default, 1–100 MiB in Settings → General),
-10,000 components, nesting depth 32, 2,000,000 visited values, and 8,192 characters
+50,000 components, nesting depth 32, 2,000,000 visited values, and 8,192 characters
 per string. The JSON request envelope is bounded to twice the raw-document limit plus 100,000 bytes
 to account for JSON string escaping. Proxy limits must allow this encoded envelope.
 Settings persist in general.yaml and apply to subsequent uploads without restart. Validation runs in a worker

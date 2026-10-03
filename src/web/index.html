@@ -43,8 +43,9 @@
             <label>Protocol <select name="protocol" required><option value="http">HTTP</option><option value="https">HTTPS</option></select></label>
             <label>Hostname <input name="publicHost" required placeholder="watchtower.example.com"></label>
             <label>Web port <input name="publicPort" type="number" min="1" max="65535" required></label>
-            <label>SBOM upload limit (MiB) <input name="sbomUploadLimitMiB" type="number" min="1" max="100" step="1" value="35" required><small>Default 35 MiB; configurable from 1 to 100 MiB. Applies to new uploads without restarting.</small></label>
+            <label>SBOM upload limit (MiB) <input name="sbomUploadLimitMiB" type="number" min="1" max="100" step="1" value="35" required></label>
           </div>
+          <p class="form-hint">SBOM uploads default to 35 MiB; configurable from 1 to 100 MiB. Changes apply to new uploads without restarting.</p>
         </section>
         <section class="panel settings-panel"><div class="panel-head"><div><h2>Email delivery</h2><p>Saved in <code>config/smtp.yaml</code>. Disabled by default. Authenticated SMTP reads its password from a mounted secret file.</p></div></div>
           <label class="setting-relay setting-enabled"><input name="enabled" type="checkbox"> Enable email delivery</label>
