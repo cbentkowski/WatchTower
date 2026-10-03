@@ -229,6 +229,8 @@ Open **Settings > General** and configure the public protocol, hostname, and web
 
 When WatchTower is behind a reverse proxy, use the public HTTPS hostname and port. Saving an incorrect address can produce unusable email links.
 
+Administrators can also set the **SBOM upload limit (MiB)** here. The default is **35 MiB**; choose a whole number from **1 to 100 MiB**. Changes apply to subsequent uploads without restarting and persist across restarts. The import dialog displays the configured limit, and oversized uploads show an error without replacing the current inventory. Larger imports require additional memory; reverse proxies must allow the JSON-encoded request size, which can be larger than the SBOM file.
+
 ## Access control
 
 Administrators use **Access Control** to map exact identity-provider claims to WatchTower roles.

@@ -874,7 +874,7 @@ const requestHandler = async (req, res) => {
     if (url.pathname === '/api/settings' && req.method === 'GET') {
       const smtp = await readSmtpSettings(smtpFile);
       const configuredGeneral = await readGeneralSettings(generalFile);
-      const general = configuredGeneral.host ? configuredGeneral : detectedGeneral(req);
+      const general = configuredGeneral.host ? configuredGeneral : { ...detectedGeneral(req), sbomUploadLimitMiB: configuredGeneral.sbomUploadLimitMiB };
       const password = await smtpPasswordState(process.env);
       const envStatus = { usernamePresent: Boolean(smtp.usernameEnv && process.env[smtp.usernameEnv]), passwordFileConfigured: password.configured, passwordPresent: password.present };
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ version: applicationVersion, smtp, general, generalConfigured: Boolean(configuredGeneral.host), envStatus })); return;
@@ -897,9 +897,10 @@ const requestHandler = async (req, res) => {
       const general = await yamlMonitor.webWrite(generalFile, () => writeGeneralSettings(generalFile, generalInput));
       const smtpFieldsChanged = Object.keys(changedFields(previousSmtp, smtp, Object.keys(smtp)));
       const publicAddress = changedFields({ url: generalUrl(previousGeneral) }, { url: generalUrl(general) }, ['url']);
-      if (smtpFieldsChanged.length || Object.keys(publicAddress).length) {
-        const changes = { publicAddress, smtpFieldsChanged, emailDelivery: { from: previousSmtp.enabled, to: smtp.enabled } };
-        const detail = [Object.keys(publicAddress).length ? `Public address: ${describeFields(publicAddress)}` : '', smtpFieldsChanged.length ? `Email fields changed: ${smtpFieldsChanged.join(', ')}` : ''].filter(Boolean).join('; ');
+      const inventoryLimits = changedFields(previousGeneral, general, ['sbomUploadLimitMiB']);
+      if (smtpFieldsChanged.length || Object.keys(publicAddress).length || Object.keys(inventoryLimits).length) {
+        const changes = { publicAddress, inventoryLimits, smtpFieldsChanged, emailDelivery: { from: previousSmtp.enabled, to: smtp.enabled } };
+        const detail = [Object.keys(publicAddress).length ? `Public address: ${describeFields(publicAddress)}` : '', Object.keys(inventoryLimits).length ? `Inventory limits: ${describeFields(inventoryLimits)}` : '', smtpFieldsChanged.length ? `Email fields changed: ${smtpFieldsChanged.join(', ')}` : ''].filter(Boolean).join('; ');
         await logger.audit('Settings updated', auditActor(req), { type: 'settings', id: 'general-and-email' }, changes, detail);
       }
       if (snapshot) notifier.onScan(snapshot).catch(error => console.error(`Notification check failed: ${error.message}`));
@@ -1369,14 +1370,15 @@ const requestHandler = async (req, res) => {
       if (!apps.some(app => app.id === applicationId)) throw new Error('Application not found');
       let result;
       if (req.method !== 'GET' && refreshPromise) await refreshPromise;
-      if (req.method === 'GET' && inventoryRoute[2] === 'inventory') result = await inventoryStore.read(applicationId);
+      if (req.method === 'GET' && inventoryRoute[2] === 'inventory') result = { ...await inventoryStore.read(applicationId), uploadLimitMiB: (await readGeneralSettings(generalFile)).sbomUploadLimitMiB };
       else if (req.method === 'PUT' && inventoryRoute[2] === 'images') {
         result = await inventoryStore.setImages(applicationId, (await readBody(req)).images, auditActor(req));
         await logger.audit('Application images updated', auditActor(req), { type: 'application', id: applicationId }, { images: result.images });
       } else if (req.method === 'POST' && inventoryRoute[2] === 'sboms') {
         if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') throw new Error('Compressed SBOM uploads are unsupported');
-        const body = await readBody(req, sbomLimits.bytes + 100000);
-        result = await inventoryStore.import(applicationId, body.sbom, body.imageId, auditActor(req));
+        const maxBytes = (await readGeneralSettings(generalFile)).sbomUploadLimitMiB * 1024 * 1024;
+        const body = await readBody(req, maxBytes * 2 + 100000);
+        result = await inventoryStore.import(applicationId, body.sbom, body.imageId, auditActor(req), { maxBytes });
         await logger.audit('SBOM imported', auditActor(req), { type: 'application', id: applicationId }, result, 'Inventory awaiting vulnerability assessment');
       } else { res.writeHead(405); res.end(); return; }
       res.writeHead(req.method === 'POST' ? 201 : 200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(result)); return;

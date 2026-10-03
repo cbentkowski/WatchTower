@@ -77,8 +77,8 @@ export function createInventoryStore(directory) {
       state.images = reconcileImages(images, previous).map(image => image.retired && !previous.find(old => old.id === image.id)?.retired ? { ...image, retiredAt: new Date().toISOString(), retiredBy: actor } : image);
       return state;
     }),
-    import: (applicationId, raw, selection, actor) => update(applicationId, async state => {
-      const inventory = await processSbom(raw);
+    import: (applicationId, raw, selection, actor, options = {}) => update(applicationId, async state => {
+      const inventory = await processSbom(raw, options);
       const imageId = selectInventoryImage(inventory, state.images, selection);
       const revision = { ...inventory, ...createInventoryRevision(inventoryScope(applicationId, imageId), inventory), uploader: actor };
       revision.imageReferenceAtImport = state.images.find(image => image.id === imageId)?.reference || null;

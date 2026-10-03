@@ -100,5 +100,22 @@ test('replacement demos preserve responses across failure, upgrade, rollback, re
     const foreign = await fetch(origin + base + '/inventory/revisions/' + manyRevision.id + '/components');
     assert.equal(foreign.status, 404);
     assert.equal((await fetch(origin + browseRoute + '?offset=-1')).status, 400);
+    assert.equal((await request(base + '/inventory')).uploadLimitMiB, 35);
+    const largeDocument = { ...before, metadata: { properties: Array.from({ length: 3300 }, (_, index) => ({ name: 'property-' + index, value: 'x'.repeat(8000) })) } };
+    const largeRaw = JSON.stringify(largeDocument);
+    assert.ok(Buffer.byteLength(largeRaw) > 25 * 1024 * 1024);
+    const largeRevision = await request('/api/applications/' + otherApp.id + '/sboms', 'POST', { sbom: largeRaw, imageId: null });
+    assert.equal(largeRevision.componentCount, 2);
+    const settings = await request('/api/settings');
+    await request('/api/settings', 'POST', { smtp: settings.smtp, general: { ...settings.general, sbomUploadLimitMiB: 1 } });
+    assert.equal((await request(base + '/inventory')).uploadLimitMiB, 1);
+    const rejectedDoc = { ...before, metadata: { properties: largeDocument.metadata.properties.slice(0, 200) } };
+    const tooLarge = await fetch(origin + '/api/applications/' + otherApp.id + '/sboms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sbom: JSON.stringify(rejectedDoc), imageId: null }) });
+    assert.equal(tooLarge.status, 400);
+    assert.match((await tooLarge.json()).error, /size limit/);
+    assert.equal((await request('/api/applications/' + otherApp.id + '/inventory')).revisions.find(revision => revision.active).id, largeRevision.id);
+    await stop(); await start();
+    assert.equal((await request(base + '/inventory')).uploadLimitMiB, 1);
+
   } finally { await stop(); await rm(directory, { recursive: true, force: true }); }
 });

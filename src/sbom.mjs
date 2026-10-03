@@ -6,7 +6,7 @@ import { PackageURL } from 'packageurl-js';
 import { normalizeSpdx3, spdx3Version } from './spdx3.mjs';
 import { canonicalImageReference } from './inventory.mjs';
 
-export const sbomLimits = Object.freeze({ bytes: 5 * 1024 * 1024, components: 10000, depth: 32, nodes: 200000, text: 8192 });
+export const sbomLimits = Object.freeze({ bytes: 35 * 1024 * 1024, components: 10000, depth: 32, nodes: 2000000, text: 8192 });
 async function schemaValidator(primary, dependencies = []) {
   const ajv = new Ajv({ strict: false, allErrors: false, validateFormats: true });
   addFormats(ajv);
@@ -72,8 +72,8 @@ function normalizedComponent(component, format, index) {
     locations, location: locations.length === 1 ? locations[0] : '', packageFileName: text(component.packageFileName), identityState: issue ? 'incomplete' : 'awaiting-source-support' };
 }
 
-export function normalizeSbom(raw) {
-  if (typeof raw !== 'string' || Buffer.byteLength(raw) > sbomLimits.bytes) throw new Error('SBOM exceeds upload size limit');
+export function normalizeSbom(raw, { maxBytes = sbomLimits.bytes } = {}) {
+  if (typeof raw !== 'string' || Buffer.byteLength(raw) > maxBytes) throw new Error('SBOM exceeds upload size limit');
   let document;
   try { document = JSON.parse(raw); } catch { throw new Error('SBOM must be uncompressed JSON'); }
   boundDocument(document);

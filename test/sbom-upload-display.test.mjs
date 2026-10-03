@@ -25,9 +25,9 @@ function contextFor(file, fetch) {
 const file = { size: 12, text: async () => '{not json}' };
 
 test('oversized uploads show an alert before sending and preserve the active inventory', async () => {
-  const { element, submit } = contextFor({ ...file, size: 6 * 1024 * 1024 }, () => assert.fail('Must not upload'));
+  const { element, submit } = contextFor({ ...file, size: 36 * 1024 * 1024 }, () => assert.fail('Must not upload'));
   await submit();
-  assert.match(element('sbom-message').textContent, /SBOM upload failed:.*6.00 MiB.*5 MiB/);
+  assert.match(element('sbom-message').textContent, /SBOM upload failed:.*36.00 MiB.*35 MiB/);
   assert.equal(element('sbom-message').attributes.role, 'alert');
   assert.ok(element('sbom-message').classes.has('form-error'));
   assert.equal(element('inventory-summary').innerHTML, 'previous active inventory');

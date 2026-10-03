@@ -589,6 +589,7 @@ async function loadSettings() {
     form.querySelector('[name="protocol"]').value = general.protocol;
     form.querySelector('[name="publicHost"]').value = general.host;
     form.querySelector('[name="publicPort"]').value = general.port;
+    form.querySelector('[name="sbomUploadLimitMiB"]').value = data.general?.sbomUploadLimitMiB ?? 35;
     form.querySelector(`[name="transportSecurity"][value="${data.smtp.secure ? 'tls' : data.smtp.requireTls ? 'starttls' : 'none'}"]`).checked = true;
     updateCredentialFields();
     showEnvironmentStatus(data);
@@ -602,10 +603,11 @@ async function saveSettings(event) {
   const fields = new FormData(form);
   const payload = Object.fromEntries(fields);
   delete payload.testRecipient;
-  const general = { protocol: payload.protocol, host: payload.publicHost, port: Number(payload.publicPort) };
+  const general = { protocol: payload.protocol, host: payload.publicHost, port: Number(payload.publicPort), sbomUploadLimitMiB: Number(payload.sbomUploadLimitMiB) };
   delete payload.protocol;
   delete payload.publicHost;
   delete payload.publicPort;
+  delete payload.sbomUploadLimitMiB;
   delete payload.transportSecurity;
   const security = form.querySelector('[name="transportSecurity"]:checked')?.value;
   payload.secure = security === 'tls';
@@ -962,7 +964,7 @@ async function openEditor(mode, targetId = null) {
         <label>Latest version override <input name="latestVersion" placeholder="Optional"></label>
         <label>Latest installed-line override <input name="latestBranchVersion" placeholder="Optional"></label>
         <label>Latest LTS override <input name="latestLtsVersion" placeholder="Optional"></label>
-      </div>${targetId ? `<button id="editor-inventory" type="button">Manage images and SBOMs</button><p class="form-hint">Image changes and SBOM imports save independently of this application form.</p><p class="form-hint">Application ID: <code>${escape(targetId)}</code> (immutable)</p>` : ''}<p class="form-hint">Provide a lifecycle product or a manual end-of-life date. Product assessment requires a CPE. Package inventory assessment uses an imported SBOM; you can import it after saving.</p><div class="association-summaries">${associationRow('ownerIds', 'Owners', 'None selected')}${associationRow('workspaceIds', 'Workspaces', 'None selected')}${associationRow('feedIds', 'Feeds', 'None selected')}</div>`;
+      </div>${targetId ? `<button id="editor-inventory" class="secondary-action" type="button">Manage images and SBOMs</button><p class="form-hint">Image changes and SBOM imports save independently of this application form.</p><p class="form-hint">Application ID: <code>${escape(targetId)}</code> (immutable)</p>` : ''}<p class="form-hint">Provide a lifecycle product or a manual end-of-life date. Product assessment requires a CPE. Package inventory assessment uses an imported SBOM; you can import it after saving.</p><div class="association-summaries">${associationRow('ownerIds', 'Owners', 'None selected')}${associationRow('workspaceIds', 'Workspaces', 'None selected')}${associationRow('feedIds', 'Feeds', 'None selected')}</div>`;
       if (targetId) $('editor-inventory').addEventListener('click', () => openInventory(targetId));
       $('change-cpe').addEventListener('click', openCpeDialog);
       $('change-lifecycle').addEventListener('click', openLifecycleDialog);
@@ -1551,6 +1553,7 @@ function packageCoverageMarkup(assessment) {
 }
 
 let inventoryApplicationId = null;
+let sbomUploadLimitMiB = 35;
 function setSbomMessage(message, failed = false) {
   const element = $('sbom-message');
   element.textContent = failed ? `SBOM upload failed: ${message}` : message;
@@ -1565,6 +1568,8 @@ async function readInventory() {
   const inventory = await response.json();
   if (applicationId !== inventoryApplicationId) return;
   if (!response.ok) throw new Error(inventory.error || 'Could not load inventory');
+  sbomUploadLimitMiB = inventory.uploadLimitMiB ?? 35;
+  $('sbom-upload-limit').textContent = sbomUploadLimitMiB + ' MiB';
   const previousScope = $('sbom-scope').value;
   $('sbom-scope').innerHTML = '<option value="">Application</option>' + inventory.images.filter(image => image.enabled && !image.retired).map(image => '<option value="' + escape(image.id) + '">' + escape(image.label || image.reference) + '</option>').join('');
   if (inventory.images.some(image => image.id === previousScope && image.enabled && !image.retired)) $('sbom-scope').value = previousScope;
@@ -1600,7 +1605,7 @@ async function importSbom(event) {
   if (inventoryBusy) return;
   const file = $('sbom-file').files[0];
   if (!file) return;
-  if (file.size > 5 * 1024 * 1024) { setSbomMessage(`The file is ${(file.size / 1024 / 1024).toFixed(2)} MiB. The maximum upload size is 5 MiB.`, true); return; }
+  if (file.size > sbomUploadLimitMiB * 1024 * 1024) { setSbomMessage(`The file is ${(file.size / 1024 / 1024).toFixed(2)} MiB. The maximum upload size is ${sbomUploadLimitMiB} MiB.`, true); return; }
   inventoryBusy = true;
   $('image-add').disabled = true;
   $('image-save').disabled = true;

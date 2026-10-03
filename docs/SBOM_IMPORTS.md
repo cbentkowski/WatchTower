@@ -15,10 +15,12 @@ The supported versions are SPDX JSON 2.2 and 2.3, SPDX JSON-LD 3.0 and 3.0.1,
 and CycloneDX JSON 1.4 through 1.7. Format is
 detected from document content and validated against the bundled official schemas.
 Other versions, compressed documents, and scanner-result formats are rejected.
-This import profile applies additional conservative limits: 5 MiB raw document,
-10,000 components, nesting depth 32, 200,000 visited values, and 8,192 characters
-per string. The JSON request envelope is also bounded. Validation runs in a worker
-with 128 MiB old-generation heap limit and a ten-second deadline; at most two
+This import profile applies additional conservative limits: configurable raw document size (35 MiB default, 1–100 MiB in Settings → General),
+10,000 components, nesting depth 32, 2,000,000 visited values, and 8,192 characters
+per string. The JSON request envelope is bounded to twice the raw-document limit plus 100,000 bytes
+to account for JSON string escaping. Proxy limits must allow this encoded envelope.
+Settings persist in general.yaml and apply to subsequent uploads without restart. Validation runs in a worker
+with 512 MiB old-generation heap limit and a thirty-second deadline; at most two
 workers run and eight wait. Busy callers must retry.
 
 Components retain package names, versions, canonical PURLs, supplied CPEs,
