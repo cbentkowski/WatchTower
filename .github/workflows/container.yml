@@ -399,6 +399,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     steps:
       - name: Check out tested source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -434,6 +435,19 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "notes=$notes" >> "$GITHUB_OUTPUT"
+      - name: Download release CycloneDX SBOM
+        if: steps.version_change.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "watchtower-${VERSION}-${GITHUB_SHA}-cyclonedx-sbom" \
+            --dir "$RUNNER_TEMP/release-sbom"
+          node -e 'const fs = require("fs"); const bom = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); if (bom.bomFormat !== "CycloneDX" || !Array.isArray(bom.components) || bom.components.length === 0) throw new Error("Invalid or empty CycloneDX SBOM");' "$RUNNER_TEMP/release-sbom/watchtower.cdx.json"
+          mv "$RUNNER_TEMP/release-sbom/watchtower.cdx.json" "$RUNNER_TEMP/watchtower-${TAG}.cdx.json"
       - name: Create annotated version tag
         if: steps.version_change.outputs.changed == 'true'
         id: tag
@@ -480,4 +494,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
-        run: gh release create "$TAG" --verify-tag --title "WatchTower $TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+        run: gh release create "$TAG" "$RUNNER_TEMP/watchtower-${TAG}.cdx.json" --verify-tag --title "WatchTower $TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+      - name: Attach missing SBOM to an existing release
+        if: steps.version_change.outputs.changed == 'true' && steps.tag.outputs.publish == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          asset="watchtower-${TAG}.cdx.json"
+          assets="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          if ! grep -Fxq "$asset" <<< "$assets"; then
+            gh release upload "$TAG" "$RUNNER_TEMP/$asset"
+          fi

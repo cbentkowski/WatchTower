@@ -4,6 +4,18 @@ WatchTower is a self-hosted application vulnerability and lifecycle dashboard. I
 
 WatchTower is designed for a lightweight, single-container deployment. Configuration, scan results, notification state, and operational logs remain in persistent file storage. No database or external scheduler is required.
 
+## See WatchTower
+
+Screenshots from **WatchTower 0.10.0**, using fictional applications, contacts, and assessment evidence. The application examples use dark mode. See [Light Mode and Dark Mode](docs/USER_GUIDE.md#light-mode-and-dark-mode) for the theme switch and a comparison.
+
+![WatchTower 0.10.0 dark dashboard showing application status summaries and findings](docs/images/0.10.0/overview-dark.jpg)
+
+![Application details with version targets, ownership, risk context, and finding responses](docs/images/0.10.0/application-details-dark.jpg)
+
+![WatchTower application inventory in dark mode](docs/images/0.10.0/inventory-dark.jpg)
+
+[Explore the screenshot gallery](docs/SCREENSHOTS.md) or follow the [user guide](docs/USER_GUIDE.md).
+
 ## What WatchTower provides
 
 - Application inventory organized into reusable workspaces.
