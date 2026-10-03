@@ -8,6 +8,17 @@ globalThis.fetch = async (input, options) => {
   if (url.startsWith('https://api.osv.dev/')) {
     const mode = process.env.WATCHTOWER_TEST_OSV_MODE_FILE ? readFileSync(process.env.WATCHTOWER_TEST_OSV_MODE_FILE, 'utf8').trim() : 'empty';
     if (mode === 'offline') return new Response('', { status: 503 });
+    if (mode === 'replacement') {
+      if (url.endsWith('/querybatch')) {
+        const queries = JSON.parse(options.body).queries;
+        return new Response(JSON.stringify({ results: queries.map(query => {
+          const purl = query.package.purl;
+          return purl === 'pkg:npm/lodash@4.17.20' ? { vulns: [{ id: 'GHSA-demo-lodash' }] } : purl === 'pkg:npm/minimist@1.2.5' ? { vulns: [{ id: 'GHSA-demo-minimist' }] } : {};
+        }) }));
+      }
+      const name = url.endsWith('lodash') ? 'lodash' : 'minimist';
+      return new Response(JSON.stringify({ id: `GHSA-demo-${name}`, summary: `Fixture ${name} finding`, database_specific: { severity: 'HIGH' }, affected: [{ package: { ecosystem: 'npm', name }, ranges: [{ type: 'SEMVER', events: [{ introduced: '0' }, { fixed: name === 'lodash' ? '4.18.1' : '1.2.6' }] }] }] }));
+    }
     if (url.endsWith('/querybatch')) {
       const queries = JSON.parse(options.body).queries;
       return new Response(JSON.stringify({ results: queries.map(() => mode === 'empty' ? {} : { vulns: [{ id: 'GHSA-xxxx-yyyy-zzzz', modified: mode }] }) }));

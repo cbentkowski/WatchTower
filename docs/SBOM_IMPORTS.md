@@ -80,8 +80,9 @@ folder. Each revision records uploader, application/image scope, document identi
 format/version, generator, checksum, timestamps, component counts, and assessment
 state. A successful import supersedes the previous active revision in the same
 scope while preserving prior normalized revisions and audit history. Application
-and image scopes remain independent. Workflow reconciliation, removal reasons, and
-retention controls are later work; import does not modify finding responses.
+and image scopes remain independent. Import does not modify finding responses. The next successful assessment reconciles
+replaced inventory as described in [replacement and retirement](INVENTORY_RECONCILIATION.md).
+Retention controls remain later work.
 
 Back up this folder with the rest of the data directory. Image configuration in
 this intermediate build is stored here rather than in `applications.yaml`.

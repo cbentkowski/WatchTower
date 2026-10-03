@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — 0.11.0 Signal
+
+### Added
+
+- Reconcile replacement SBOMs and retired images with package findings, preserving responses and resolved history while retaining incomplete evidence as unverified.
+- Provide Before and After test SBOM downloads and a resolved package finding history view in application details.
+
 ## [0.9.2] - 2026-09-30
 
 ### Fixed
