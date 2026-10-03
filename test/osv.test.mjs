@@ -36,8 +36,18 @@ test('pagination follows tokens only for incomplete packages, fetches full recor
   assert.deepEqual(result.findings[0].fixedVersions, ['1.1.0']);
   assert.equal(result.findings[0].knownExploited, true);
   assert.equal(result.findings[0].score, null);
-  assert.equal(result.findings[0].advisories.some(url => url.startsWith('javascript:')), false);
+  assert.deepEqual(result.findings[0].advisories, ['https://example.com/advisory']);
   assert.equal(requests.filter(request => request.url.endsWith('querybatch')).length, 2);
+});
+
+
+test('OSV retains only HTTPS references without credentials in findings and source records', async () => {
+  const urls = ['https://example.com/advisory', 'HTTPS://EXAMPLE.COM/second', 'javascript:alert(1)', 'JaVaScRiPt:alert(1)', ' java\nscript:alert(1)', 'data:text/html,<script>alert(1)</script>', 'vbscript:msgbox(1)', 'http://example.com/plain', 'https://user:password@example.com/private', '//example.com/relative', 'not a URL'];
+  const advisory = { ...record(), references: urls.map(url => ({ type: 'WEB', url })) };
+  const result = await client(async url => json(url.endsWith('querybatch') ? { results: [{ vulns: [{ id: advisory.id }] }] } : advisory)).assess(inventory());
+  assert.equal(result.state, 'assessed');
+  assert.deepEqual(result.findings[0].advisories, ['https://example.com/advisory', 'https://example.com/second']);
+  assert.deepEqual(result.findings[0].sourceRecords[0].references.map(ref => ref.url), result.findings[0].advisories);
 });
 
 test('batches and repeated pagination are bounded; malformed and failed results never become assessed', async () => {
