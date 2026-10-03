@@ -46,5 +46,8 @@ test('KEV display escapes actions, labels CISA deadlines separately and explains
   assert.match(markup, /Stale catalog/);
   assert.match(markup, /CISA remediation due date/);
   assert.match(markup, /&lt;img/);
-  assert.doesNotMatch(markup, /<img|href="javascript:/);
+  assert.ok(markup.includes('href="#"'));
+  for (const url of ['javascript:alert(1)', 'data:text/html,test', 'vbscript:msgbox(1)']) {
+    assert.equal(vm.runInContext('safeUrl(' + JSON.stringify(url) + ')', context), '#');
+  }
 });
