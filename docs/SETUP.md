@@ -207,6 +207,9 @@ Do not run old and new versions against the same writable volume at the same tim
 
 ## Container troubleshooting
 
+For 0.11.0 and later, see [Distroless container runtime](CONTAINER_RUNTIME.md) for startup, permissions, Docker Compose hardening, and Kubernetes examples.
+
+
 ### The container exits immediately
 
 Run `docker compose logs watchtower`. Common causes are incomplete OIDC settings, unreadable secret files, an invalid public base URL, or mismatched native TLS files.
