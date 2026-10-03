@@ -2,7 +2,7 @@
 
 These are captures of the released v0.10.0 interface. Applications, owners, claim values, release targets, and assessment evidence are fictional examples. DEMO-2026-0001 is an illustrative finding, not a real CVE. Screenshots show an administrator session; delegated users see only permitted resources and controls.
 
-Use the theme switch in the upper-right corner to change between dark and light mode.
+All application and dialog examples in this gallery use dark mode. See [Light Mode and Dark Mode](USER_GUIDE.md#light-mode-and-dark-mode) for the theme switch and an example of each mode.
 
 ## Overview
 
@@ -63,17 +63,5 @@ Map an example identity-provider group to a workspace-viewer grant. Use verifica
 Reusable contacts link ownership and escalation information across resources.
 
 ![Owner directory in WatchTower 0.10.0](images/0.10.0/owners-dark.jpg)
-
-## Application inventory in light mode
-
-The same inventory and status indicators are available in light mode.
-
-![Application inventory in light mode in WatchTower 0.10.0](images/0.10.0/inventory-light.jpg)
-
-## Owner directory in light mode
-
-Light mode also applies to administration pages.
-
-![Owner directory in light mode in WatchTower 0.10.0](images/0.10.0/owners-light.jpg)
 
 See the [user guide](USER_GUIDE.md) for operating instructions and the [setup guide](SETUP.md) for deployment.

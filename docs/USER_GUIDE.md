@@ -2,11 +2,12 @@
 
 This guide explains how to configure and operate WatchTower through its web interface. The options visible to a user depend on administrator status and delegated access grants.
 
-Screenshots in this guide show **0.10.0** with fictional demo data. See the [complete screenshot gallery](SCREENSHOTS.md) for additional pages and both themes. Use the upper-right theme switch to choose dark or light mode.
+Screenshots in this guide show **0.10.0** with fictional demo data. See the [complete screenshot gallery](SCREENSHOTS.md) for additional pages. Application and dialog examples use dark mode; the theme comparison below shows both modes.
 
 ## Contents
 
 - [First sign-in](#first-sign-in)
+- [Light Mode and Dark Mode](#light-mode-and-dark-mode)
 - [Dashboard and status](#dashboard-and-status)
 - [Applications](#applications)
 - [Owners and application context](#owners-and-application-context)
@@ -34,6 +35,20 @@ For a new installation:
 3. Create a workspace and assign the application.
 4. Run **Refresh checks**.
 5. Review the application's findings, lifecycle status, and source links.
+
+## Light Mode and Dark Mode
+
+Use the theme switch in the upper-right corner of WatchTower. In dark mode it offers **Light mode**; in light mode it offers **Dark mode**. The theme changes the appearance of pages and dialogs while keeping the same inventory, findings, and controls.
+
+The examples below show the same application inventory in each mode. The remaining screenshots in this guide use dark mode for consistency.
+
+**Dark Mode**
+
+![Application inventory in Dark Mode with the Light mode switch in the upper-right corner](images/0.10.0/inventory-dark.jpg)
+
+**Light Mode**
+
+![The same application inventory in Light Mode with the Dark mode switch in the upper-right corner](images/0.10.0/inventory-light.jpg)
 
 ## Dashboard and status
 
@@ -84,7 +99,7 @@ Review the CPE and lifecycle mappings whenever the product name, edition, releas
 
 ## Owners and application context
 
-![Reusable owner directory in light mode](images/0.10.0/owners-light.jpg)
+![Reusable owner directory in dark mode](images/0.10.0/owners-dark.jpg)
 
 Administrators manage reusable contacts from **Owners**. Each owner requires a name and unique email address and may include an escalation email. Editing an owner updates its contact information everywhere that owner is assigned. An owner cannot be removed while any application or workspace still references it.
 
